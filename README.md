@@ -7,13 +7,6 @@ A. Alabi, D. Vanderelst and A. A. Minai, "Context-Dependent Spatial Representati
 ## Overview
 This project explores the role of place cells in the hippocampus of rodents, focusing on how they encode physical space and exhibit context-dependent spatial representations. The project includes simulations that model place cells using dendritic computation to demonstrate how they can reuse spatial representations across different contexts while maintaining uncorrelated place fields.
 
-## Requirements
-To install the required dependencies, please ensure you have Python installed, and then run:
-
-```bash
-pip install -r requirements.txt
-```
-
 ## Usage
 1. **Initialize the Driver**: The `Driver` class controls the robot and its interactions with the environment. It handles the loading or initialization of neural networks (place cell network and reward cell network) and manages the robot's sensors and movements.
 
