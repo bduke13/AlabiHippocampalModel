@@ -81,8 +81,7 @@ This project is part of research focused on understanding how the hippocampus en
        ```
      - On Windows:
        ```bash
-       .
-env\Scripts ctivate
+       .\venv\Scripts\activate
        ```
 
 5. **Install the dependencies from `requirements.txt`**:
