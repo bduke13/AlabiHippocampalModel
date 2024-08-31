@@ -34,9 +34,6 @@ This project explores the role of place cells in the hippocampus of rodents, foc
 - `networks.py`: Contains neural network definitions used by the driver.
 - `requirements.txt`: Lists the dependencies required to run the project.
 
-## Research Context
-This project is part of research focused on understanding how the hippocampus encodes space through place cells that show maximal firing in specific regions. The model leverages dendritic morphology and synaptic modulation to demonstrate how place cells can encode different maps for environments with identical sensory cues.
-
 ## Setting Up the Environment
 
 1. **Clone the Git repository**:
