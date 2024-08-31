@@ -36,9 +36,6 @@ pip install -r requirements.txt
 ## Research Context
 This project is part of research focused on understanding how the hippocampus encodes space through place cells that show maximal firing in specific regions. The model leverages dendritic morphology and synaptic modulation to demonstrate how place cells can encode different maps for environments with identical sensory cues.
 
-## Contributing
-Feel free to submit issues or pull requests. Contributions are welcome!
-
 ## License
 MIT License
 
