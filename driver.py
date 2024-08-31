@@ -179,7 +179,7 @@ class Driver:
             print("Initialized new Reward Cell Network.")
         return rcn
 
-    def startup(self, context, mode, randomize=False):
+    def initialization(self, context, mode, randomize=False):
         """
         Starts up the driver by initializing hardware, resetting the robot position, and setting the goal location.
 
