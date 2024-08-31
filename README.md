@@ -1,3 +1,4 @@
+
 # Context-Dependent Spatial Representations in the Hippocampus using Place Cell Dendritic Computing
 
 ## Citation
@@ -22,11 +23,18 @@ pip install -r requirements.txt
     ```python
     from driver import Driver
 
-    driver = Driver(num_place_cells=1000, num_reward_cells=10, num_head_directions=8, run_time_minutes=2, timestep=96)
+    driver = Driver(num_place_cells=1000, num_reward_cells=10, num_head_directions=8, run_time_hours=2, timestep=96)
     driver.initialization(context=0, mode="explore", randomize=True)
     ```
 
-3. **Customization**: Modify the `Driver` class parameters to suit your simulation needs, such as the number of place cells, reward cells, or the duration of the simulation.
+3. **Running the Simulation**: After initializing, use the `run` method to start the simulation in the specified mode.
+
+    Example:
+    ```python
+    driver.run(mode="explore")
+    ```
+
+4. **Customization**: Modify the `Driver` class parameters to suit your simulation needs, such as the number of place cells, reward cells, or the duration of the simulation.
 
 ## File Structure
 - `driver.py`: Contains the `Driver` class which manages the simulation.

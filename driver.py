@@ -1,4 +1,3 @@
-# %%
 import numpy as np
 import tensorflow as tf
 tf.random.set_seed(5)
@@ -11,7 +10,6 @@ import os
 
 from networks import *
 
-# %%
 np.set_printoptions(precision=2)
 num_pc = 1000 # number of PC
 input_dim = 720 # BVC input size (720 bc RPLidar spits out a 720-point array)
@@ -21,9 +19,8 @@ tau_w = 10 # time constant for the window function
 PI = tf.constant(np.pi) 
 rng = default_rng() # random number generator
 cmap = get_cmap('plasma')
-goal_r = {"explore":.1, "exploit":.6}
+goal_r = {"explore": .1, "exploit": .6}
 
-# %%
 try:
     with open('hmap_x.pkl', 'rb') as f:
         hmap_x = pickle.load(f)
@@ -34,7 +31,6 @@ try:
 except:
     pass
 
-# %%
 class Driver:
     """
     The Driver class controls the robot, manages its sensory inputs, and coordinates the activation of neural network layers 
@@ -185,7 +181,7 @@ class Driver:
 
         Parameters:
             context (int): The context or scenario index in the environment.
-            mode (str): The mode of operation (e.g., "learn", "explore").
+            mode (str): The mode of operation (e.g., 1. "explore", 2. "dmtp", 3. "exploit").
             randomize (bool): Whether to randomize the robot's starting position.
         """
         self.context = context
@@ -196,5 +192,80 @@ class Driver:
         self.sense()
         self.compute()
 
+    def run(self):
+        """
+        Runs the main control loop of the robot. It will handle different modes like "dmtp", "explore", and "exploit".
+        """
+        while True:
+            if self.mode == "dmtp":
+                self.dmtp_procedure()
+            elif self.mode == "explore":
+                self.explore()
+            elif self.mode == "exploit":
+                self.exploit()
+            else:
+                raise ValueError(f"Unknown mode: {self.mode}")
 
+            # Switch to manual control if a key is pressed.
+            if self.keyboard.getKey() in (ord('W'), ord('D'), ord('A'), ord('S')):
+                print("Switching to manual control")
+                while True:
+                    self.manual_control()
 
+    def dmtp_procedure(self):
+        """
+        Handles the logic for the 'dmtp' mode.
+        """
+        self.s_prev = self.s
+        self.s *= 0
+
+        for s in range(tau_w):
+            self.sense()
+
+            if np.any(self.collided):
+                self.turn(np.deg2rad(60))
+                break
+            
+            self.s += self.pcn.v
+            self.atGoal(False, s)
+                
+            self.compute()
+            self.forward()
+            self.atGoal(False, s)
+
+        self.s /= s
+        self.turn(np.random.normal(0, np.deg2rad(30)))
+
+    def explore(self):
+        """
+        Handles the logic for the 'explore' mode.
+        """
+        # Implement the specific logic for the 'explore' mode.
+        pass
+
+    def exploit(self):
+        """
+        Handles the logic for the 'exploit' mode.
+        """
+        # Implement the specific logic for the 'exploit' mode.
+        pass
+
+    def manual_control(self):
+        """
+        Allows for manual control of the robot using keyboard inputs.
+        """
+        k = self.keyboard.getKey()
+        if k != -1:
+            print("Before:", self.hdv.argmax(), self.n_index)
+        if k == ord('W'):
+            self.forward()
+        elif k == ord('D'):
+            self.turn(-np.deg2rad(90))
+        elif k == ord('A'):
+            self.turn(np.deg2rad(90))
+        elif k == ord('S'):
+            self.stop()
+        if k != -1:
+            print("After:", self.hdv.argmax(), self.n_index)
+
+    # Additional methods for the Driver class (e.g., sense, compute, etc.) would go here.
