@@ -5,7 +5,7 @@ from numpy.random import default_rng
 import matplotlib.pyplot as plt
 from matplotlib.cm import get_cmap
 from astropy.stats import circmean, circvar
-import _pickle as pickle
+import pickle
 import os
 
 from networks import *
