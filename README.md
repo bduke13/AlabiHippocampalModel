@@ -23,7 +23,7 @@ pip install -r requirements.txt
     from driver import Driver
 
     driver = Driver(num_place_cells=1000, num_reward_cells=10, num_head_directions=8, run_time_minutes=2, timestep=96)
-    driver.startup(context=0, mode="explore", randomize=True)
+    driver.initialization(context=0, mode="explore", randomize=True)
     ```
 
 3. **Customization**: Modify the `Driver` class parameters to suit your simulation needs, such as the number of place cells, reward cells, or the duration of the simulation.
