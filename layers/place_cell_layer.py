@@ -1,87 +1,11 @@
-# %%
 import numpy as np
 import tensorflow as tf
 tf.random.set_seed(5)
 from numpy.random import default_rng
-import matplotlib.pyplot as plt
-from matplotlib.cm import get_cmap
-from copy import deepcopy
+import bvc_layer as bvcLayer
 
-# %% [markdown]
-# # Hyperparams
-
-# %%
-np.set_printoptions(precision=2) 
-num_pc = 1000 # number of PC
-input_dim = 720 # BVC input size (720 bc RPLidar spits out a 720-point array)
-timestep = 32 * 3
-max_dist = 12 # max distance of LiDAR
-tau_w = 10 # time constant for the window function
-PI = tf.constant(np.pi) 
-rng = default_rng() # random number generator
-cmap = get_cmap('plasma')
-
-# %% [markdown]
-# # BVC layer
-
-# %%
-class bvcLayer():
-    def __init__(self, max_dist=12, input_dim=720, n_hd=8, sigma_ang=90, sigma_d=.5):
-        '''
-        Initializes the boundary vector cell (BVC) layer.
-
-        Parameters:
-        max_dist: Max distance that the BVCs respond to. Units depend on the context of the environment.
-        input_dim: Size of input vector to the BVC layer (720 for RPLidar).
-        n_hd: Number of head direction cells.
-        sigma_ang: Standard deviation (tuning width) for the Gaussian function modeling angular tuning of BVCs (in degrees).
-        sigma_d: Standard deviation (tuning width) for the Gaussian function modeling distance tuning of BVCs.
-        '''
-        
-        # Preferred distances for each BVC; determines how sensitive each BVC is to specific distances.
-        # Shape: (1, num_distances), where num_distances = n_hd * (max_dist / (sigma_d/2))
-        self.d_i = np.tile(np.arange(0, max_dist, sigma_d/2), n_hd)[np.newaxis, :]  
-        
-        # Total number of BVC tuning points (number of preferred distances) = 384 ---> 8 head directions * 48 distances per head direction.
-        self.num_distances = self.d_i.size  
-        
-        # Indices for input vector, aligning BVCs with specific head directions.
-        # Shape: (1, num_distances)
-        self.input_indices = np.repeat(np.linspace(0, input_dim, n_hd, endpoint=False, dtype=int), max_dist/(sigma_d/2))[np.newaxis, :]
-        
-        # Preferred angles for each BVC (in radians).
-        # Shape: (1, num_distances)
-        self.phi_i = np.linspace(0, 2*np.pi, input_dim)[self.input_indices]  
-        
-        # Angular standard deviation for BVC tuning (converted to radians).
-        self.sigma_ang  = tf.constant(np.deg2rad(sigma_ang), dtype=tf.float32)  
-        
-        # Placeholder for BVC output.
-        self.bvc_out = None  
-
-        # Distance standard deviation for BVC tuning.
-        self.sigma_d = tf.constant(sigma_d, dtype=tf.float32)  
-
-    def compute_bvc_activation(self, distances, angles):
-        # NOTE: This bypasses the __call__ method in Ade's original code
-        # How to use (in driver.py): self.pcn.compute_place_cell_activation([self.boundaries, np.linspace(0, 2*np.pi, 720, False)], self.hdv, self.context, self.mode, np.any(self.collided))
-
-        # Gaussian function for distance tuning
-        distance_gaussian = tf.exp(-(distances[self.input_indices] - self.d_i)**2 / (2 * self.sigma_d**2)) / tf.sqrt(2 * PI * self.sigma_d**2)
-        
-        # Gaussian function for angular tuning
-        angular_gaussian = tf.exp(-((angles[self.input_indices] - self.phi_i)**2) / (2 * self.sigma_ang**2)) / tf.sqrt(2 * PI * self.sigma_ang**2)
-        
-        # Return the product of distance and angular Gaussian functions
-        return tf.reduce_sum((distance_gaussian * angular_gaussian), 0)
-
-
-# %% [markdown]
-# # Place cell layer
-
-# %%
 class PlaceCellLayer(): # Called continuously during explore loop in driver.py
-    def __init__(self, num_pc, input_dim, timestep, max_dist, n_hd):
+    def __init__(self, num_pc=1000, input_dim=720, timestep=32*3, max_dist=12, n_hd=8):
         '''
         Initializes the Place Cell Layer.
 
@@ -92,7 +16,8 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
         max_dist: Maximum distance that the boundary vector cells (BVCs) respond to.
         n_hd: Number of head direction cells.
         '''
-        
+        rng = default_rng()
+
         # Number of place cells
         self.num_pc = num_pc
         
@@ -263,105 +188,3 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
         The activation value of the place cell at the specified index.
         '''
         return self.place_cell_activations[index]
-
-# %% [markdown]
-# # Reward cell layer
-
-# %%
-class RewardCellLayer:
-
-    def __init__(self, num_reward_cells, input_dim, num_replay):
-        '''
-        Initializes the Reward Cell Layer.
-
-        Parameters:
-        num_reward_cells: Number of reward cells in the layer.
-        input_dim: Dimension of the input vector to the layer.
-        num_replay: Number of replay iterations for the reward learning process.
-        '''
-        self.num_reward_cells = num_reward_cells
-        self.w_in = tf.Variable(np.zeros((num_reward_cells, input_dim)), dtype=tf.float32)
-        self.reward_cell_activations = tf.zeros((num_reward_cells, 1), dtype=tf.float32)
-        self.num_replay = num_replay
-        self.w_in_effective = tf.identity(self.w_in)
-
-    def compute_reward_cell_activations(self, input_data, visit=False, context_index=1):
-        '''
-        Computes the activations of reward cells based on input data.
-
-        Parameters:
-        input_data: The input data for the reward cells.
-        visit: Boolean flag indicating if the cell is being visited.
-        context_index: Context index for selecting specific input weights.
-        '''
-        self.reward_cell_activations = tf.tensordot(self.w_in_effective, input_data, 1) / tf.linalg.norm(input_data, 1)
-
-        if visit:
-            updated_weights = self.w_in_effective[context_index] - 0.2 * input_data * self.w_in_effective[context_index]
-            self.w_in_effective = tf.tensor_scatter_nd_update(self.w_in_effective, [[context_index]], [updated_weights])
-
-    def new_reward(self, place_cell_layer, context_index=0, target=None):
-        '''
-        Updates the input weights based on place cell network activations through replay.
-
-        Parameters:
-        place_cell_layer: The place cell network whose activations influence the reward cell weights.
-        context_index: Context index for selecting specific input weights.
-        target: Target vector for unlearning, if provided.
-        '''
-        place_cell_layer = deepcopy(place_cell_layer)
-        delta_weights = tf.zeros_like(self.w_in)
-
-        for t in range(10):
-            if target is not None:
-                update_value = tf.maximum(0, self.w_in_effective[context_index] - 0.6 * place_cell_layer.place_cell_activations)
-                self.w_in_effective = tf.tensor_scatter_nd_update(self.w_in_effective, [[context_index]], [update_value])
-                print("Unlearned weights minimum:", tf.reduce_min(self.w_in_effective))
-                return
-
-            delta_weights = tf.tensor_scatter_nd_add(delta_weights, [[context_index]], [
-                tf.math.exp(-t / 6) * tf.linalg.normalize(place_cell_layer.place_cell_activations, np.inf)[0]
-            ])
-
-            previous_activations = tf.identity(place_cell_layer.place_cell_activations)
-            new_activations = tf.nn.relu(
-                tf.tensordot(tf.cast(tf.reduce_max(place_cell_layer.w_rec_place_to_place, 0), tf.float32), previous_activations, 1) + previous_activations
-            )
-            place_cell_layer.place_cell_activations = tf.tanh(new_activations)
-
-        self.w_in.assign_add(tf.linalg.normalize(delta_weights, np.inf)[0])
-        self.w_in_effective = tf.identity(self.w_in)
-
-# %% [markdown]
-# # Test
-
-# %%
-# Assume PlaceCellLayer and bvcLayer classes are already defined as per your provided code
-
-# Initialize the model
-place_cell_layer = PlaceCellLayer(num_pc=1000, input_dim=720, timestep=32*3, max_dist=12, n_hd=8)
-
-# Simulate some input data
-# Simulated distances (e.g., from RPLidar)
-simulated_distances = np.linspace(0, 12, 720)  # 720-point array from 0 to 12 meters
-
-# Simulated angles (0 to 2*pi radians)
-simulated_angles = np.linspace(0, 2 * np.pi, 720)
-
-# Simulated head direction vector
-simulated_hdv = np.ones(8)  # Assume uniform head direction vector for simplicity
-
-# Run the model
-place_cell_layer.compute_place_cell_activations([simulated_distances, simulated_angles], simulated_hdv)
-
-# Plot the activations of the place cells
-plt.figure(figsize=(10, 6))
-plt.plot(place_cell_layer.place_cell_activations.numpy(), label="Place Cell Activations")
-plt.title("Place Cell Activations")
-plt.xlabel("Place Cell Index")
-plt.ylabel("Activation")
-plt.legend()
-plt.show()
-
-
-# %%
