@@ -30,7 +30,7 @@ class RewardCellLayer:
         # Effective input weight matrix, used for updating during visits
         self.w_in_effective = tf.identity(self.w_in)
 
-    def compute_reward_cell_activations(self, input_data, visit=False, context=1):
+    def get_reward_cell_activations(self, input_data, visit=False, context=1):
         '''
         Computes the activations of reward cells based on input data.
 

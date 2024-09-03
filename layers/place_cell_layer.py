@@ -79,7 +79,7 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
         # Trace of head direction cells for eligibility tracking
         self.hd_cell_trace = tf.zeros((n_hd, 1, 1), tf.float64)
 
-    def compute_place_cell_activations(self, input_data, head_direction_vector, mode="learn", collided=False):
+    def get_place_cell_activations(self, input_data, head_direction_vector, mode="learn", collided=False):
         '''
         Computes the activation of place cells based on the input from boundary vector cells (BVCs) and head direction vectors (HDV).
 
@@ -96,7 +96,7 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
         self.prev_place_cell_activations = tf.identity(self.place_cell_activations)
 
         # Compute BVC activations based on the input distances and angles
-        self.bvc_activations = self.bvcLayer.compute_bvc_activation(input_data[0], input_data[1])
+        self.bvc_activations = self.bvcLayer.get_bvc_activation(input_data[0], input_data[1])
         
         # Compute the input to place cells by taking the dot product of the input weights and BVC activations
         place_cell_input = tf.tensordot(self.w_in, self.bvc_activations, 1) - 0.3 * tf.reduce_sum(self.bvc_activations)

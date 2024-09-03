@@ -39,9 +39,9 @@ class bvcLayer():
         # Distance standard deviation for BVC tuning.
         self.sigma_d = tf.constant(sigma_d, dtype=tf.float32)  
 
-    def compute_bvc_activation(self, distances, angles):
+    def get_bvc_activation(self, distances, angles):
         # NOTE: This bypasses the __call__ method in Ade's original code
-        # How to use (in driver.py): self.pcn.compute_place_cell_activation([self.boundaries, np.linspace(0, 2*np.pi, 720, False)], self.hdv, self.context, self.mode, np.any(self.collided))
+        # How to use (in driver.py): self.pcn.get_place_cell_activation([self.boundaries, np.linspace(0, 2*np.pi, 720, False)], self.hdv, self.context, self.mode, np.any(self.collided))
 
         PI = tf.constant(np.pi) 
 
