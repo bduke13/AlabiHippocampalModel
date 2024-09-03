@@ -285,28 +285,28 @@ class RewardCellLayer:
         self.num_replay = num_replay
         self.w_in_effective = tf.identity(self.w_in)
 
-    def compute_reward_cell_activations(self, input_data, visit=False, context_index=1):
+    def compute_reward_cell_activations(self, input_data, visit=False, context=1):
         '''
         Computes the activations of reward cells based on input data.
 
         Parameters:
         input_data: The input data for the reward cells.
         visit: Boolean flag indicating if the cell is being visited.
-        context_index: Context index for selecting specific input weights.
+        context: Context index for selecting specific input weights.
         '''
         self.reward_cell_activations = tf.tensordot(self.w_in_effective, input_data, 1) / tf.linalg.norm(input_data, 1)
 
         if visit:
-            updated_weights = self.w_in_effective[context_index] - 0.2 * input_data * self.w_in_effective[context_index]
-            self.w_in_effective = tf.tensor_scatter_nd_update(self.w_in_effective, [[context_index]], [updated_weights])
+            updated_weights = self.w_in_effective[context] - 0.2 * input_data * self.w_in_effective[context]
+            self.w_in_effective = tf.tensor_scatter_nd_update(self.w_in_effective, [[context]], [updated_weights])
 
-    def new_reward(self, place_cell_layer, context_index=0, target=None):
+    def new_reward(self, place_cell_layer, context=0, target=None):
         '''
         Updates the input weights based on place cell network activations through replay.
 
         Parameters:
         place_cell_layer: The place cell network whose activations influence the reward cell weights.
-        context_index: Context index for selecting specific input weights.
+        context: Context index for selecting specific input weights.
         target: Target vector for unlearning, if provided.
         '''
         place_cell_layer = deepcopy(place_cell_layer)
@@ -314,12 +314,12 @@ class RewardCellLayer:
 
         for t in range(10):
             if target is not None:
-                update_value = tf.maximum(0, self.w_in_effective[context_index] - 0.6 * place_cell_layer.place_cell_activations)
-                self.w_in_effective = tf.tensor_scatter_nd_update(self.w_in_effective, [[context_index]], [update_value])
+                update_value = tf.maximum(0, self.w_in_effective[context] - 0.6 * place_cell_layer.place_cell_activations)
+                self.w_in_effective = tf.tensor_scatter_nd_update(self.w_in_effective, [[context]], [update_value])
                 print("Unlearned weights minimum:", tf.reduce_min(self.w_in_effective))
                 return
 
-            delta_weights = tf.tensor_scatter_nd_add(delta_weights, [[context_index]], [
+            delta_weights = tf.tensor_scatter_nd_add(delta_weights, [[context]], [
                 tf.math.exp(-t / 6) * tf.linalg.normalize(place_cell_layer.place_cell_activations, np.inf)[0]
             ])
 

@@ -2,7 +2,7 @@ import numpy as np
 import tensorflow as tf
 tf.random.set_seed(5)
 from numpy.random import default_rng
-import bvc_layer as bvcLayer
+from .bvc_layer import bvcLayer
 
 class PlaceCellLayer(): # Called continuously during explore loop in driver.py
     def __init__(self, num_pc=1000, input_dim=720, timestep=32*3, max_dist=12, n_hd=8):
