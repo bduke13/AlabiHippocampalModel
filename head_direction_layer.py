@@ -15,6 +15,10 @@ class HeadDirectionLayer:
         is determined by the dot product between the agent's current heading and the
         cell's preferred (tuned) direction.
 
+        Note: Theta_0 never needs modified in most cases. Theta_0 represents the starting direction
+        and theta_i represents the relative heading from that direction.
+        If the starting direction of the agent is not 0 then change theta_0.
+
         A cell will have an activation of 1 when the agent's heading exactly matches its
         preferred direction, with neighboring cells showing decreasing activations
         down to 0 as the heading deviates.
@@ -22,7 +26,7 @@ class HeadDirectionLayer:
         Parameters:
         - num_cells (int): The number of head direction cells in the layer.
         - theta_0 (float): The reference direction (in degrees or radians) for the anchor
-          cue, defaulting to 0.0 (North).
+          cue, defaulting to 0.0.
         - unit (str): The unit of the input direction, either 'degree' or 'radian'.
           Default is 'degree'.
         """
