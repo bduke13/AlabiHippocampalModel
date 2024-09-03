@@ -25,24 +25,24 @@ cmap = get_cmap('plasma')
 
 # %%
 class bvcLayer():
-    def __init__(self, max_dist, input_dim, angular_tuning_width=90, n_hd=8, sigma_d=.5):
+    def __init__(self, max_dist, input_dim, n_hd=8, sigma_ang=90, sigma_d=.5):
         '''
         Initializes the boundary vector cell (BVC) layer.
 
         Parameters:
         max_dist: Max distance that the BVCs respond to. Units depend on the context of the environment.
-        input_dim: Size of input vector to the BVC layer (e.g., 720 for RPLidar).
-        sigma_ang: Standard deviation for the Gaussian function modeling angular tuning of BVCs (in degrees).
+        input_dim: Size of input vector to the BVC layer (720 for RPLidar).
         n_hd: Number of head direction cells.
-        sigma_d: Standard deviation for the Gaussian function modeling distance tuning of BVCs.
+        sigma_ang: Standard deviation (tuning width) for the Gaussian function modeling angular tuning of BVCs (in degrees).
+        sigma_d: Standard deviation (tuning width) for the Gaussian function modeling distance tuning of BVCs.
         '''
         
         # Preferred distances for each BVC; determines how sensitive each BVC is to specific distances.
         # Shape: (1, num_distances), where num_distances = n_hd * (max_dist / (sigma_d/2))
-        self.preferred_distances = np.tile(np.arange(0, max_dist, sigma_d/2), n_hd)[np.newaxis, :]  
+        self.d_i = np.tile(np.arange(0, max_dist, sigma_d/2), n_hd)[np.newaxis, :]  
         
         # Total number of BVC tuning points (number of preferred distances) = 384 ---> 8 head directions * 48 distances per head direction.
-        self.num_distances = self.preferred_distances.size  
+        self.num_distances = self.d_i.size  
         
         # Indices for input vector, aligning BVCs with specific head directions.
         # Shape: (1, num_distances)
@@ -50,10 +50,10 @@ class bvcLayer():
         
         # Preferred angles for each BVC (in radians).
         # Shape: (1, num_distances)
-        self.preferred_angles = np.linspace(0, 2*np.pi, input_dim)[self.input_indices]  
+        self.phi_i = np.linspace(0, 2*np.pi, input_dim)[self.input_indices]  
         
         # Angular standard deviation for BVC tuning (converted to radians).
-        self.sigma_ang  = tf.constant(np.deg2rad(angular_tuning_width), dtype=tf.float32)  
+        self.sigma_ang  = tf.constant(np.deg2rad(sigma_ang), dtype=tf.float32)  
         
         # Placeholder for BVC output.
         self.bvc_out = None  
@@ -67,10 +67,10 @@ class bvcLayer():
 
     def compute_bvc_activation(self, distances, angles):
         # Gaussian function for distance tuning
-        distance_gaussian = tf.exp(-(distances[self.input_indices] - self.preferred_distances)**2 / (2 * self.sigma_d**2)) / tf.sqrt(2 * PI * self.sigma_d**2)
+        distance_gaussian = tf.exp(-(distances[self.input_indices] - self.d_i)**2 / (2 * self.sigma_d**2)) / tf.sqrt(2 * PI * self.sigma_d**2)
         
         # Gaussian function for angular tuning
-        angular_gaussian = tf.exp(-((angles[self.input_indices] - self.preferred_angles)**2) / (2 * self.sigma_ang**2)) / tf.sqrt(2 * PI * self.sigma_ang**2)
+        angular_gaussian = tf.exp(-((angles[self.input_indices] - self.phi_i)**2) / (2 * self.sigma_ang**2)) / tf.sqrt(2 * PI * self.sigma_ang**2)
         
         # Return the product of distance and angular Gaussian functions
         return distance_gaussian * angular_gaussian
@@ -119,6 +119,7 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
         self.place_cell_activations = tf.zeros(num_pc, dtype=tf.float32)
         
         # Time constant for updating place cell activations
+        # TODO: Update this based on whatever sim we're using
         self.tau = timestep / 1000
         
         # Initial activations for boundary vector cells (BVCs)
@@ -218,7 +219,7 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
             )
             self.w_in.assign_add(weight_update)
 
-    def pcn_exploit(self, direction, num_steps=1):
+    def exploit(self, direction, num_steps=1):
         '''
         Exploits the current state to generate place cell activations based on the recurrent weights.
 
