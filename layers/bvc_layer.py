@@ -82,6 +82,7 @@ class bvcLayer:
         angles: np.ndarray,
         star_distances: np.ndarray,
         star_angles: np.ndarray,
+        return_plot: bool = False,
     ):
         """
         Plots the BVC activation on a polar plot and overlays a star-shaped boundary for visualization.
@@ -91,6 +92,7 @@ class bvcLayer:
         angles (np.ndarray): Input angles corresponding to the distance measurements.
         star_distances (np.ndarray): Distances representing the star-shaped boundary.
         star_angles (np.ndarray): Angles representing the star-shaped boundary.
+        return_plot (bool): If True, returns the plot object instead of showing it.
 
         This function will plot each BVC's activation and the synthetic boundary.
         """
@@ -116,7 +118,12 @@ class bvcLayer:
 
         ax.set_ylim(0, 12)
         plt.legend()
-        plt.show()
+
+        # If return_plot is True, return the figure object, otherwise show the plot
+        if return_plot:
+            return fig
+        else:
+            plt.show()
 
 
 if __name__ == "__main__":
