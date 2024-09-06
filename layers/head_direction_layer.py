@@ -75,7 +75,7 @@ class HeadDirectionLayer:
         )  # Sine component of the preferred directions
         return D
 
-    def head_direction(self, theta_i: float) -> np.ndarray:
+    def get_head_direction_activation(self, theta_i: float) -> np.ndarray:
         """
         Compute the activation of the head direction cells based on the input direction.
 
@@ -97,15 +97,16 @@ class HeadDirectionLayer:
         self.state = np.maximum(0, activation)
         return self.state
 
-    def plot_activation(self, plot_type: str = "bar") -> None:
+    def plot_activation(self, plot_type: str = "bar", return_plot: bool = False):
         """
         Plot the activation levels of each head direction cell.
 
         Parameters:
         - plot_type (str): The type of plot ('bar' for bar chart or 'radial' for radial plot).
+        - return_plot (bool): If True, returns the plot object instead of showing it.
 
         Returns:
-        - None
+        - None or plt.Figure: If return_plot=True, returns the figure object. Otherwise, it shows the plot.
         """
         if self.state is None:
             raise ValueError(
@@ -123,10 +124,11 @@ class HeadDirectionLayer:
         ]
 
         if plot_type == "bar":
-            plt.bar(categories, self.state)
-            plt.xlabel(f"Tuned Directions ({self.unit})")
-            plt.ylabel("Activation Magnitude")
-            plt.title("Head Direction Layer Activation")
+            fig, ax = plt.subplots()
+            ax.bar(categories, self.state)
+            ax.set_xlabel(f"Tuned Directions ({self.unit})")
+            ax.set_ylabel("Activation Magnitude")
+            ax.set_title("Head Direction Layer Activation")
             plt.xticks(rotation=45, ha="right")  # Rotate labels for better readability
         elif plot_type == "radial":
             angles = np.linspace(0, 2 * np.pi, self.num_cells, endpoint=False)
@@ -144,7 +146,12 @@ class HeadDirectionLayer:
             raise ValueError("Invalid plot_type. Choose 'bar' or 'radial'.")
 
         plt.tight_layout()
-        plt.show()
+
+        # Return the figure object if requested, otherwise show the plot
+        if return_plot:
+            return fig
+        else:
+            plt.show()
 
 
 # Example usage
