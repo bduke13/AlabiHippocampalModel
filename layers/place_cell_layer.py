@@ -2,7 +2,7 @@ import numpy as np
 import tensorflow as tf
 tf.random.set_seed(5)
 from numpy.random import default_rng
-from .bvc_layer import bvcLayer
+from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
 
 class PlaceCellLayer(): # Called continuously during explore loop in driver.py
     def __init__(self, num_pc=1000, input_dim=720, timestep=32*3, max_dist=12, n_hd=8):
@@ -22,7 +22,7 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
         self.num_pc = num_pc
         
         # Initialize the Boundary Vector Cell (BVC) layer
-        self.bvcLayer = bvcLayer(max_dist, input_dim, n_hd)
+        self.bvcLayer = BoundaryVectorCellLayer(max_dist, input_dim, n_hd)
         
         # Number of BVCs (Boundary Vector Cells)
         self.num_bvc = self.bvcLayer.num_distances
