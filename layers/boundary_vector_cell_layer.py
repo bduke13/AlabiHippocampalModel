@@ -76,22 +76,18 @@ class BoundaryVectorCellLayer:
         # Return the product of distance and angular Gaussian functions for BVC activation
         return tf.reduce_sum((distance_gaussian * angular_gaussian), 0)
 
-    def plot_activation_with_boundary(
+    def plot_activation(
         self,
         distances: np.ndarray,
         angles: np.ndarray,
-        star_distances: np.ndarray,
-        star_angles: np.ndarray,
         return_plot: bool = False,
     ):
         """
-        Plots the BVC activation on a polar plot and overlays a star-shaped boundary for visualization.
+        Plots the BVC activation on a polar plot and overlays the raw data over the plot as well.
 
         Parameters:
         distances (np.ndarray): Input distances to the BVC layer (e.g., from a LiDAR).
         angles (np.ndarray): Input angles corresponding to the distance measurements.
-        star_distances (np.ndarray): Distances representing the star-shaped boundary.
-        star_angles (np.ndarray): Angles representing the star-shaped boundary.
         return_plot (bool): If True, returns the plot object instead of showing it.
 
         This function will plot each BVC's activation and the synthetic boundary.
@@ -103,20 +99,35 @@ class BoundaryVectorCellLayer:
         fig = plt.figure(figsize=(8, 8))
         ax = fig.add_subplot(111, polar=True)
 
+        # Maximum circle size should be half of sigma_d
+        max_circle_size = (
+            self.sigma_d.numpy()
+        )  # Convert Tensor to a NumPy value if necessary
+
         # Plot each BVC neuron on the polar plot with size and color based on activation level
         for i in range(self.num_distances):
             r = self.d_i[0, i]  # Preferred distance
             theta = self.phi_i[0, i]  # Preferred angle
-            size = activations[i] * 300  # Scale size for visibility
-            color = plt.cm.viridis(activations[i] / 0.179)  # Normalize color scale
+            # Scale size of the circle to be proportional to half of sigma_d, using activations
+            size = (
+                (activations[i] / np.max(activations)) * max_circle_size * 100
+            )  # Adjust scaling factor
+            color = plt.cm.viridis(
+                activations[i] / np.max(activations)
+            )  # Normalize color scale
 
             # Plot the neuron with activation
             ax.scatter(theta, r, s=size, c=[color], alpha=0.7, edgecolor="black")
 
-        # Plot the star boundary for reference
-        ax.plot(star_angles, star_distances, "r-", linewidth=2, label="Star Boundary")
+        # Plot the boundary for reference
+        ax.plot(angles, distances, "r-", linewidth=2, label="Boundary")
 
-        ax.set_ylim(0, 12)
+        # Set the radial limits dynamically based on max_dist
+        ax.set_ylim(
+            0, self.d_i.max()
+        )  # Ensures plot scales with BVC preferred distances
+
+        # Add a legend and show the plot
         plt.legend()
 
         # If return_plot is True, return the figure object, otherwise show the plot
@@ -144,15 +155,10 @@ if __name__ == "__main__":
         start_idx = i * star_interval
         distances[start_idx : start_idx + star_interval] = max_r
 
-    # Generate star-shaped boundary angles
-    star_distances, star_angles = distances, angles
-
     # Initialize BVC layer
     bvc_layer_with_activation = BoundaryVectorCellLayer(
         max_dist=12, input_dim=720, n_hd=8, sigma_ang=90, sigma_d=0.5
     )
 
     # Plot BVC activation with the star-shaped boundary
-    bvc_layer_with_activation.plot_activation_with_boundary(
-        distances, angles, star_distances, star_angles
-    )
+    bvc_layer_with_activation.plot_activation(distances, angles)
