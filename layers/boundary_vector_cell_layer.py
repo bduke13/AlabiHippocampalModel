@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import tensorflow as tf
 
 
-class bvcLayer:
+class BoundaryVectorCellLayer:
     def __init__(
         self,
         max_dist: float,
@@ -148,7 +148,7 @@ if __name__ == "__main__":
     star_distances, star_angles = distances, angles
 
     # Initialize BVC layer
-    bvc_layer_with_activation = bvcLayer(
+    bvc_layer_with_activation = BoundaryVectorCellLayer(
         max_dist=12, input_dim=720, n_hd=8, sigma_ang=90, sigma_d=0.5
     )
 

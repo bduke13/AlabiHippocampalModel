@@ -75,7 +75,7 @@ class HeadDirectionLayer:
         )  # Sine component of the preferred directions
         return D
 
-    def head_direction(self, theta_i: float) -> np.ndarray:
+    def get_head_direction_activation(self, theta_i: float) -> np.ndarray:
         """
         Compute the activation of the head direction cells based on the input direction.
 
