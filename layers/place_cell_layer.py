@@ -28,18 +28,21 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
         self.num_bvc = self.bvcLayer.num_distances
         
         # Recurrent weight matrix for place-to-place cell connections, considering head direction
+        # Original: self.w_rec_c
         # Shape: (n_hd, num_pc, num_pc)
         self.w_rec_place_to_place = tf.Variable(np.zeros((n_hd, num_pc, num_pc)), dtype=tf.float32)
         
         # Input weight matrix connecting place cells to BVCs
-        # Shape: (num_pc, num_bvc)
+        # Shape: (n_hd, num_pc, num_pc)
         self.w_in = tf.Variable(rng.binomial(1, .2, (num_pc, self.num_bvc)), dtype=tf.float32)
         
         # Recurrent weight matrix for head direction and place cell interactions
+        # Original: self.w_rec_h
         # Shape: (n_hd, num_pc, num_pc)
         self.w_rec_hd_place = tf.zeros(shape=(n_hd, num_pc, num_pc), dtype=tf.float32)
         
         # Initial activation values for place cells
+        # Original: self.v
         # Shape: (num_pc,)
         self.place_cell_activations = tf.zeros(num_pc, dtype=tf.float32)
         
@@ -47,6 +50,7 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
         self.tau = timestep / 1000
         
         # Initial activations for boundary vector cells (BVCs)
+        # Original: self.bvc_v
         # Shape: (num_bvc,)
         self.bvc_activations = tf.zeros(self.num_bvc, dtype=tf.float32)
         
@@ -54,6 +58,7 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
         self.alpha = 0.5
         
         # Previous place cell activations
+        # Original: self.v_prev
         # Shape: (num_pc,)
         self.prev_place_cell_activations = tf.zeros(num_pc, dtype=tf.float32)
         
@@ -61,22 +66,27 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
         self.initial_w_in = tf.Variable(self.w_in)
         
         # Temporary variable for the current activation update step
+        # Original: self.z
         # Shape: (num_pc,)
         self.activation_update = tf.zeros_like(self.place_cell_activations, dtype=tf.float32)
         
         # Placeholder for recurrent connections
+        # Original: self.rec
         self.recurrent_input = 0
         
         # Head direction modulation (if applicable, otherwise remains None)
         self.head_direction_modulation = None
         
         # Boundary cell activation values (if any boundary cells are used)
+        # Original: self.bc_v
         self.boundary_cell_activations = tf.zeros((n_hd, num_pc))
         
         # Trace of place cell activations for eligibility tracking
+        # Original: self.trace
         self.place_cell_trace = tf.zeros_like(self.place_cell_activations)
         
         # Trace of head direction cells for eligibility tracking
+        # Original: self.hd_trace
         self.hd_cell_trace = tf.zeros((n_hd, 1, 1), tf.float64)
 
     def get_place_cell_activations(self, input_data, head_direction_vector, mode="learn", collided=False):
@@ -129,6 +139,11 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
                 1 / np.sqrt(0.5) * self.place_cell_activations[:, np.newaxis] * self.w_in)
             )
             self.w_in.assign_add(weight_update)
+
+    def reset_activations(self):
+        self.place_cell_activations *= 0
+        self.activation_update *= 0
+        self.place_cell_trace = None
 
     def exploit(self, direction, num_steps=1):
         '''
