@@ -170,7 +170,7 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
             # Shape: (num_place_cells,)
             place_cell_activations = tf.tanh(
                 tf.nn.relu(
-                    tf.tensordot(tf.cast(self.recurrent_weights[direction], tf.float32), previous_activations, 1) 
+                    tf.tensordot(tf.cast(self.w_rec_hd_place[direction], tf.float32), previous_activations, 1) 
                     - previous_activations
                 )
             )

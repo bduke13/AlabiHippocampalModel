@@ -11,4 +11,13 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+
+# Custom Python script
 main.py
+
+# Ignore hmap and pkl files
+*.hmap_*.pkl
+*.pkl
+
+# Ignore all files in the images directory
+images/

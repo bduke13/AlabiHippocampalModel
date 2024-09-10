@@ -8,6 +8,7 @@ from astropy.stats import circmean, circvar
 import pickle
 import os
 import time
+import warnings
 from controller import Supervisor, Robot
 
 from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
@@ -95,6 +96,7 @@ class Driver(Supervisor):
         self.num_reward_cells = 10
         self.n_hd = 8
         self.timestep = 32*3
+        self.context = 0  # TODO: Get rid of this
 
         # Robot parameters
         self.max_speed = 16
@@ -253,7 +255,6 @@ class Driver(Supervisor):
         navigate towards a goal and update its internal reward and place cell activations. This method
         is called continuously in run() and reloads the sim when the goal is found.
         """
-        self.context = 0  # TODO: Get rid of this
         self.current_pcn_state *= 0  # Reset the current place cell state
         self.stop()  
         self.sense()
@@ -278,7 +279,7 @@ class Driver(Supervisor):
             # Iterate over all possible head directions and compute their potential rewards and energy
             for direction in range(self.n_hd):
                 # Exploit the current place cell state for each direction
-                pcn_activations = self.place_cell_network.exploit(direction, self.context, num_steps=num_steps)
+                pcn_activations = self.place_cell_network.exploit(direction, num_steps=num_steps)
                 self.reward_cell_network.update_reward_cell_activations(pcn_activations)
                 
                 potential_energy[direction] = tf.norm(pcn_activations, 1)
@@ -287,11 +288,12 @@ class Driver(Supervisor):
             # Update action based on computed rewards
             self.act += 1 * (potential_rewards - self.act)  # Update internal action state
             act = np.nan_to_num(circmean(np.linspace(0, np.pi * 2, self.n_hd, endpoint=False), weights=self.act))
-            var = np.nan_to_num(circvar(np.linspace(0, np.pi * 2, self.n_hd, endpoint=False), weights=self.act))
-            max_reward = potential_rewards[int(act // (2 * np.pi / self.n_hd))]
+            # var = np.nan_to_num(circvar(np.linspace(0, np.pi * 2, self.n_hd, endpoint=False), weights=self.act)) # NOTE: Not used
+            max_reward = potential_rewards[int(act // (2 * np.pi / self.n_hd))] # NOTE: May get a ValueError here since there's a chance of division by 0. I think you can ignore it.
 
             # If the maximum reward is negligible or variance is high, return to exploration
             if max_reward <= 1e-3:
+                print("Returning to exploration")
                 self.explore()
                 return
 
@@ -378,7 +380,7 @@ class Driver(Supervisor):
             # Generate image for place cell network activations
             place_cell_img_path = os.path.join("images", f"place_cell_activations_{timestamp}.png")
             plt.figure()
-            plt.imshow(tf.reduce_max(self.pcn.w_rec, 0))
+            plt.imshow(tf.reduce_max(self.pcn.w_rec_hd_place, 0))
             plt.title("Place Cell Network Activations")
             plt.savefig(place_cell_img_path)
             plt.close()
