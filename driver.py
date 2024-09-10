@@ -78,7 +78,7 @@ class Driver(Supervisor):
         prev_pcn_state (Tensor): Tensor representing the previous state.
     """
 
-    def __init__(self, mode, randomize_start_loc, run_time_hours=2):
+    def initialization(self, mode="learning", randomize_start_loc=True, run_time_hours=2):
         """
         Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
@@ -118,21 +118,23 @@ class Driver(Supervisor):
         self.robot = self.getFromDef('agent')  # Placeholder for robot instance
         self.keyboard = self.getKeyboard()
         self.keyboard.enable(self.timestep)
-        self.compass = self.getCompass('compass')
+        self.compass = self.getDevice('compass')
         self.compass.enable(self.timestep)
-        self.range_finder = self.getRangeFinder('range-finder')
+        self.range_finder = self.getDevice('range-finder')
         self.range_finder.enable(self.timestep)
-        self.left_bumper = self.getTouchSensor('bumper_left')
+        self.left_bumper = self.getDevice('bumper_left')
         self.left_bumper.enable(self.timestep)
-        self.right_bumper = self.getTouchSensor('bumper_right')
+        self.right_bumper = self.getDevice('bumper_right')
         self.right_bumper.enable(self.timestep)
         self.collided = tf.Variable(np.zeros(2, np.int32))
-        self.display = self.getDisplay('display')
+        self.display = self.getDevice('display')
         self.rotation_field = self.robot.getField('rotation')
-        self.left_motor = self.getMotor('left wheel motor')
-        self.right_motor = self.getMotor('right wheel motor')
-        self.left_position_sensor = self.getPositionSensor('left wheel sensor')
-        self.right_position_sensor = self.getPositionSensor('right wheel sensor')
+        self.left_motor = self.getDevice('left wheel motor')
+        self.right_motor = self.getDevice('right wheel motor')
+        self.left_position_sensor = self.getDevice('left wheel sensor')
+        self.left_position_sensor.enable(self.timestep)
+        self.right_position_sensor = self.getDevice('right wheel sensor')
+        self.right_position_sensor.enable(self.timestep)
 
         # Initialize PCN and RCN layers
         self.place_cell_network = self.load_pcn(self.num_place_cells, self.n_hd)
@@ -144,7 +146,7 @@ class Driver(Supervisor):
         # Initialize boundaries
         self.boundary_data = tf.Variable(tf.zeros((720, 1)))
 
-        self.act = tf.zeros(self.num_)
+        self.act = tf.zeros(self.n_hd)
         self.step(self.timestep)
 
         # Initialize goal and context
@@ -203,12 +205,12 @@ class Driver(Supervisor):
             print("Initialized new Reward Cell Network.")
         return self.rcn
     
-    def run(self):
+    def run(self, run_mode):
         """
         Runs the main control loop of the robot. It will handle different modes like "dmtp", "explore", and "exploit".
         """
         while True:
-            if self.mode == "exploit":
+            if run_mode == "exploit":
                 self.exploit()
             else:
                 self.explore()
@@ -338,7 +340,7 @@ class Driver(Supervisor):
         """
         # Compute the place cell network activations
         self.pcn.get_place_cell_activations([self.boundaries, np.linspace(0, 2 * np.pi, 720, False)], 
-                self.head_direction_vector, self.context, self.mode, np.any(self.collided))
+                self.head_direction_vector, self.mode, np.any(self.collided))
         
         # Advance the timestep and update position
         self.step(self.timestep)
@@ -348,7 +350,7 @@ class Driver(Supervisor):
         if self.ts < self.hmap_x.size:
             self.hmap_x[self.ts] = curr_pos[0]
             self.hmap_y[self.ts] = curr_pos[2]
-            self.hmap_z[self.ts] = self.pcn.place_cell_activations()
+            self.hmap_z[self.ts] = self.pcn.place_cell_activations
             self.hmap_h[self.ts] = self.head_direction_vector
             self.hmap_g[self.ts] = tf.reduce_sum(self.pcn.bvc_activations)
 
@@ -413,25 +415,25 @@ class Driver(Supervisor):
             print("After:", self.head_direction_vector.argmax(), self.n_index)
 
     def forward(self):
-        self.leftSpeed = self.maxspeed
-        self.rightSpeed = self.maxspeed
+        self.leftSpeed = self.max_speed
+        self.rightSpeed = self.max_speed
         self.move()
         self.sense()
     
     def turn(self, angle, circle=False):
         self.stop()
-        l_offset = self.leftPositionSensor.getValue()
-        r_offset = self.rightPositionSensor.getValue()
+        l_offset = self.left_position_sensor.getValue()
+        r_offset = self.right_position_sensor.getValue()
         self.sense()
         neg = -1.0 if (angle < 0.0) else 1.0
         if circle:
-            self.leftMotor.setVelocity(0)
+            self.left_motor.setVelocity(0)
         else:
-            self.leftMotor.setVelocity(neg * self.maxspeed/2)
-        self.rightMotor.setVelocity(-neg * self.maxspeed/2)
+            self.left_motor.setVelocity(neg * self.max_speed/2)
+        self.right_motor.setVelocity(-neg * self.max_speed/2)
         while True:
-            l = self.leftPositionSensor.getValue() - l_offset
-            r = self.rightPositionSensor.getValue() - r_offset
+            l = self.left_position_sensor.getValue() - l_offset
+            r = self.right_position_sensor.getValue() - r_offset
             dl = l * self.wheel_radius                 
             dr = r * self.wheel_radius
             orientation = neg * (dl - dr) / self.axle_length
@@ -442,24 +444,24 @@ class Driver(Supervisor):
         self.sense()
 
     def stop(self):
-        self.leftMotor.setVelocity(0)
-        self.rightMotor.setVelocity(0)
+        self.left_motor.setVelocity(0)
+        self.right_motor.setVelocity(0)
     
     def move(self):
-        self.leftMotor.setPosition(float('inf'))
-        self.rightMotor.setPosition(float('inf'))
-        self.leftMotor.setVelocity(self.leftSpeed)
-        self.rightMotor.setVelocity(self.rightSpeed)
+        self.left_motor.setPosition(float('inf'))
+        self.right_motor.setPosition(float('inf'))
+        self.left_motor.setVelocity(self.leftSpeed)
+        self.right_motor.setVelocity(self.rightSpeed)
 
     def sense(self):
-        self.boundaries = self.rangeFinder.getRangeImage()
+        self.boundaries = self.range_finder.getRangeImage()
         self.n_index = int(self.get_bearing_in_degrees(self.compass.getValues()))
         self.boundaries = np.roll(self.boundaries, 2*self.n_index)
         rad = np.deg2rad(self.n_index)
         v = np.array([np.cos(rad), np.sin(rad)])
         self.head_direction_vector = self.head_direction(0, v)
-        self.collided.scatter_nd_update([[0]], [int(self.leftBumper.getValue())])
-        self.collided.scatter_nd_update([[1]], [int(self.rightBumper.getValue())])
+        self.collided.scatter_nd_update([[0]], [int(self.left_bumper.getValue())])
+        self.collided.scatter_nd_update([[1]], [int(self.right_bumper.getValue())])
         self.step(self.timestep)
 
     def get_bearing_in_degrees(self, north):
@@ -550,24 +552,3 @@ class Driver(Supervisor):
                 os.remove(file)
             except FileNotFoundError:
                 pass  # Ignore if the file does not exist
-
-if __name__ == "__main__":
-    # Initialize the Driver class
-    mode = 'explore'  # or 'exploit' or 'dmtp', depending on what mode you want to test
-    randomize_start_loc = True  # Whether to randomize the robot's starting position
-    run_time_hours = 2  # Run time in hours for the simulation
-
-    # Create an instance of the Driver
-    driver = Driver(mode=mode, randomize_start_loc=randomize_start_loc, run_time_hours=run_time_hours)
-
-    try:
-        # Run the main control loop
-        driver.run()
-
-    except KeyboardInterrupt:
-        print("Simulation interrupted by user.")
-
-    finally:
-        # Save the final state of the system upon exit
-        driver.save(include_hmaps=True)
-        print("Final state saved.")

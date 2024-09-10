@@ -22,7 +22,7 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
         self.num_pc = num_pc
         
         # Initialize the Boundary Vector Cell (BVC) layer
-        self.bvcLayer = BoundaryVectorCellLayer(max_dist, input_dim, n_hd)
+        self.bvcLayer = BoundaryVectorCellLayer(max_dist=max_dist, input_dim=input_dim, n_hd=n_hd, sigma_ang=90, sigma_d=0.5)
         
         # Number of BVCs (Boundary Vector Cells)
         self.num_bvc = self.bvcLayer.num_distances
@@ -37,7 +37,7 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
         self.w_in = tf.Variable(rng.binomial(1, .2, (num_pc, self.num_bvc)), dtype=tf.float32)
         
         # Recurrent weight matrix for head direction and place cell interactions
-        # Original: self.w_rec_h
+        # Original: self.w_rec
         # Shape: (n_hd, num_pc, num_pc)
         self.w_rec_hd_place = tf.zeros(shape=(n_hd, num_pc, num_pc), dtype=tf.float32)
         
@@ -127,7 +127,7 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
             self.hd_cell_trace += self.tau / 3 * (np.nan_to_num(head_direction_vector)[:, np.newaxis, np.newaxis] - self.hd_cell_trace)
             
             # Update recurrent weights for place cell interactions modulated by head direction
-            self.recurrent_weights += tf.cast(np.nan_to_num(head_direction_vector)[:, np.newaxis, np.newaxis], tf.float32) * (
+            self.w_rec_hd_place += tf.cast(np.nan_to_num(head_direction_vector)[:, np.newaxis, np.newaxis], tf.float32) * (
                 tf.tensordot(self.place_cell_activations[:, np.newaxis], self.place_cell_trace[np.newaxis, :], 1) -
                 tf.tensordot(self.place_cell_trace[:, np.newaxis], self.place_cell_activations[np.newaxis, :], 1)
             )
