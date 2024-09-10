@@ -365,7 +365,9 @@ class Driver(Supervisor):
         """
         curr_pos = self.robot.getField('translation').getSFVec3f()
 
-        if (self.mode=="dmtp" and np.allclose(self.goal_location, [curr_pos[0], curr_pos[2]], 0, goal_r["exploit"])):
+        if self.getTime() >= 60*self.run_time_minutes:
+            return
+        if (self.mode=="dmtp" and np.allclose(self.goalLocation, [curr_pos[0], curr_pos[2]], 0, goal_r["exploit"])) or ((self.mode=="cleanup" or self.mode=="learning") and (self.getTime() >=60*self.run_time_minutes)):
             print("Goal reached")
             print(f"Total distance traveled: {self.compute_path_length()}")
             print(f"Started at: {np.array([self.hmap_x[0], self.hmap_y[0]])}")
