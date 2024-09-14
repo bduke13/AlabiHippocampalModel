@@ -89,7 +89,7 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
         # Original: self.hd_trace
         self.hd_cell_trace = tf.zeros((n_hd, 1, 1), tf.float64)
 
-    def get_place_cell_activations(self, input_data, head_direction_vector, mode="learn", collided=False):
+    def get_place_cell_activations(self, input_data, hd_activations, mode="learn", collided=False):
         '''
         Computes the activation of place cells based on the input from boundary vector cells (BVCs) and head direction vectors (HDV).
 
@@ -97,7 +97,7 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
         input_data: Input to the BVC layer. 
                     - input_data[0]: Array of distances (e.g., from RPLidar).
                     - input_data[1]: Array of angles corresponding to those distances.
-        head_direction_vector: Head direction vector (HDV) indicating the direction the agent is facing.
+        hd_activations: Head direction activations.
         mode: Operation mode, typically "learn" or "test".
         collided: Boolean indicating if the agent has collided with an obstacle.
         '''
@@ -124,10 +124,10 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
 
             # Update the eligibility trace for place cells and head direction cells
             self.place_cell_trace += self.tau / 3 * (self.place_cell_activations - self.place_cell_trace)
-            self.hd_cell_trace += self.tau / 3 * (np.nan_to_num(head_direction_vector)[:, np.newaxis, np.newaxis] - self.hd_cell_trace)
+            self.hd_cell_trace += self.tau / 3 * (np.nan_to_num(hd_activations)[:, np.newaxis, np.newaxis] - self.hd_cell_trace)
             
             # Update recurrent weights for place cell interactions modulated by head direction
-            self.w_rec_hd_place += tf.cast(np.nan_to_num(head_direction_vector)[:, np.newaxis, np.newaxis], tf.float32) * (
+            self.w_rec_hd_place += tf.cast(np.nan_to_num(hd_activations)[:, np.newaxis, np.newaxis], tf.float32) * (
                 tf.tensordot(self.place_cell_activations[:, np.newaxis], self.place_cell_trace[np.newaxis, :], 1) -
                 tf.tensordot(self.place_cell_trace[:, np.newaxis], self.place_cell_activations[np.newaxis, :], 1)
             )
