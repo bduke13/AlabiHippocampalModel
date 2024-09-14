@@ -8,7 +8,6 @@ from astropy.stats import circmean, circvar
 import pickle
 import os
 import time
-import warnings
 from controller import Supervisor, Robot
 
 from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
@@ -95,19 +94,18 @@ class Driver(Supervisor):
         self.num_place_cells = 1000
         self.num_reward_cells = 10
         self.n_hd = 8
-        self.timestep = 32*3
+        self.timestep = 32*3 # Interval at which the control loop updates its sensors, computes activations, and performs actions
         self.context = 0  # TODO: Get rid of this
 
         # Robot parameters
         self.max_speed = 16
         self.left_speed = self.max_speed
         self.right_speed = self.max_speed
-        self.timestep = timestep
         self.wheel_radius = 0.031
         self.axle_length = 0.271756
         self.run_time_minutes = run_time_hours * 60
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
-        self.ts = 0
+        self.step_count = 0
 
         # Sensor data storage
         self.hmap_x = np.zeros(self.num_steps) 
@@ -138,9 +136,10 @@ class Driver(Supervisor):
         self.right_position_sensor = self.getDevice('right wheel sensor')
         self.right_position_sensor.enable(self.timestep)
 
-        # Initialize PCN and RCN layers
-        self.place_cell_network = self.load_pcn(self.num_place_cells, self.n_hd)
-        self.reward_cell_network = self.load_rcn(self.num_reward_cells, self.num_place_cells)
+        # Initialize layers
+        self.load_pcn(self.num_place_cells, self.n_hd)
+        self.load_rcn(self.num_reward_cells, self.num_place_cells)
+        self.head_direction_layer = HeadDirectionLayer(num_cells=self.n_hd)
 
         # Initialize landmarks
         self.landmarks = np.inf * np.ones((5, 1))
@@ -261,7 +260,7 @@ class Driver(Supervisor):
         self.compute()  # Compute activations in the PCN and RCN
         self.check_goal_reached()  # Check if the robot is at the goal
 
-        if self.ts > tau_w:
+        if self.step_count > tau_w:
             act, max_reward, num_steps = 0, 0, 1
             potential_rewards = np.empty(self.n_hd)  # Array to store potential rewards
             potential_energy = np.empty(self.n_hd)  # Array to store potential energy
@@ -318,8 +317,8 @@ class Driver(Supervisor):
                 # Adjust the turning angle based on the action and head direction
                 if abs(act) > np.pi:
                     act = act - np.sign(act) * 2 * np.pi
-                self.turn(-np.deg2rad(np.rad2deg(act) - self.n_index) % (np.pi * 2))
-                print(np.rad2deg(act), self.n_index, np.rad2deg(act) - self.n_index)
+                self.turn(-np.deg2rad(np.rad2deg(act) - self.current_heading) % (np.pi * 2))
+                print(np.rad2deg(act), self.current_heading, np.rad2deg(act) - self.current_heading)
 
             # Move forward and continue sensing and computing activations over the time window
             for step in range(tau_w):
@@ -341,23 +340,23 @@ class Driver(Supervisor):
         Compute the activations of place cells and handle the environment interactions.
         """
         # Compute the place cell network activations
-        self.pcn.get_place_cell_activations([self.boundaries, np.linspace(0, 2 * np.pi, 720, False)], 
-                self.head_direction_vector, self.mode, np.any(self.collided))
+        self.pcn.get_place_cell_activations(input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)], 
+                hd_activations=self.hd_activations, mode=self.mode, collided=np.any(self.collided))
         
         # Advance the timestep and update position
         self.step(self.timestep)
         curr_pos = self.robot.getField('translation').getSFVec3f()
 
-        # Update place cell and sensor maps if within timestep bounds
-        if self.ts < self.hmap_x.size:
-            self.hmap_x[self.ts] = curr_pos[0]
-            self.hmap_y[self.ts] = curr_pos[2]
-            self.hmap_z[self.ts] = self.pcn.place_cell_activations
-            self.hmap_h[self.ts] = self.head_direction_vector
-            self.hmap_g[self.ts] = tf.reduce_sum(self.pcn.bvc_activations)
+        # Update place cell and sensor maps
+        if self.step_count < self.num_steps:
+            self.hmap_x[self.step_count] = curr_pos[0]
+            self.hmap_y[self.step_count] = curr_pos[2]
+            self.hmap_z[self.step_count] = self.pcn.place_cell_activations
+            self.hmap_h[self.step_count] = self.hd_activations
+            self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn.bvc_activations)
 
         # Increment timestep
-        self.ts += 1
+        self.step_count += 1
 
     def check_goal_reached(self):
         """
@@ -365,8 +364,8 @@ class Driver(Supervisor):
         """
         curr_pos = self.robot.getField('translation').getSFVec3f()
 
-        if self.getTime() >= 60*self.run_time_minutes:
-            return
+        # if self.getTime() >= 60*self.run_time_minutes:
+        #     return
         if (self.mode=="dmtp" and np.allclose(self.goalLocation, [curr_pos[0], curr_pos[2]], 0, goal_r["exploit"])) or ((self.mode=="cleanup" or self.mode=="learning") and (self.getTime() >=60*self.run_time_minutes)):
             print("Goal reached")
             print(f"Total distance traveled: {self.compute_path_length()}")
@@ -406,7 +405,7 @@ class Driver(Supervisor):
         """
         k = self.keyboard.getKey()
         if k != -1:
-            print("Before:", self.head_direction_vector.argmax(), self.n_index)
+            print("Before:", self.hd_activations.argmax(), self.current_heading)
         if k == ord('W'):
             self.forward()
         elif k == ord('D'):
@@ -416,7 +415,7 @@ class Driver(Supervisor):
         elif k == ord('S'):
             self.stop()
         if k != -1:
-            print("After:", self.head_direction_vector.argmax(), self.n_index)
+            print("After:", self.hd_activations.argmax(), self.current_heading)
 
     def forward(self):
         self.leftSpeed = self.max_speed
@@ -458,14 +457,55 @@ class Driver(Supervisor):
         self.right_motor.setVelocity(self.rightSpeed)
 
     def sense(self):
+        """
+        The 'sense' method updates the robot's perception of its environment, including its orientation, 
+        distance to obstacles (boundaries), head direction cell activations, and collision detection.
+
+        Steps:
+        1. Capture the LiDAR (range finder) data, which provides distances to obstacles in all directions.
+        2. Get the robot's current heading using the compass, convert it to radians, and adjust the LiDAR data 
+        using np.roll() to align it with the robot's heading.
+        3. Compute the current head direction vector and update the activations of the head direction cells.
+        4. Update the collision status by checking the bumper sensors.
+        5. Proceed to the next timestep in the robot's control loop.
+        """
+
+        # 1. Capture distance data from the range finder (LiDAR), which provides 720 points around the robot.
+        # Shape: (720,)
         self.boundaries = self.range_finder.getRangeImage()
-        self.n_index = int(self.get_bearing_in_degrees(self.compass.getValues()))
-        self.boundaries = np.roll(self.boundaries, 2*self.n_index)
-        rad = np.deg2rad(self.n_index)
-        v = np.array([np.cos(rad), np.sin(rad)])
-        self.head_direction_vector = self.head_direction(0, v)
+
+        # 2. Get the robot's current heading in degrees using the compass and convert it to an integer.
+        # Shape: scalar (int)
+        self.current_heading_deg = int(self.get_bearing_in_degrees(self.compass.getValues()))
+
+        # 3. Roll the LiDAR data based on the current heading to align the 'front' with index 0.
+        # Shape: (720,) - LiDAR data remains 720 points, but shifted according to the robot's current heading.
+        self.boundaries = np.roll(self.boundaries, 2 * self.current_heading_deg)
+
+        # 4. Convert the current heading from degrees to radians.
+        # Shape: scalar (float) - Current heading of the robot in radians.
+        current_heading_rad = np.deg2rad(self.current_heading_deg)
+
+        # 5. Define the anchor direction (theta_0) as 0 radians for now, meaning no offset is applied.
+        theta_0 = 0
+
+        # 6. Calculate the current heading vector from the heading in radians.
+        # Shape: (2,) - A 2D vector representing the robot's current heading direction: [cos(theta), sin(theta)].
+        v_in = np.array([np.cos(current_heading_rad), np.sin(current_heading_rad)])
+
+        # 7. Compute the activations of the head direction cells based on the current heading vector (v_in).
+        # Shape: (self.num_cells,) - A 1D array where each element represents the activation of a head direction cell.
+        self.hd_activations = self.head_direction_layer.get_hd_activation(theta_0=theta_0, v_in=v_in)
+
+        # 8. Update the collision status using the left bumper sensor.
+        # Shape: scalar (int) - 1 if collision detected on the left bumper, 0 otherwise.
         self.collided.scatter_nd_update([[0]], [int(self.left_bumper.getValue())])
+
+        # 9. Update the collision status using the right bumper sensor.
+        # Shape: scalar (int) - 1 if collision detected on the right bumper, 0 otherwise.
         self.collided.scatter_nd_update([[1]], [int(self.right_bumper.getValue())])
+
+        # 10. Proceed to the next timestep in the robot's control loop.
         self.step(self.timestep)
 
     def get_bearing_in_degrees(self, north):
@@ -474,31 +514,6 @@ class Driver(Supervisor):
         if bearing < 0:
             bearing = bearing + 360.0
         return bearing
-    
-    def head_direction(self, theta_0, v_in=[1, 1]):
-        """
-        Computes the head direction activation based on the input vector `v_in` and 
-        the angular difference between the current direction `theta_0` and preferred 
-        directions of the head direction cells.
-        
-        Parameters:
-        - theta_0: The current heading direction (in radians).
-        - v_in: Input vector representing the current direction, default is [1, 1].
-
-        Returns:
-        - np.ndarray: The activation values of the head direction cells.
-        """
-        # Calculate the preferred directions (tuning kernel)
-        theta_i = np.arange(0, 2 * np.pi, np.deg2rad(360 // self.n_hd))
-        D = np.empty(2, dtype=np.ndarray)
-        D[0] = np.cos(np.add(theta_i, theta_0))
-        D[1] = np.sin(np.add(theta_i, theta_0))
-
-        # Compute the dot product between the input vector `v_in` and the tuning kernel
-        activation = np.dot(v_in, D)
-
-        # Return the activation values
-        return activation
 
     def compute_path_length(self):
         """
@@ -534,15 +549,15 @@ class Driver(Supervisor):
         # Save the history maps if specified
         if include_hmaps:
             with open('hmap_x.pkl', 'wb') as output:
-                pickle.dump(self.hmap_x[:self.ts], output)
+                pickle.dump(self.hmap_x[:self.step_count], output)
             with open('hmap_y.pkl', 'wb') as output:
-                pickle.dump(self.hmap_y[:self.ts], output)
+                pickle.dump(self.hmap_y[:self.step_count], output)
             with open('hmap_z.pkl', 'wb') as output:
-                pickle.dump(self.hmap_z[:self.ts], output)
+                pickle.dump(self.hmap_z[:self.step_count], output)
             with open('hmap_g.pkl', 'wb') as output:
-                pickle.dump(self.hmap_g[:self.ts], output)
+                pickle.dump(self.hmap_g[:self.step_count], output)
             with open('hmap_h.pkl', 'wb') as output:
-                pickle.dump(self.hmap_h[:self.ts], output)
+                pickle.dump(self.hmap_h[:self.step_count], output)
 
     def clear(self):
         """

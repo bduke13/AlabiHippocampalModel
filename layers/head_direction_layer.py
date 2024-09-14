@@ -1,101 +1,54 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
+import numpy as np
 
 class HeadDirectionLayer:
-    def __init__(
-        self, num_cells: int, theta_0: float = 0.0, unit: str = "degree"
-    ) -> None:
+    def __init__(self, num_cells: int) -> None:
         """
-        Initialize the HeadDirectionLayer, which models a discretized representation
-        of heading that can be used by a learning model.
+        Initializes a layer of head direction cells that represent the agent's heading in a discretized way.
+        Each head direction cell has a preferred direction in space, and the activation of each cell is
+        determined based on how close the agent's current heading is to the cell's preferred direction.
 
-        This model creates a specified number of head direction cells, each corresponding
-        to a unique, evenly spaced direction in 360 degrees. The activation of each cell
-        is determined by the dot product between the agent's current heading and the
-        cell's preferred (tuned) direction.
-
-        Note: Theta_0 never needs modified in most cases. Theta_0 represents the starting direction
-        and theta_i represents the relative heading from that direction.
-        If the starting direction of the agent is not 0 then change theta_0.
-
-        A cell will have an activation of 1 when the agent's heading exactly matches its
-        preferred direction, with neighboring cells showing decreasing activations
-        down to 0 as the heading deviates.
+        The layer uses 'num_cells' head direction cells, evenly spaced across 360 degrees, and the activation
+        of each cell is calculated using a dot product between the agent's current heading direction and the 
+        cell's preferred direction.
 
         Parameters:
-        - num_cells (int): The number of head direction cells in the layer.
-        - theta_0 (float): The reference direction (in degrees or radians) for the anchor
-          cue, defaulting to 0.0.
-        - unit (str): The unit of the input direction, either 'degree' or 'radian'.
-          Default is 'degree'.
+        - num_cells (int): The number of head direction cells in the layer, each representing a unique direction.
         """
-        self.num_cells = num_cells  # Number of head direction cells
-        self.unit = unit  # Unit of input direction ('degree' or 'radian')
-        self.theta_0 = self._convert_to_radians(
-            theta_0
-        )  # Convert the base direction to radians if necessary
-        self.tuned_directions = (
-            self._generate_tuned_directions()
-        )  # Generate and store the preferred directions
-        self.state = np.zeros(
-            num_cells
-        )  # Initialize the activation state of the head direction cells to zeros
+        self.num_cells = num_cells
 
-    def _convert_to_radians(self, value: float) -> float:
+    def get_hd_activation(self, theta_0: float, v_in: np.ndarray):
         """
-        Convert the input direction to radians if the unit is in degrees.
+        Computes the activation of the head direction cells based on the agent's current heading direction. 
+
+        Each head direction cell has a preferred direction, and this method calculates how much the agent's 
+        current heading (represented by 'v_in') aligns with each of the head direction cells' preferred directions.
+
+        The preferred directions of the head direction cells are evenly spaced across 360 degrees, and the 
+        activation is calculated using the dot product of the current heading vector ('v_in') and the preferred 
+        directions of the head direction cells.
 
         Parameters:
-        - value (float): The input direction angle.
+        - theta_0 (float): Heading angle of the anchor cue. Default is 0 degrees.
+        - v_in (np.ndarray): A vector representing the current heading direction of the agent.
 
         Returns:
-        - float: The direction in radians.
+        - np.ndarray: The activation levels of the head direction cells, where each activation indicates how closely 
+          the agent's current heading aligns with the preferred direction of each head direction cell.
         """
-        return np.deg2rad(value) if self.unit == "degree" else value
+        theta_i = np.arange(0, 2 * np.pi, 2 * np.pi / self.num_cells)  # Create equally spaced angles for the head direction cells
+        D = np.stack([np.cos(theta_i + theta_0), np.sin(theta_i + theta_0)], axis=0)  # Generate tuning kernel for directions
+        
+        # Compute the dot product of the input vector (current heading) with the preferred directions of the cells
+        activation = np.dot(v_in, D)
 
-    def _generate_tuned_directions(self) -> np.ndarray:
-        """
-        Generate the tuning directions for the head direction cells.
+        self.state = activation
 
-        The preferred directions are uniformly distributed in 2D space.
+        # Shape: (self.num_cells,)
+        return activation
 
-        Returns:
-        - np.ndarray: A 2xN array of cosine and sine values representing the preferred directions.
-        """
-        theta_i = np.linspace(
-            0, 2 * np.pi, self.num_cells, endpoint=False
-        )  # Create equally spaced angles
-        D = np.empty((2, self.num_cells))  # Initialize the kernel array
-        D[0] = np.cos(
-            theta_i + self.theta_0
-        )  # Cosine component of the preferred directions
-        D[1] = np.sin(
-            theta_i + self.theta_0
-        )  # Sine component of the preferred directions
-        return D
-
-    def get_head_direction_activation(self, theta_i: float) -> np.ndarray:
-        """
-        Compute the activation of the head direction cells based on the input direction.
-
-        Parameters:
-        - theta_i (float): The heading angle of the agent (in degrees or radians) in reference to theta_0.
-
-        Returns:
-        - np.ndarray: The activation levels of the head direction cells.
-        """
-        theta_i_rad = self._convert_to_radians(
-            theta_i
-        )  # Convert the heading angle to radians if necessary
-        v_in = np.array([np.cos(theta_i_rad), np.sin(theta_i_rad)])  # Heading vector
-
-        # Compute the dot product of the heading vector with the preferred directions
-        activation = np.dot(v_in, self.tuned_directions)
-
-        # Apply a non-linearity (ReLU) to only keep positive activations
-        self.state = np.maximum(0, activation)
-        return self.state
 
     def plot_activation(self, plot_type: str = "bar", return_plot: bool = False):
         """
@@ -108,25 +61,20 @@ class HeadDirectionLayer:
         Returns:
         - None or plt.Figure: If return_plot=True, returns the figure object. Otherwise, it shows the plot.
         """
-        if self.state is None:
+        if self.state is None or not np.any(self.state):
             raise ValueError(
-                "Activation state is not set. Please call 'head_direction' first."
+                "Activation state is not set. Please call 'get_hd_activation' first to compute activations."
             )
 
-        # Label each direction based on the unit
+        # Create the labels for each head direction cell based on the evenly spaced angles
         categories = [
-            (
-                f"{int(round(np.rad2deg(angle)))}°"
-                if self.unit == "degree"
-                else f"{round(angle, 2)} rad"
-            )
-            for angle in np.linspace(0, 2 * np.pi, self.num_cells, endpoint=False)
+            f"{int(round(np.rad2deg(angle)))}°" for angle in np.linspace(0, 2 * np.pi, self.num_cells, endpoint=False)
         ]
 
         if plot_type == "bar":
             fig, ax = plt.subplots()
             ax.bar(categories, self.state)
-            ax.set_xlabel(f"Tuned Directions ({self.unit})")
+            ax.set_xlabel("Head Direction Cells (Degrees)")
             ax.set_ylabel("Activation Magnitude")
             ax.set_title("Head Direction Layer Activation")
             plt.xticks(rotation=45, ha="right")  # Rotate labels for better readability
@@ -152,21 +100,3 @@ class HeadDirectionLayer:
             return fig
         else:
             plt.show()
-
-
-# Example usage
-if __name__ == "__main__":
-    # Initialize the HeadDirectionLayer with 16 head direction cells, input in degrees, and theta_0 set to North (0 degrees)
-    hd_layer = HeadDirectionLayer(num_cells=8, theta_0=0.0, unit="degree")
-
-    # Compute the activation with a heading of 45 degrees
-    activations = hd_layer.head_direction(theta_i=45.0)
-
-    # Plot the activation as a bar chart
-    hd_layer.plot_activation(plot_type="bar")
-
-    # Plot the activation as a radial chart
-    hd_layer.plot_activation(plot_type="radial")
-
-    # Output the activation values
-    print("Activations:", activations)
