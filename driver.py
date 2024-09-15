@@ -198,7 +198,7 @@ class Driver(Supervisor):
             RewardCellLayer: The loaded or newly initialized reward cell network.
         """
         try:
-            with open('reward_cell_network.pkl', 'rb') as f:
+            with open('rcn.pkl', 'rb') as f:
                 self.rcn = pickle.load(f)
                 print("Loaded existing Reward Cell Network.")
         except:
@@ -236,7 +236,7 @@ class Driver(Supervisor):
                 break
 
             if self.mode == "dmtp":
-                self.current_pcn_state += self.place_cell_network.place_cell_activations
+                self.current_pcn_state += self.pcn.place_cell_activations
                 self.check_goal_reached()
                 
             self.compute()
@@ -266,23 +266,23 @@ class Driver(Supervisor):
             potential_energy = np.empty(self.n_hd)  # Array to store potential energy
 
             # Compute the reward cell activations based on the current PCN state
-            self.reward_cell_network.update_reward_cell_activations(self.place_cell_network.place_cell_activations, visit=True, context=self.context)
-            # print("Reward:", self.reward_cell_network.reward_cell_activations[self.context], 
-            #     "Most Active:", self.place_cell_network.place_cell_activations.numpy().argsort()[-3:])
+            self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations, visit=True, context=self.context)
+            # print("Reward:", self.rcn.reward_cell_activations[self.context], 
+            #     "Most Active:", self.pcn.place_cell_activations.numpy().argsort()[-3:])
 
             # If the reward is negligible, return to exploration
-            if self.reward_cell_network.reward_cell_activations[self.context] <= 1e-6:
+            if self.rcn.reward_cell_activations[self.context] <= 1e-6:
                 self.explore()
                 return
 
             # Iterate over all possible head directions and compute their potential rewards and energy
             for direction in range(self.n_hd):
                 # Exploit the current place cell state for each direction
-                pcn_activations = self.place_cell_network.exploit(direction, num_steps=num_steps)
-                self.reward_cell_network.update_reward_cell_activations(pcn_activations)
+                pcn_activations = self.pcn.exploit(direction, num_steps=num_steps)
+                self.rcn.update_reward_cell_activations(pcn_activations)
                 
                 potential_energy[direction] = tf.norm(pcn_activations, 1)
-                potential_rewards[direction] = np.nan_to_num(self.reward_cell_network.reward_cell_activations[self.context])
+                potential_rewards[direction] = np.nan_to_num(self.rcn.reward_cell_activations[self.context])
 
             # Update action based on computed rewards
             self.act += 1 * (potential_rewards - self.act)  # Update internal action state
@@ -311,7 +311,7 @@ class Driver(Supervisor):
             if np.any(self.collided):
                 self.turn(np.deg2rad(60))
                 self.stop()
-                self.reward_cell_network.td_update(self.place_cell_network.place_cell_activations, potential_energy[int(act // (2 * np.pi / self.n_hd))], max_reward, self.context)
+                self.rcn.td_update(self.pcn.place_cell_activations, potential_energy[int(act // (2 * np.pi / self.n_hd))], max_reward, self.context)
                 return
             else:
                 # Adjust the turning angle based on the action and head direction
@@ -325,7 +325,7 @@ class Driver(Supervisor):
                 self.sense()
                 self.compute()
                 self.forward()
-                self.current_pcn_state += self.place_cell_network.place_cell_activations
+                self.current_pcn_state += self.pcn.place_cell_activations
                 self.check_goal_reached(False, step)
 
             # Normalize the accumulated place cell state over the window
@@ -333,7 +333,7 @@ class Driver(Supervisor):
 
             # Update internal expected reward for the next step
             self.expected_reward = max_reward / potential_energy[int(act // (2 * np.pi / self.n_hd))]
-            self.last_reward = self.reward_cell_network.reward_cell_activations[self.context]
+            self.last_reward = self.rcn.reward_cell_activations[self.context]
 
     def compute(self):
         """
@@ -366,7 +366,7 @@ class Driver(Supervisor):
 
         # if self.getTime() >= 60*self.run_time_minutes:
         #     return
-        if (self.mode=="dmtp" and np.allclose(self.goalLocation, [curr_pos[0], curr_pos[2]], 0, goal_r["exploit"])) or ((self.mode=="cleanup" or self.mode=="learning") and (self.getTime() >=60*self.run_time_minutes)):
+        if (self.mode=="dmtp" and np.allclose(self.goal_location, [curr_pos[0], curr_pos[2]], 0, goal_r["exploit"])) or ((self.mode=="cleanup" or self.mode=="learning") and (self.getTime() >=60*self.run_time_minutes)):
             print("Goal reached")
             print(f"Total distance traveled: {self.compute_path_length()}")
             print(f"Started at: {np.array([self.hmap_x[0], self.hmap_y[0]])}")
