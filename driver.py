@@ -8,6 +8,8 @@ from astropy.stats import circmean, circvar
 import pickle
 import os
 import time
+import tkinter as tk
+from tkinter import messagebox
 from controller import Supervisor, Robot
 
 from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
@@ -151,14 +153,14 @@ class Driver(Supervisor):
         self.step(self.timestep)
 
         # Initialize goal and context
-        self.goal_location = [-3, 3]
+        self.goal_location = [-1, 1]
         self.expected_reward = 0
         self.last_reward = 0
         self.current_pcn_state = tf.zeros_like(self.pcn.place_cell_activations)
         self.prev_pcn_state = tf.zeros_like(self.pcn.place_cell_activations)
 
         if randomize_start_loc:
-            INITIAL = [rng.uniform(-5, 5), 0.5, rng.uniform(-5, 5)]
+            INITIAL = [rng.uniform(-2, 2), 0.5, rng.uniform(-2, 2)]
             self.robot.getField('translation').setSFVec3f(INITIAL)
             self.robot.resetPhysics()
         
@@ -210,6 +212,7 @@ class Driver(Supervisor):
         """
         Runs the main control loop of the robot. It will handle different modes like "dmtp", "explore", and "exploit".
         """
+        print(f"goal at {self.goal_location}")
         while True:
             if run_mode == "exploit":
                 self.exploit()
@@ -375,6 +378,19 @@ class Driver(Supervisor):
             print(f"Distance to goal: {distance_to_goal}")
             print(f"Time taken: {self.getTime()}")
 
+            if self.mode == "dmtp":
+                self.auto_pilot()
+
+            root = tk.Tk()
+            root.withdraw()  # Hide the main window
+            root.attributes("-topmost", True)  # Always keep the window on top
+            root.update()
+            messagebox.showinfo("Information", "Press OK to save networks")
+            print("Saved!")
+            root.destroy()  # Destroy the main window
+            self.save(True)
+            self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
+
             # Get a unique timestamp for file naming
             timestamp = time.strftime("%Y%m%d-%H%M%S")
 
@@ -397,7 +413,66 @@ class Driver(Supervisor):
 
             # Save current state and reload the world
             self.save(True)
-            self.worldReload()
+    
+    # def auto_pilot(self):
+    #     """
+    #     Automatically navigates the robot towards the goal location by calculating the desired heading
+    #     and turning the robot towards it. During navigation, the place cell activations are accumulated
+    #     to learn the representation of the path to the goal. Once the goal is reached, the reward cell network
+    #     is updated to associate the accumulated place cell activations with the reward at the goal.
+
+    #     This method continues moving the robot towards the goal until it is within a specified threshold distance.
+    #     """
+    #     s_start = 0  # Counter for the number of steps taken
+    #     self.current_pcn_state *= 0  # Reset the current place cell state
+
+    #     while True:
+    #         # Get the current position of the robot
+    #         curr_pos = self.robot.getField('translation').getSFVec3f()
+
+    #         # Check if the goal has been reached within the specified threshold
+    #         distance_to_goal = np.linalg.norm([curr_pos[0] - self.goal_location[0], curr_pos[2] - self.goal_location[1]])
+    #         if distance_to_goal <= goal_r["explore"]:
+    #             print("Goal reached during auto-pilot")
+    #             break
+
+    #         # Calculate the desired heading towards the goal
+    #         delta_x = self.goal_location[0] - curr_pos[0]
+    #         delta_z = self.goal_location[1] - curr_pos[2]  # Note: curr_pos[2] is the z-coordinate
+    #         desired_heading = np.arctan2(delta_z, delta_x)
+
+    #         # Get the robot's current heading in radians
+    #         current_heading_rad = np.deg2rad(self.current_heading_deg)
+
+    #         # Compute the angle to turn, normalized between -pi and pi
+    #         angle_to_turn = (desired_heading - current_heading_rad + np.pi) % (2 * np.pi) - np.pi
+
+    #         # Print navigation status
+    #         print(f"Navigating towards the goal: Current position ({curr_pos[0]:.2f}, {curr_pos[2]:.2f}), "
+    #             f"Distance to goal: {distance_to_goal:.2f}, Turning angle: {np.rad2deg(angle_to_turn):.2f} degrees")
+
+    #         # Turn the robot towards the desired heading
+    #         self.turn(angle_to_turn)
+
+    #         # Update sensors and compute place cell activations
+    #         self.sense()
+    #         self.compute()
+
+    #         # Move the robot forward
+    #         self.forward()
+
+    #         # Accumulate the place cell activations over the path
+    #         self.current_pcn_state += self.pcn.place_cell_activations
+    #         s_start += 1
+
+    #     # After reaching the goal, average the accumulated place cell activations
+    #     if s_start > 0:
+    #         self.current_pcn_state /= s_start
+
+    #     # Update the reward cell network with the accumulated place cell activations at the goal location
+    #     # This associates the place cell activations along the path with the reward at the goal
+    #     self.rcn.update_reward_cell_activations(self.current_pcn_state, visit=True, context=self.context)
+
 
     def manual_control(self):
         """
