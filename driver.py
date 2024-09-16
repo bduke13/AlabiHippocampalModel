@@ -18,15 +18,9 @@ from layers.place_cell_layer import PlaceCellLayer
 from layers.reward_cell_layer import RewardCellLayer
 
 np.set_printoptions(precision=2)
-num_pc = 1000 # number of PC
-input_dim = 720 # BVC input size (720 bc RPLidar spits out a 720-point array)
-timestep = 32 * 3
-max_dist = 12 # max distance of LiDAR
-tau_w = 10 # time constant for the window function
 PI = tf.constant(np.pi) 
 rng = default_rng() # random number generator
 cmap = get_cmap('plasma')
-goal_r = {"explore": .1, "exploit": .6}
 
 try:
     with open('hmap_x.pkl', 'rb') as f:
@@ -97,6 +91,8 @@ class Driver(Supervisor):
         self.num_reward_cells = 10
         self.n_hd = 8
         self.timestep = 32*3 # Interval at which the control loop updates its sensors, computes activations, and performs actions
+        self.step_count = 0
+        self.tau_w = 5 # time constant for the window function
         self.context = 0  # TODO: Get rid of this
 
         # Robot parameters
@@ -107,7 +103,7 @@ class Driver(Supervisor):
         self.axle_length = 0.271756
         self.run_time_minutes = run_time_hours * 60
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
-        self.step_count = 0
+        self.goal_r = {"explore": .1, "exploit": .5}
 
         # Sensor data storage
         self.hmap_x = np.zeros(self.num_steps) 
@@ -129,7 +125,6 @@ class Driver(Supervisor):
         self.right_bumper = self.getDevice('bumper_right')
         self.right_bumper.enable(self.timestep)
         self.collided = tf.Variable(np.zeros(2, np.int32))
-        self.display = self.getDevice('display')
         self.rotation_field = self.robot.getField('rotation')
         self.left_motor = self.getDevice('left wheel motor')
         self.right_motor = self.getDevice('right wheel motor')
@@ -160,7 +155,7 @@ class Driver(Supervisor):
         self.prev_pcn_state = tf.zeros_like(self.pcn.place_cell_activations)
 
         if randomize_start_loc:
-            INITIAL = [rng.uniform(-2, 2), 0.5, rng.uniform(-2, 2)]
+            INITIAL = [rng.uniform(-2.4, 2.4), 0.5, rng.uniform(-2.4, 2.4)]
             self.robot.getField('translation').setSFVec3f(INITIAL)
             self.robot.resetPhysics()
         
@@ -184,7 +179,7 @@ class Driver(Supervisor):
                 self.pcn.reset_activations()
                 print("Loaded existing Place Cell Network.")
         except:
-            self.pcn = PlaceCellLayer(num_place_cells, 720, self.timestep, 12, n_hd)
+            self.pcn = PlaceCellLayer(num_place_cells, 720, self.timestep, 10, n_hd)
             print("Initialized new Place Cell Network.")
         return self.pcn
 
@@ -212,11 +207,13 @@ class Driver(Supervisor):
         """
         Runs the main control loop of the robot. It will handle different modes like "dmtp", "explore", and "exploit".
         """
-        print(f"goal at {self.goal_location}")
+        print(f"Starting at {self.robot.getField('translation').getSFVec3f()}")
+        print(f"Goal at {self.goal_location}")
         while True:
             if run_mode == "exploit":
                 self.exploit()
             else:
+                self.simulationSetMode(self.SIMULATION_MODE_FAST)
                 self.explore()
             # Switch to manual control if a key is pressed.
             if self.keyboard.getKey() in (ord('W'), ord('D'), ord('A'), ord('S')):
@@ -231,7 +228,7 @@ class Driver(Supervisor):
         self.prev_pcn_state = self.current_pcn_state
         self.current_pcn_state *= 0
 
-        for s in range(tau_w):
+        for s in range(self.tau_w):
             self.sense()
 
             if np.any(self.collided):
@@ -247,7 +244,7 @@ class Driver(Supervisor):
             self.check_goal_reached()
 
         if self.mode == "dmtp":
-            self.current_pcn_state /= tau_w # NOTE: 'tau_w' is 's' in Ade's code. Not sure how that would have worked...
+            self.current_pcn_state /= self.tau_w # NOTE: 'self.tau_w' is 's' in Ade's code. Not sure how that would have worked...
         
         self.turn(np.random.normal(0, np.deg2rad(30)))
 
@@ -263,7 +260,7 @@ class Driver(Supervisor):
         self.compute()  # Compute activations in the PCN and RCN
         self.check_goal_reached()  # Check if the robot is at the goal
 
-        if self.step_count > tau_w:
+        if self.step_count > self.tau_w:
             act, max_reward, num_steps = 0, 0, 1
             potential_rewards = np.empty(self.n_hd)  # Array to store potential rewards
             potential_energy = np.empty(self.n_hd)  # Array to store potential energy
@@ -324,15 +321,15 @@ class Driver(Supervisor):
                 print(np.rad2deg(act), self.current_heading, np.rad2deg(act) - self.current_heading)
 
             # Move forward and continue sensing and computing activations over the time window
-            for step in range(tau_w):
+            for step in range(self.tau_w):
                 self.sense()
                 self.compute()
                 self.forward()
                 self.current_pcn_state += self.pcn.place_cell_activations
-                self.check_goal_reached(False, step)
+                self.check_goal_reached()
 
             # Normalize the accumulated place cell state over the window
-            self.current_pcn_state /= tau_w
+            self.current_pcn_state /= self.tau_w
 
             # Update internal expected reward for the next step
             self.expected_reward = max_reward / potential_energy[int(act // (2 * np.pi / self.n_hd))]
@@ -366,113 +363,32 @@ class Driver(Supervisor):
         Check if the robot has reached the goal and perform necessary actions when the goal is reached.
         """
         curr_pos = self.robot.getField('translation').getSFVec3f()
-
-        # if self.getTime() >= 60*self.run_time_minutes:
-        #     return
-        if (self.mode=="dmtp" and np.allclose(self.goal_location, [curr_pos[0], curr_pos[2]], 0, goal_r["exploit"])) or ((self.mode=="cleanup" or self.mode=="learning") and (self.getTime() >=60*self.run_time_minutes)):
+        if (self.mode == "dmtp" and np.allclose(self.goal_location, [curr_pos[0], curr_pos[2]], 0, self.goal_r["exploit"])):
             print("Goal reached")
             print(f"Total distance traveled: {self.compute_path_length()}")
             print(f"Started at: {np.array([self.hmap_x[0], self.hmap_y[0]])}")
             print(f"Current position: {np.array([curr_pos[0], curr_pos[2]])}")
-            distance_to_goal = np.linalg.norm(np.array([self.hmap_x[0], self.hmap_y[0]]) - self.goal_location) - goal_r["exploit"]
+            distance_to_goal = np.linalg.norm(np.array([self.hmap_x[0], self.hmap_y[0]]) - self.goal_location) - self.goal_r["exploit"]
             print(f"Distance to goal: {distance_to_goal}")
             print(f"Time taken: {self.getTime()}")
-
-            if self.mode == "dmtp":
-                self.auto_pilot()
-
             root = tk.Tk()
             root.withdraw()  # Hide the main window
             root.attributes("-topmost", True)  # Always keep the window on top
             root.update()
-            messagebox.showinfo("Information", "Press OK to save networks")
-            print("Saved!")
-            root.destroy()  # Destroy the main window
-            self.save(True)
-            self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
-
-            # Get a unique timestamp for file naming
-            timestamp = time.strftime("%Y%m%d-%H%M%S")
-
-            # Generate image for place cell network activations
-            place_cell_img_path = os.path.join("images", f"place_cell_activations_{timestamp}.png")
-            plt.figure()
-            plt.imshow(tf.reduce_max(self.pcn.w_rec_hd_place, 0))
-            plt.title("Place Cell Network Activations")
-            plt.savefig(place_cell_img_path)
-            plt.close()
-
-            # Generate image for reward cell network activations
-            reward_cell_img_path = os.path.join("images", f"reward_cell_activations_{timestamp}.png")
-            plt.figure()
-            plt.stem(self.rcn.w_in[self.context].numpy())
-            goal_angle = tf.math.atan2(curr_pos[2] - self.goal_location[1], curr_pos[0] - self.goal_location[0]).numpy()
-            plt.title(f"Reward Cell Network | Goal Angle: {goal_angle}")
-            plt.savefig(reward_cell_img_path)
-            plt.close()
-
-            # Save current state and reload the world
-            self.save(True)
-    
-    # def auto_pilot(self):
-    #     """
-    #     Automatically navigates the robot towards the goal location by calculating the desired heading
-    #     and turning the robot towards it. During navigation, the place cell activations are accumulated
-    #     to learn the representation of the path to the goal. Once the goal is reached, the reward cell network
-    #     is updated to associate the accumulated place cell activations with the reward at the goal.
-
-    #     This method continues moving the robot towards the goal until it is within a specified threshold distance.
-    #     """
-    #     s_start = 0  # Counter for the number of steps taken
-    #     self.current_pcn_state *= 0  # Reset the current place cell state
-
-    #     while True:
-    #         # Get the current position of the robot
-    #         curr_pos = self.robot.getField('translation').getSFVec3f()
-
-    #         # Check if the goal has been reached within the specified threshold
-    #         distance_to_goal = np.linalg.norm([curr_pos[0] - self.goal_location[0], curr_pos[2] - self.goal_location[1]])
-    #         if distance_to_goal <= goal_r["explore"]:
-    #             print("Goal reached during auto-pilot")
-    #             break
-
-    #         # Calculate the desired heading towards the goal
-    #         delta_x = self.goal_location[0] - curr_pos[0]
-    #         delta_z = self.goal_location[1] - curr_pos[2]  # Note: curr_pos[2] is the z-coordinate
-    #         desired_heading = np.arctan2(delta_z, delta_x)
-
-    #         # Get the robot's current heading in radians
-    #         current_heading_rad = np.deg2rad(self.current_heading_deg)
-
-    #         # Compute the angle to turn, normalized between -pi and pi
-    #         angle_to_turn = (desired_heading - current_heading_rad + np.pi) % (2 * np.pi) - np.pi
-
-    #         # Print navigation status
-    #         print(f"Navigating towards the goal: Current position ({curr_pos[0]:.2f}, {curr_pos[2]:.2f}), "
-    #             f"Distance to goal: {distance_to_goal:.2f}, Turning angle: {np.rad2deg(angle_to_turn):.2f} degrees")
-
-    #         # Turn the robot towards the desired heading
-    #         self.turn(angle_to_turn)
-
-    #         # Update sensors and compute place cell activations
-    #         self.sense()
-    #         self.compute()
-
-    #         # Move the robot forward
-    #         self.forward()
-
-    #         # Accumulate the place cell activations over the path
-    #         self.current_pcn_state += self.pcn.place_cell_activations
-    #         s_start += 1
-
-    #     # After reaching the goal, average the accumulated place cell activations
-    #     if s_start > 0:
-    #         self.current_pcn_state /= s_start
-
-    #     # Update the reward cell network with the accumulated place cell activations at the goal location
-    #     # This associates the place cell activations along the path with the reward at the goal
-    #     self.rcn.update_reward_cell_activations(self.current_pcn_state, visit=True, context=self.context)
-
+            self.save(include_hmaps=False)
+            messagebox.showinfo("Information", "Goal reached - press OK to save hmaps and networks")
+            root.destroy()  # Destroy the main window  
+            self.worldReload()
+        elif ((self.mode == "learning" or self.mode == "explore") and (self.getTime() >= 60 * self.run_time_minutes)):
+            if self.mode == "learning":
+                root = tk.Tk()
+                root.withdraw()  # Hide the main window
+                root.attributes("-topmost", True)  # Always keep the window on top
+                root.update()
+                self.save(include_hmaps=True)
+                messagebox.showinfo("Information", "Press OK to save hmaps and networks")
+                root.destroy()  # Destroy the main window
+                self.simulationSetMode(self.SIMULATION_MODE_PAUSE)            
 
     def manual_control(self):
         """
@@ -633,6 +549,8 @@ class Driver(Supervisor):
                 pickle.dump(self.hmap_g[:self.step_count], output)
             with open('hmap_h.pkl', 'wb') as output:
                 pickle.dump(self.hmap_h[:self.step_count], output)
+        
+        print("Saved!")
 
     def clear(self):
         """
@@ -646,3 +564,5 @@ class Driver(Supervisor):
                 os.remove(file)
             except FileNotFoundError:
                 pass  # Ignore if the file does not exist
+
+        print("State files cleared.")

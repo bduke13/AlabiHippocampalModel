@@ -22,10 +22,10 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
         self.num_pc = num_pc
         
         # Initialize the Boundary Vector Cell (BVC) layer
-        self.bvcLayer = BoundaryVectorCellLayer(max_dist=max_dist, input_dim=input_dim, n_hd=n_hd, sigma_ang=90, sigma_d=0.5)
+        self.bvcLayer = BoundaryVectorCellLayer(max_dist=max_dist, input_dim=input_dim, n_hd=n_hd, sigma_ang=90, sigma_d=0.2)
         
         # Number of BVCs (Boundary Vector Cells)
-        self.num_bvc = self.bvcLayer.num_distances
+        self.num_bvc = self.bvcLayer.num_distances # NOTE: This is a bit misleading, but it works for now
         
         # Recurrent weight matrix for place-to-place cell connections, considering head direction
         # Original: self.w_rec_c
