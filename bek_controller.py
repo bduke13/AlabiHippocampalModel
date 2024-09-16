@@ -8,7 +8,7 @@ np.random.seed(0)
 bot = Driver()
 
 def run_bot(stage, randomize_start_loc):
-    if stage not in [1, 2, 3]:
+    if stage not in [1, 2, 3, 4]:
         raise ValueError("Invalid mode. Choose either '1', '2', or '3'")
     if stage == 1:
         bot.clear()
@@ -20,7 +20,7 @@ def run_bot(stage, randomize_start_loc):
     elif stage == 3:
         bot.initialization(mode="dmtp", randomize_start_loc=randomize_start_loc)
         bot.run("exploit")
-    else: # plotting mode
+    elif stage == 4: # plotting mode
         bot.initialization(mode="explore", randomize_start_loc=randomize_start_loc)
         bot.run("explore")
 
