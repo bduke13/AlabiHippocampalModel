@@ -133,9 +133,6 @@ class Driver(Supervisor):
         self.right_position_sensor = self.getDevice('right wheel sensor')
         self.right_position_sensor.enable(self.timestep)
 
-        # Advance the simulation by one time step to initialize sensors (as described in the documentation)
-        self.step(self.timestep)
-
         # Initialize layers
         self.load_pcn(self.num_place_cells, self.n_hd)
         self.load_rcn(self.num_reward_cells, self.num_place_cells)
@@ -148,6 +145,7 @@ class Driver(Supervisor):
         self.boundary_data = tf.Variable(tf.zeros((720, 1)))
 
         self.act = tf.zeros(self.n_hd)
+        self.step(self.timestep)
 
         # Initialize goal and context
         self.goal_location = [-1, 1]
@@ -211,25 +209,17 @@ class Driver(Supervisor):
         """
         print(f"Starting at {self.robot.getField('translation').getSFVec3f()}")
         print(f"Goal at {self.goal_location}")
-        self.step_count = 0  # Initialize the step counter
-        while self.step_count < self.num_steps: # Main control loop
-            self.sense()
-            self.compute()
-            self.act(run_mode)
-            self.check_goal_reached()
-            self.step(self.timestep)  # Advance the simulation
-            self.step_count += 1  # Increment the step counter here
+        while True:
+            if run_mode == "exploit":
+                self.exploit()
+            else:
+                self.simulationSetMode(self.SIMULATION_MODE_FAST)
+                self.explore()
             # Switch to manual control if a key is pressed.
             if self.keyboard.getKey() in (ord('W'), ord('D'), ord('A'), ord('S')):
                 print("Switching to manual control")
                 while True:
                     self.manual_control()
-        
-    def act(self, run_mode):
-        if run_mode == "exploit":
-            self.exploit()
-        else:
-            self.explore()
 
     def explore(self):
         """
@@ -350,14 +340,11 @@ class Driver(Supervisor):
         Compute the activations of place cells and handle the environment interactions.
         """
         # Compute the place cell network activations
-        self.pcn.get_place_cell_activations(
-            input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)],
-            hd_activations=self.hd_activations,
-            mode=self.mode,
-            collided=np.any(self.collided)
-        )
-
-        # Update position data
+        self.pcn.get_place_cell_activations(input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)], 
+                hd_activations=self.hd_activations, mode=self.mode, collided=np.any(self.collided))
+        
+        # Advance the timestep and update position
+        self.step(self.timestep)
         curr_pos = self.robot.getField('translation').getSFVec3f()
 
         # Update place cell and sensor maps
@@ -368,6 +355,8 @@ class Driver(Supervisor):
             self.hmap_h[self.step_count] = self.hd_activations
             self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn.bvc_activations)
 
+        # Increment timestep
+        self.step_count += 1
 
     def check_goal_reached(self):
         """
@@ -506,6 +495,9 @@ class Driver(Supervisor):
         # 9. Update the collision status using the right bumper sensor.
         # Shape: scalar (int) - 1 if collision detected on the right bumper, 0 otherwise.
         self.collided.scatter_nd_update([[1]], [int(self.right_bumper.getValue())])
+
+        # 10. Proceed to the next timestep in the robot's control loop.
+        self.step(self.timestep)
 
     def get_bearing_in_degrees(self, north):
         rad = np.arctan2(north[0], north[2])
