@@ -30,7 +30,7 @@ class BoundaryVectorCellLayer:
         self.d_i = np.tile(np.arange(0, max_dist, sigma_d / 2), n_hd)[np.newaxis, :]
 
         # Total number of BVC neurons = 8 head directions * 48 preferred distances per head direction.
-        self.num_distances = self.d_i.size
+        self.num_bvc = self.d_i.size
 
         # Indices to map input LiDAR angles to BVC neurons
         self.input_indices = np.repeat(
@@ -105,7 +105,7 @@ class BoundaryVectorCellLayer:
         )  # Convert Tensor to a NumPy value if necessary
 
         # Plot each BVC neuron on the polar plot with size and color based on activation level
-        for i in range(self.num_distances):
+        for i in range(self.num_bvc):
             r = self.d_i[0, i]  # Preferred distance
             theta = self.phi_i[0, i]  # Preferred angle
             # Scale size of the circle to be proportional to half of sigma_d, using activations

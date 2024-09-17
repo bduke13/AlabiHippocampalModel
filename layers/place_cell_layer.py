@@ -22,18 +22,13 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
         self.num_pc = num_pc
         
         # Initialize the Boundary Vector Cell (BVC) layer
-        self.bvcLayer = BoundaryVectorCellLayer(max_dist=max_dist, input_dim=input_dim, n_hd=n_hd, sigma_ang=90, sigma_d=0.2)
+        self.bvcLayer = BoundaryVectorCellLayer(max_dist=max_dist, input_dim=input_dim, n_hd=n_hd, sigma_ang=90, sigma_d=0.5)
         
         # Number of BVCs (Boundary Vector Cells)
-        self.num_bvc = self.bvcLayer.num_distances # NOTE: This is a bit misleading, but it works for now
-        
-        # Recurrent weight matrix for place-to-place cell connections, considering head direction
-        # Original: self.w_rec_c
-        # Shape: (n_hd, num_pc, num_pc)
-        self.w_rec_place_to_place = tf.Variable(np.zeros((n_hd, num_pc, num_pc)), dtype=tf.float32)
+        self.num_bvc = self.bvcLayer.num_bvc
         
         # Input weight matrix connecting place cells to BVCs
-        # Shape: (n_hd, num_pc, num_pc)
+        # Shape: (num_pc, self.num_bvc)
         self.w_in = tf.Variable(rng.binomial(1, .2, (num_pc, self.num_bvc)), dtype=tf.float32)
         
         # Recurrent weight matrix for head direction and place cell interactions
@@ -54,8 +49,21 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
         # Shape: (num_bvc,)
         self.bvc_activations = tf.zeros(self.num_bvc, dtype=tf.float32)
         
-        # Learning rate for the place cell update rule
-        self.alpha = 0.5
+        # coefficient to modify effect of place cell recurrent inhibition
+        # Dissertation eq: 3.2a
+        self.gamma_pp = 0.5
+
+        # coefficient to modify effect of boundary vector cell afferent inhibition
+        # Dissertation eq: 3.2a
+        self.gamma_pb = 0.3
+
+        # coefficient to modify effect of temporal change in place cell activations
+        # Dissertation eq: 3.2a
+        self.tau_p = 0.1
+
+        # coefficient to normalize the rate of learning of the synapses between pcn and bvc
+        # Dissertation eq: 3.3
+        self.alpha_pb = np.sqrt(0.5)
         
         # Previous place cell activations
         # Original: self.v_prev
@@ -109,12 +117,21 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
         self.bvc_activations = self.bvcLayer.get_bvc_activation(input_data[0], input_data[1])
         
         # Compute the input to place cells by taking the dot product of the input weights and BVC activations
-        place_cell_input = tf.tensordot(self.w_in, self.bvc_activations, 1) - 0.3 * tf.reduce_sum(self.bvc_activations)
+        # Dissertation eq: 3.2a
+        afferent_excitation = tf.tensordot(self.w_in, self.bvc_activations, 1) 
         
-        # Update the activation variable `activation_update` with the new input, applying a scaling factor and considering previous activations
-        self.activation_update += 0.1 * (place_cell_input - self.activation_update - self.alpha * tf.reduce_sum(tf.cast(self.place_cell_activations, tf.float32)))
+        # Dissertation eq: 3.2a
+        afferent_inhibition = self.gamma_pb * tf.reduce_sum(self.bvc_activations)
+        
+        # Dissertation eq: 3.2a
+        recurrent_inhibition = self.gamma_pp * tf.reduce_sum(tf.cast(self.place_cell_activations, tf.float32))
+
+        # Update the activation variable `activation_update` with the new input, applying a scaling factor and considering previous activations        
+        # Dissertation eq: 3.2a
+        self.activation_update += self.tau_p * ((-1 * self.activation_update) + afferent_excitation - afferent_inhibition - recurrent_inhibition)
         
         # Apply ReLU followed by tanh to compute the new place cell activations
+        # Dissertation eq: 3.2b
         self.place_cell_activations = tf.tanh(tf.nn.relu(self.activation_update))
 
         # Update the eligibility trace and weights if in "dmtp" mode and no collision
@@ -133,10 +150,12 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
             )
 
         # If the mode is not "learning", update the input weights based on the current activations and BVC activations
+        # backpropogates the weights from the active place cell to the BVC's to have a better informed w_in matrix
+        # this section is Dissertation eq: 3.3
         if np.any(self.place_cell_activations) and not (mode == 'learning'):
             weight_update = self.tau * (
                 self.place_cell_activations[:, np.newaxis] * (self.bvc_activations[np.newaxis, :] - 
-                1 / np.sqrt(0.5) * self.place_cell_activations[:, np.newaxis] * self.w_in)
+                1 / self.alpha_pb * self.place_cell_activations[:, np.newaxis] * self.w_in)
             )
             self.w_in.assign_add(weight_update)
 
@@ -164,6 +183,7 @@ class PlaceCellLayer(): # Called continuously during explore loop in driver.py
 
         # Iterate to update the place cell activations
         for step in range(num_steps):
+            # copies previous activations
             previous_activations = tf.identity(place_cell_activations)
             
             # Compute new activations based on recurrent weights and previous activations
