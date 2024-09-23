@@ -74,24 +74,29 @@ class Driver(Supervisor):
         prev_pcn_state (Tensor): Tensor representing the previous state.
     """
 
-    def initialization(self, mode="learning", randomize_start_loc=True, run_time_hours=2):
+    def initialization(self, stage="learning", run_mode='explore', randomize_start_loc=True, run_time_hours=1):
         """
         Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
         Parameters:
-            mode: 'explore'-->'dmpt'-->'exploit'
+            stage: 'explore'-->'dmpt'-->'exploit'
+            run_mode: 'explore' or 'exploit'
             randomize_start_loc: Randomize agent spawn location
             run_time_hours (int): Total run time for the simulation in hours.
         """
-        # Mode
-        self.mode = mode
+        # Stage and RunMode
+        self.stage = stage
+        self.run_mode = run_mode
+
+        self.STATE_MANUAL_CONTROL = 0
+        self.STATE_EXPLORE = 1
+        self.STATE_EXPLOIT = 2
 
         # Model parameters
         self.num_place_cells = 1000
         self.num_reward_cells = 10
         self.n_hd = 8
-        self.timestep = 32*3 # Interval at which the control loop updates its sensors, computes activations, and performs actions
-        self.step_count = 0
+        self.timestep = 32*3 # WorldInfo.basicTimeStep = 32ms
         self.tau_w = 5 # time constant for the window function
         self.context = 0  # TODO: Get rid of this
 
@@ -102,8 +107,9 @@ class Driver(Supervisor):
         self.wheel_radius = 0.031
         self.axle_length = 0.271756
         self.run_time_minutes = run_time_hours * 60
+        self.step_count = 0
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
-        self.goal_r = {"explore": .1, "exploit": .5}
+        self.goal_r = {"explore": .1, "exploit": .2}
 
         # Sensor data storage
         self.hmap_x = np.zeros(self.num_steps) 
@@ -146,6 +152,7 @@ class Driver(Supervisor):
 
         self.act = tf.zeros(self.n_hd)
         self.step(self.timestep)
+        self.step_count += 1
 
         # Initialize goal and context
         self.goal_location = [-1, 1]
@@ -165,13 +172,6 @@ class Driver(Supervisor):
     def load_pcn(self, num_place_cells, n_hd):
         """
         Loads the place cell network from a file if available, or initializes a new one.
-
-        Parameters:
-            num_place_cells (int): Number of place cells in the place cell network.
-            n_hd (int): Number of head direction cells.
-
-        Returns:
-            PlaceCellLayer: The loaded or newly initialized place cell network.
         """
         try:
             with open('pcn.pkl', "rb") as f:
@@ -186,13 +186,6 @@ class Driver(Supervisor):
     def load_rcn(self, num_reward_cells, num_place_cells):
         """
         Loads the reward cell network from a file if available, or initializes a new one.
-
-        Parameters:
-            num_reward_cells (int): Number of reward cells in the reward cell network.
-            num_place_cells (int): Number of place cells in the place cell network.
-
-        Returns:
-            RewardCellLayer: The loaded or newly initialized reward cell network.
         """
         try:
             with open('rcn.pkl', 'rb') as f:
@@ -203,23 +196,44 @@ class Driver(Supervisor):
             print("Initialized new Reward Cell Network.")
         return self.rcn
     
-    def run(self, run_mode):
+########################################### RUN LOOP ###########################################
+    
+    def run(self):
         """
-        Runs the main control loop of the robot. It will handle different modes like "dmtp", "explore", and "exploit".
+        Runs the main control loop of the robot, managing its behavior based on the current state.
         """
-        print(f"Starting at {self.robot.getField('translation').getSFVec3f()}")
+        # Initialize the state based on run_mode
+        if self.run_mode == 'manual_control':
+            self.state = self.STATE_MANUAL_CONTROL
+        elif self.run_mode == 'explore':
+            self.state = self.STATE_EXPLORE
+        elif self.run_mode == 'exploit':
+            self.state = self.STATE_EXPLOIT
+        else:
+            raise ValueError(f"Unknown run mode: {self.run_mode}")
+
+        print(f"Starting {self.stage} stage in {self.run_mode} mode.")
         print(f"Goal at {self.goal_location}")
+
         while True:
-            if run_mode == "exploit":
+            # Process keyboard input and check if we need to switch to manual control
+            key = self.keyboard.getKey()
+            if key in (ord('W'), ord('D'), ord('A'), ord('S')):
+                print("Switching to manual control")
+                self.state = self.STATE_MANUAL_CONTROL
+
+            # Handle the robot's state
+            if self.state == self.STATE_MANUAL_CONTROL:
+                self.manual_control()
+            elif self.state == self.STATE_EXPLORE:
+                self.explore()
+            elif self.state == self.STATE_EXPLOIT:
                 self.exploit()
             else:
-                self.simulationSetMode(self.SIMULATION_MODE_FAST)
-                self.explore()
-            # Switch to manual control if a key is pressed.
-            if self.keyboard.getKey() in (ord('W'), ord('D'), ord('A'), ord('S')):
-                print("Switching to manual control")
-                while True:
-                    self.manual_control()
+                print("Unknown state. Exiting...")
+                break 
+            
+########################################### EXPLORE ###########################################
 
     def explore(self):
         """
@@ -235,7 +249,7 @@ class Driver(Supervisor):
                 self.turn(np.deg2rad(60))
                 break
 
-            if self.mode == "dmtp":
+            if self.stage == "dmtp":
                 self.current_pcn_state += self.pcn.place_cell_activations
                 self.check_goal_reached()
                 
@@ -243,84 +257,47 @@ class Driver(Supervisor):
             self.forward()
             self.check_goal_reached()
 
-        if self.mode == "dmtp":
+        if self.stage == "dmtp":
             self.current_pcn_state /= self.tau_w # NOTE: 'self.tau_w' is 's' in Ade's code. Not sure how that would have worked...
         
-        self.turn(np.random.normal(0, np.deg2rad(30)))
+        self.turn(np.random.normal(0, np.deg2rad(30))) # Choose a new random direction
+        
+########################################### EXPLOIT ###########################################
 
     def exploit(self):
         """
-        Executes an exploitation routine where the agent uses its internal models (PCN and RCN) to
-        navigate towards a goal and update its internal reward and place cell activations. This method
-        is called continuously in run() and reloads the sim when the goal is found.
+        Executes the exploitation routine.
         """
         self.current_pcn_state *= 0  # Reset the current place cell state
-        self.stop()  
+        self.stop()
         self.sense()
-        self.compute()  # Compute activations in the PCN and RCN
-        self.check_goal_reached()  # Check if the robot is at the goal
+        self.compute()
 
         if self.step_count > self.tau_w:
-            act, max_reward, num_steps = 0, 0, 1
-            potential_rewards = np.empty(self.n_hd)  # Array to store potential rewards
-            potential_energy = np.empty(self.n_hd)  # Array to store potential energy
-
-            # Compute the reward cell activations based on the current PCN state
-            self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations, visit=True, context=self.context)
-            # print("Reward:", self.rcn.reward_cell_activations[self.context], 
-            #     "Most Active:", self.pcn.place_cell_activations.numpy().argsort()[-3:])
-
-            # If the reward is negligible, return to exploration
-            if self.rcn.reward_cell_activations[self.context] <= 1e-6:
-                self.explore()
-                return
-
-            # Iterate over all possible head directions and compute their potential rewards and energy
-            for direction in range(self.n_hd):
-                # Exploit the current place cell state for each direction
-                pcn_activations = self.pcn.exploit(direction, num_steps=num_steps)
-                self.rcn.update_reward_cell_activations(pcn_activations)
-                
-                potential_energy[direction] = tf.norm(pcn_activations, 1)
-                potential_rewards[direction] = np.nan_to_num(self.rcn.reward_cell_activations[self.context])
+            potential_rewards, potential_energy = self.compute_rewards_and_energy(num_steps=1)
 
             # Update action based on computed rewards
-            self.act += 1 * (potential_rewards - self.act)  # Update internal action state
+            self.act += 1 * (potential_rewards - self.act)
             act = np.nan_to_num(circmean(np.linspace(0, np.pi * 2, self.n_hd, endpoint=False), weights=self.act))
-            # var = np.nan_to_num(circvar(np.linspace(0, np.pi * 2, self.n_hd, endpoint=False), weights=self.act)) # NOTE: Not used
-            max_reward = potential_rewards[int(act // (2 * np.pi / self.n_hd))] # NOTE: May get a ValueError here since there's a chance of division by 0. I think you can ignore it.
+            max_reward = potential_rewards[int(act // (2 * np.pi / self.n_hd))]
 
-            # If the maximum reward is negligible or variance is high, return to exploration
             if max_reward <= 1e-3:
+                print(f"Max reward: {max_reward}")
+                print(f"potential_rewards: {potential_rewards}")
                 print("Returning to exploration")
-                self.explore()
+                self.state = self.STATE_EXPLORE
                 return
 
-            # # Plot the current action space (polar plot)
-            # fig = plt.figure(2)
-            # fig.clf()
-            # ax = fig.add_subplot(projection='polar')
-            # ax.set_theta_zero_location("N")
-            # ax.set_theta_direction(-1)
-            # ax.plot(np.linspace(0, np.pi * 2, self.n_hd, endpoint=False), self.act)
-            # title = f"{np.rad2deg(act)}, {np.rad2deg(var)}, {tf.reduce_max(self.act).numpy()}"
-            # plt.title(title)
-            # plt.pause(.01)
-
-            # If a collision is detected, update the reward cell network and turn the robot
+            # Collision handling
             if np.any(self.collided):
                 self.turn(np.deg2rad(60))
                 self.stop()
                 self.rcn.td_update(self.pcn.place_cell_activations, potential_energy[int(act // (2 * np.pi / self.n_hd))], max_reward, self.context)
                 return
             else:
-                # Adjust the turning angle based on the action and head direction
-                if abs(act) > np.pi:
-                    act = act - np.sign(act) * 2 * np.pi
-                self.turn(-np.deg2rad(np.rad2deg(act) - self.current_heading) % (np.pi * 2))
-                print(np.rad2deg(act), self.current_heading, np.rad2deg(act) - self.current_heading)
-
-            # Move forward and continue sensing and computing activations over the time window
+                self.adjust_turn_based_on_action(act)
+            
+            # Move forward
             for step in range(self.tau_w):
                 self.sense()
                 self.compute()
@@ -330,122 +307,32 @@ class Driver(Supervisor):
 
             # Normalize the accumulated place cell state over the window
             self.current_pcn_state /= self.tau_w
-
-            # Update internal expected reward for the next step
             self.expected_reward = max_reward / potential_energy[int(act // (2 * np.pi / self.n_hd))]
             self.last_reward = self.rcn.reward_cell_activations[self.context]
 
-    def compute(self):
-        """
-        Compute the activations of place cells and handle the environment interactions.
-        """
-        # Compute the place cell network activations
-        self.pcn.get_place_cell_activations(input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)], 
-                hd_activations=self.hd_activations, mode=self.mode, collided=np.any(self.collided))
-        
-        # Advance the timestep and update position
-        self.step(self.timestep)
-        curr_pos = self.robot.getField('translation').getSFVec3f()
+    def compute_rewards_and_energy(self, num_steps):
+        potential_rewards = np.empty(self.n_hd)
+        potential_energy = np.empty(self.n_hd)
 
-        # Update place cell and sensor maps
-        if self.step_count < self.num_steps:
-            self.hmap_x[self.step_count] = curr_pos[0]
-            self.hmap_y[self.step_count] = curr_pos[2]
-            self.hmap_z[self.step_count] = self.pcn.place_cell_activations
-            self.hmap_h[self.step_count] = self.hd_activations
-            self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn.bvc_activations)
+        for direction in range(self.n_hd):
+            pcn_activations = self.pcn.exploit(direction, num_steps=num_steps)
+            self.rcn.update_reward_cell_activations(pcn_activations)
 
-        # Increment timestep
-        self.step_count += 1
+            potential_energy[direction] = tf.norm(pcn_activations, 1)
+            potential_rewards[direction] = np.nan_to_num(self.rcn.reward_cell_activations[self.context])
 
-    def check_goal_reached(self):
+        return potential_rewards, potential_energy
+
+    def adjust_turn_based_on_action(self, act):
         """
-        Check if the robot has reached the goal and perform necessary actions when the goal is reached.
+        Adjusts the robot's turn based on the computed action.
         """
-        curr_pos = self.robot.getField('translation').getSFVec3f()
-        if (self.mode == "dmtp" and np.allclose(self.goal_location, [curr_pos[0], curr_pos[2]], 0, self.goal_r["exploit"])):
-            print("Goal reached")
-            print(f"Total distance traveled: {self.compute_path_length()}")
-            print(f"Started at: {np.array([self.hmap_x[0], self.hmap_y[0]])}")
-            print(f"Current position: {np.array([curr_pos[0], curr_pos[2]])}")
-            distance_to_goal = np.linalg.norm(np.array([self.hmap_x[0], self.hmap_y[0]]) - self.goal_location) - self.goal_r["exploit"]
-            print(f"Distance to goal: {distance_to_goal}")
-            print(f"Time taken: {self.getTime()}")
-            root = tk.Tk()
-            root.withdraw()  # Hide the main window
-            root.attributes("-topmost", True)  # Always keep the window on top
-            root.update()
-            self.save(include_hmaps=False)
-            messagebox.showinfo("Information", "Goal reached - press OK to save hmaps and networks")
-            root.destroy()  # Destroy the main window  
-            self.worldReload()
-        elif ((self.mode == "learning" or self.mode == "explore") and (self.getTime() >= 60 * self.run_time_minutes)):
-            if self.mode == "learning":
-                root = tk.Tk()
-                root.withdraw()  # Hide the main window
-                root.attributes("-topmost", True)  # Always keep the window on top
-                root.update()
-                self.save(include_hmaps=True)
-                messagebox.showinfo("Information", "Press OK to save hmaps and networks")
-                root.destroy()  # Destroy the main window
-                self.simulationSetMode(self.SIMULATION_MODE_PAUSE)            
+        if abs(act) > np.pi:
+            act = act - np.sign(act) * 2 * np.pi
+        self.turn(-np.deg2rad(np.rad2deg(act) - self.current_heading_deg) % (np.pi * 2))
+        print(np.rad2deg(act), self.current_heading_deg, np.rad2deg(act) - self.current_heading_deg)
 
-    def manual_control(self):
-        """
-        Allows for manual control of the robot using keyboard inputs.
-        """
-        k = self.keyboard.getKey()
-        if k != -1:
-            print("Before:", self.hd_activations.argmax(), self.current_heading)
-        if k == ord('W'):
-            self.forward()
-        elif k == ord('D'):
-            self.turn(-np.deg2rad(90))
-        elif k == ord('A'):
-            self.turn(np.deg2rad(90))
-        elif k == ord('S'):
-            self.stop()
-        if k != -1:
-            print("After:", self.hd_activations.argmax(), self.current_heading)
-
-    def forward(self):
-        self.leftSpeed = self.max_speed
-        self.rightSpeed = self.max_speed
-        self.move()
-        self.sense()
-    
-    def turn(self, angle, circle=False):
-        self.stop()
-        l_offset = self.left_position_sensor.getValue()
-        r_offset = self.right_position_sensor.getValue()
-        self.sense()
-        neg = -1.0 if (angle < 0.0) else 1.0
-        if circle:
-            self.left_motor.setVelocity(0)
-        else:
-            self.left_motor.setVelocity(neg * self.max_speed/2)
-        self.right_motor.setVelocity(-neg * self.max_speed/2)
-        while True:
-            l = self.left_position_sensor.getValue() - l_offset
-            r = self.right_position_sensor.getValue() - r_offset
-            dl = l * self.wheel_radius                 
-            dr = r * self.wheel_radius
-            orientation = neg * (dl - dr) / self.axle_length
-            self.sense()
-            if not orientation < neg * angle:
-                break
-        self.stop()
-        self.sense()
-
-    def stop(self):
-        self.left_motor.setVelocity(0)
-        self.right_motor.setVelocity(0)
-    
-    def move(self):
-        self.left_motor.setPosition(float('inf'))
-        self.right_motor.setPosition(float('inf'))
-        self.left_motor.setVelocity(self.leftSpeed)
-        self.right_motor.setVelocity(self.rightSpeed)
+########################################### SENSE ###########################################
 
     def sense(self):
         """
@@ -505,6 +392,127 @@ class Driver(Supervisor):
         if bearing < 0:
             bearing = bearing + 360.0
         return bearing
+
+########################################### COMPUTE ###########################################
+
+    def compute(self):
+        """
+        Compute the activations of place cells and handle the environment interactions.
+        """
+        # Compute the place cell network activations
+        self.pcn.get_place_cell_activations(input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)], 
+                hd_activations=self.hd_activations, mode=self.stage, collided=np.any(self.collided))
+        
+        # Advance the timestep and update position
+        self.step(self.timestep)
+        curr_pos = self.robot.getField('translation').getSFVec3f()
+
+        # Update place cell and sensor maps
+        if self.step_count < self.num_steps:
+            self.hmap_x[self.step_count] = curr_pos[0]
+            self.hmap_y[self.step_count] = curr_pos[2]
+            self.hmap_z[self.step_count] = self.pcn.place_cell_activations
+            self.hmap_h[self.step_count] = self.hd_activations
+            self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn.bvc_activations)
+
+        # Increment timestep
+        self.step_count += 1
+
+########################################### CHECK GOAL REACHED ###########################################
+
+    def check_goal_reached(self):
+        """
+        Check if the robot has reached the goal and perform necessary actions when the goal is reached.
+        """
+        curr_pos = self.robot.getField('translation').getSFVec3f()
+        if (self.stage == "dmtp" and np.allclose(self.goal_location, [curr_pos[0], curr_pos[2]], 0, self.goal_r["exploit"])):
+            print("Goal reached")
+            print(f"Total distance traveled: {self.compute_path_length()}")
+            print(f"Started at: {np.array([self.hmap_x[0], self.hmap_y[0]])}")
+            print(f"Current position: {np.array([curr_pos[0], curr_pos[2]])}")
+            distance_to_goal = np.linalg.norm(np.array([self.hmap_x[0], self.hmap_y[0]]) - self.goal_location) - self.goal_r["exploit"]
+            print(f"Distance to goal: {distance_to_goal}")
+            print(f"Time taken: {self.getTime()}")
+            root = tk.Tk()
+            root.withdraw()  # Hide the main window
+            root.attributes("-topmost", True)  # Always keep the window on top
+            root.update()
+            self.save(include_hmaps=False)
+            messagebox.showinfo("Information", "Goal reached - Press OK save the data")
+            root.destroy()  # Destroy the main window
+            self.worldReload()  
+            self.simulationSetMode(self.SIMULATION_MODE_PAUSE) 
+        elif ((self.stage == "learning" or self.stage == "explore") and (self.getTime() >= 60 * self.run_time_minutes)):
+            if self.stage == "learning":
+                root = tk.Tk()
+                root.withdraw()  # Hide the main window
+                root.attributes("-topmost", True)  # Always keep the window on top
+                root.update()
+                self.save(include_hmaps=True)
+                messagebox.showinfo("Information", "Press OK to save the data")
+                root.destroy()  # Destroy the main window
+                self.worldReload()
+                self.simulationSetMode(self.SIMULATION_MODE_PAUSE)            
+
+########################################### HELPER METHODS ###########################################
+
+    def manual_control(self):
+        """
+        Allows for manual control of the robot using keyboard inputs.
+        """
+        k = self.keyboard.getKey()
+        if k != -1:
+            print("Before:", self.hd_activations.argmax(), self.current_heading)
+        if k == ord('W'):
+            self.forward()
+        elif k == ord('D'):
+            self.turn(-np.deg2rad(90))
+        elif k == ord('A'):
+            self.turn(np.deg2rad(90))
+        elif k == ord('S'):
+            self.stop()
+        if k != -1:
+            print("After:", self.hd_activations.argmax(), self.current_heading)
+
+    def forward(self):
+        self.left_speed = self.max_speed
+        self.right_speed = self.max_speed
+        self.move()
+        self.sense()
+    
+    def turn(self, angle, circle=False):
+        self.stop()
+        self.move()
+        l_offset = self.left_position_sensor.getValue()
+        r_offset = self.right_position_sensor.getValue()
+        self.sense()
+        neg = -1.0 if (angle < 0.0) else 1.0
+        if circle:
+            self.left_motor.setVelocity(0)
+        else:
+            self.left_motor.setVelocity(neg * self.max_speed/2)
+        self.right_motor.setVelocity(-neg * self.max_speed/2)
+        while True:
+            l = self.left_position_sensor.getValue() - l_offset
+            r = self.right_position_sensor.getValue() - r_offset
+            dl = l * self.wheel_radius                 
+            dr = r * self.wheel_radius
+            orientation = neg * (dl - dr) / self.axle_length
+            self.sense()
+            if not orientation < neg * angle:
+                break
+        self.stop()
+        self.sense()
+
+    def stop(self):
+        self.left_motor.setVelocity(0)
+        self.right_motor.setVelocity(0)
+    
+    def move(self):
+        self.left_motor.setPosition(float('inf'))
+        self.right_motor.setPosition(float('inf'))
+        self.left_motor.setVelocity(self.left_speed)
+        self.right_motor.setVelocity(self.right_speed)
 
     def compute_path_length(self):
         """
