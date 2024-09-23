@@ -39,8 +39,11 @@ class RewardCellLayer:
         visit: Boolean flag indicating if the cell is being visited.
         context: Context index for selecting specific input weights.
         '''
+        # This calculates how each reward cell is activated by the current place cell activations (input_data), using the effective weights.
+        # as well as normalized #NOTE: check that normalized is the correct description for tf.linalg.norm
         self.reward_cell_activations = tf.tensordot(self.w_in_effective, input_data, 1) / tf.linalg.norm(input_data, 1)
         if visit:
+            # During visits to reward locations (visit=True), w_in_effective is updated
             updated_weights = self.w_in_effective[context] - 0.2 * input_data * self.w_in_effective[context]
             self.w_in_effective = tf.tensor_scatter_nd_update(self.w_in_effective, [[context]], [updated_weights])
 
@@ -58,6 +61,7 @@ class RewardCellLayer:
         print("Before update:", tf.tensordot(self.w_in, input_data, 1))
 
         # Perform the TD update on the effective weight matrix
+        # In the temporal difference update (td_update method), w_in_effective is adjusted based on the TD learning rule:
         v_prime = (0.6 * self.w_in[context] * input_data) - self.w_in[context] * input_data
         self.w_in_effective = tf.tensor_scatter_nd_add(self.w_in_effective, [[context]], [v_prime])
 
