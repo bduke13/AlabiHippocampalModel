@@ -439,8 +439,7 @@ class Driver(Supervisor):
             root.update()
             self.save(include_hmaps=False)
             messagebox.showinfo("Information", "Goal reached - Press OK save the data")
-            root.destroy()  # Destroy the main window
-            self.worldReload()  
+            root.destroy()  # Destroy the main window  
             self.simulationSetMode(self.SIMULATION_MODE_PAUSE) 
         elif ((self.stage == "learning" or self.stage == "explore") and (self.getTime() >= 60 * self.run_time_minutes)):
             if self.stage == "learning":
@@ -451,7 +450,6 @@ class Driver(Supervisor):
                 self.save(include_hmaps=True)
                 messagebox.showinfo("Information", "Press OK to save the data")
                 root.destroy()  # Destroy the main window
-                self.worldReload()
                 self.simulationSetMode(self.SIMULATION_MODE_PAUSE)            
 
 ########################################### HELPER METHODS ###########################################

@@ -143,6 +143,8 @@ class PlaceCellLayer:
         if np.any(self.place_cell_activations) and mode == "dmtp" and not collided:
             # Update the eligibility trace for place cells and head direction cells
             # Eligibility traces are used for temporal difference learning and sequence encoding
+            if self.place_cell_trace is None:
+                self.place_cell_trace = tf.zeros_like(self.place_cell_activations)
             self.place_cell_trace += self.tau / 3 * (self.place_cell_activations - self.place_cell_trace)
             self.hd_cell_trace += self.tau / 3 * (
                 np.nan_to_num(hd_activations)[:, np.newaxis, np.newaxis] - self.hd_cell_trace
