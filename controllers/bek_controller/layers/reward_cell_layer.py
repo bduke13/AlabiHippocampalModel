@@ -28,7 +28,7 @@ class RewardCellLayer:
         self.num_replay = num_replay
         
         # Effective input weight matrix, used for updating during visits
-        self.w_in_effective = tf.identity(self.w_in)
+        self.w_in_effective = tf.Variable(np.zeros((num_reward_cells, input_dim)), dtype=tf.float32)
 
     def update_reward_cell_activations(self, input_data, visit=False, context=0):
         '''

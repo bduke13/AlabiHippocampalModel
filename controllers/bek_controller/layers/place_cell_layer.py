@@ -165,7 +165,7 @@ class PlaceCellLayer:
 
         # If the mode is not "learning", update the input weights based on the current activations and BVC activations
         # This is the competitive learning rule from Equation (3.3)
-        if np.any(self.place_cell_activations) and not (mode == 'learning'):
+        if np.any(self.place_cell_activations):
             # Compute the weight update according to Oja's rule (Equation 3.3)
             weight_update = self.tau * (
                 self.place_cell_activations[:, np.newaxis] * (

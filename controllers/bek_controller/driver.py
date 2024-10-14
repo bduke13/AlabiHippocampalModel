@@ -109,7 +109,7 @@ class Driver(Supervisor):
         self.run_time_minutes = run_time_hours * 60
         self.step_count = 0
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
-        self.goal_r = {"explore": .1, "exploit": .2}
+        self.goal_r = {"explore": .3, "exploit": .5}
 
         # Sensor data storage
         self.hmap_x = np.zeros(self.num_steps) 
@@ -143,9 +143,6 @@ class Driver(Supervisor):
         self.load_pcn(self.num_place_cells, self.n_hd)
         self.load_rcn(self.num_reward_cells, self.num_place_cells)
         self.head_direction_layer = HeadDirectionLayer(num_cells=self.n_hd)
-
-        # Initialize landmarks
-        self.landmarks = np.inf * np.ones((5, 1))
 
         # Initialize boundaries
         self.boundary_data = tf.Variable(tf.zeros((720, 1)))
@@ -258,7 +255,7 @@ class Driver(Supervisor):
             self.check_goal_reached()
 
         if self.stage == "dmtp":
-            self.current_pcn_state /= self.tau_w # NOTE: 'self.tau_w' is 's' in Ade's code. Not sure how that would have worked...
+            self.current_pcn_state /= s # NOTE: 'self.tau_w' is 's' in Ade's code. Not sure how that would have worked...
         
         self.turn(np.random.normal(0, np.deg2rad(30))) # Choose a new random direction
         
@@ -274,8 +271,8 @@ class Driver(Supervisor):
         self.compute()
 
         if self.step_count > self.tau_w:
+            
             potential_rewards, potential_energy = self.compute_rewards_and_energy(num_steps=1)
-
             # Update action based on computed rewards
             self.act += 1 * (potential_rewards - self.act)
             act = np.nan_to_num(circmean(np.linspace(0, np.pi * 2, self.n_hd, endpoint=False), weights=self.act))
@@ -290,6 +287,7 @@ class Driver(Supervisor):
 
             # Collision handling
             if np.any(self.collided):
+                print("Collision detected during EXPLOIT")
                 self.turn(np.deg2rad(60))
                 self.stop()
                 self.rcn.td_update(self.pcn.place_cell_activations, potential_energy[int(act // (2 * np.pi / self.n_hd))], max_reward, self.context)
@@ -440,7 +438,7 @@ class Driver(Supervisor):
             self.save(include_hmaps=False)
             messagebox.showinfo("Information", "Goal reached - Press OK save the data")
             root.destroy()  # Destroy the main window  
-            self.simulationSetMode(self.SIMULATION_MODE_PAUSE) 
+            self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
         elif ((self.stage == "learning" or self.stage == "explore") and (self.getTime() >= 60 * self.run_time_minutes)):
             if self.stage == "learning":
                 root = tk.Tk()
