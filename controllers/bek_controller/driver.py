@@ -269,66 +269,65 @@ class Driver(Supervisor):
         self.stop()
         self.sense()
         self.compute()
+        self.check_goal_reached()
 
         if self.step_count > self.tau_w:
+            act, max_reward, num_steps = 0, 0, 1 
+            pot_rew = np.empty(self.n_hd)
+            pot_e = np.empty(self.n_hd)
             
-            potential_rewards, potential_energy = self.compute_rewards_and_energy(num_steps=1)
-            # Update action based on computed rewards
-            self.act += 1 * (potential_rewards - self.act)
-            act = np.nan_to_num(circmean(np.linspace(0, np.pi * 2, self.n_hd, endpoint=False), weights=self.act))
-            max_reward = potential_rewards[int(act // (2 * np.pi / self.n_hd))]
-
-            if max_reward <= 1e-3:
-                print(f"Max reward: {max_reward}")
-                print(f"potential_rewards: {potential_rewards}")
-                print("Returning to exploration")
-                self.state = self.STATE_EXPLORE
+            # Update reward cell network based on current place cell activations
+            self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations, True, self.context)
+            print("Reward", self.rcn.reward_cell_activations, 
+                "Most Active", self.pcn.place_cell_activations.numpy().argsort()[-3:])
+            
+            # Check if the reward is too low and switch to exploration if so
+            if self.rcn.reward_cell_activations <= 1e-6:
+                print("Reward too low. Switching to exploration.")
+                self.explore()
                 return
 
-            # Collision handling
+            # Calculate potential reward and energy for each direction
+            for d in range(self.n_hd):
+                pcn_activations = self.pcn.exploit(d, self.context, num_steps=num_steps)
+                self.rcn.update_reward_cell_activations(pcn_activations)
+
+                pot_e[d] = tf.norm(pcn_activations, 1)
+                pot_rew[d] = np.nan_to_num(self.rcn.reward_cell_activations)
+
+            # Update action based on computed rewards
+            self.act += 1 * (pot_rew - self.act)
+            act = np.nan_to_num(circmean(np.linspace(0, np.pi * 2, self.n_hd, endpoint=False), weights=self.act))
+            max_reward = pot_rew[int(act // (2 * np.pi / self.n_hd))]
+
+            # If the max reward is too low, switch to exploration
+            if max_reward <= 1e-3:
+                self.explore()
+                return
+
+            # Handle collision: turn and update the reward cell network
             if np.any(self.collided):
-                print("Collision detected during EXPLOIT")
                 self.turn(np.deg2rad(60))
                 self.stop()
-                self.rcn.td_update(self.pcn.place_cell_activations, potential_energy[int(act // (2 * np.pi / self.n_hd))], max_reward, self.context)
+                self.rcn.td_update(self.pcn.place_cell_activations, pot_e[int(act // (2 * np.pi / self.n_hd))], max_reward, self.context)
                 return
             else:
-                self.adjust_turn_based_on_action(act)
-            
-            # Move forward
-            for step in range(self.tau_w):
+                # Adjust the turn based on the calculated action
+                if abs(act) > np.pi:
+                    act = act - np.sign(act) * 2 * np.pi
+                self.turn(-np.deg2rad(np.rad2deg(act) - self.current_heading_deg) % (np.pi * 2))
+
+            # Move forward and accumulate the place cell state over the time window
+            for s in range(self.tau_w):
                 self.sense()
                 self.compute()
                 self.forward()
                 self.current_pcn_state += self.pcn.place_cell_activations
-                self.check_goal_reached()
+                self.check_goal_reached(False, s)
 
             # Normalize the accumulated place cell state over the window
             self.current_pcn_state /= self.tau_w
-            self.expected_reward = max_reward / potential_energy[int(act // (2 * np.pi / self.n_hd))]
-            self.last_reward = self.rcn.reward_cell_activations[self.context]
 
-    def compute_rewards_and_energy(self, num_steps):
-        potential_rewards = np.empty(self.n_hd)
-        potential_energy = np.empty(self.n_hd)
-
-        for direction in range(self.n_hd):
-            pcn_activations = self.pcn.exploit(direction, num_steps=num_steps)
-            self.rcn.update_reward_cell_activations(pcn_activations)
-
-            potential_energy[direction] = tf.norm(pcn_activations, 1)
-            potential_rewards[direction] = np.nan_to_num(self.rcn.reward_cell_activations[self.context])
-
-        return potential_rewards, potential_energy
-
-    def adjust_turn_based_on_action(self, act):
-        """
-        Adjusts the robot's turn based on the computed action.
-        """
-        if abs(act) > np.pi:
-            act = act - np.sign(act) * 2 * np.pi
-        self.turn(-np.deg2rad(np.rad2deg(act) - self.current_heading_deg) % (np.pi * 2))
-        print(np.rad2deg(act), self.current_heading_deg, np.rad2deg(act) - self.current_heading_deg)
 
 ########################################### SENSE ###########################################
 
@@ -435,20 +434,21 @@ class Driver(Supervisor):
             root.withdraw()  # Hide the main window
             root.attributes("-topmost", True)  # Always keep the window on top
             root.update()
-            self.save(include_hmaps=False)
-            messagebox.showinfo("Information", "Goal reached - Press OK save the data")
-            root.destroy()  # Destroy the main window  
+            messagebox.showinfo("Information", "Press OK to save networks")
+            print("Saved!")
+            root.destroy()  # Destroy the main window
+            self.save(True)
             self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
         elif ((self.stage == "learning" or self.stage == "explore") and (self.getTime() >= 60 * self.run_time_minutes)):
-            if self.stage == "learning":
-                root = tk.Tk()
-                root.withdraw()  # Hide the main window
-                root.attributes("-topmost", True)  # Always keep the window on top
-                root.update()
-                self.save(include_hmaps=True)
-                messagebox.showinfo("Information", "Press OK to save the data")
-                root.destroy()  # Destroy the main window
-                self.simulationSetMode(self.SIMULATION_MODE_PAUSE)            
+            root = tk.Tk()
+            root.withdraw()  # Hide the main window
+            root.attributes("-topmost", True)  # Always keep the window on top
+            root.update()
+            messagebox.showinfo("Information", "Press OK to save networks")
+            print("Saved!")
+            root.destroy()  # Destroy the main window
+            self.save(True)
+            self.simulationSetMode(self.SIMULATION_MODE_PAUSE)        
 
 ########################################### HELPER METHODS ###########################################
 
