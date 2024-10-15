@@ -282,22 +282,24 @@ class Driver(Supervisor):
                 "Most Active", self.pcn.place_cell_activations.numpy().argsort()[-3:])
             
             # Check if the reward is too low and switch to exploration if so
-            if self.rcn.reward_cell_activations <= 1e-6:
+            max_reward_activation = tf.reduce_max(self.rcn.reward_cell_activations)
+            if max_reward_activation <= 1e-6:
                 print("Reward too low. Switching to exploration.")
                 self.explore()
                 return
 
             # Calculate potential reward and energy for each direction
             for d in range(self.n_hd):
-                pcn_activations = self.pcn.exploit(d, self.context, num_steps=num_steps)
+                pcn_activations = self.pcn.exploit(d, num_steps=num_steps)
                 self.rcn.update_reward_cell_activations(pcn_activations)
 
-                pot_e[d] = tf.norm(pcn_activations, 1)
-                pot_rew[d] = np.nan_to_num(self.rcn.reward_cell_activations)
+                pot_e[d] = tf.norm(pcn_activations, ord=1).numpy()
+                pot_rew[d] = tf.reduce_max(np.nan_to_num(self.rcn.reward_cell_activations))
 
             # Update action based on computed rewards
-            self.act += 1 * (pot_rew - self.act)
-            act = np.nan_to_num(circmean(np.linspace(0, np.pi * 2, self.n_hd, endpoint=False), weights=self.act))
+            self.act += pot_rew - self.act
+            angles = np.linspace(0, 2 * np.pi, self.n_hd, endpoint=False)
+            act = circmean(angles, weights=self.act)
             max_reward = pot_rew[int(act // (2 * np.pi / self.n_hd))]
 
             # If the max reward is too low, switch to exploration
@@ -309,21 +311,23 @@ class Driver(Supervisor):
             if np.any(self.collided):
                 self.turn(np.deg2rad(60))
                 self.stop()
-                self.rcn.td_update(self.pcn.place_cell_activations, pot_e[int(act // (2 * np.pi / self.n_hd))], max_reward, self.context)
+                self.rcn.td_update(self.pcn.place_cell_activations,
+                   max_reward, self.context)
                 return
+            
             else:
-                # Adjust the turn based on the calculated action
                 if abs(act) > np.pi:
-                    act = act - np.sign(act) * 2 * np.pi
-                self.turn(-np.deg2rad(np.rad2deg(act) - self.current_heading_deg) % (np.pi * 2))
-
-            # Move forward and accumulate the place cell state over the time window
+                    act = act - np.sign(act)*2*np.pi
+                print("turning...")
+                print()
+                self.turn(-np.deg2rad(np.rad2deg(act) - self.current_heading_deg)%(np.pi*2)) 
+                
             for s in range(self.tau_w):
                 self.sense()
                 self.compute()
                 self.forward()
                 self.current_pcn_state += self.pcn.place_cell_activations
-                self.check_goal_reached(False, s)
+                self.check_goal_reached()
 
             # Normalize the accumulated place cell state over the window
             self.current_pcn_state /= self.tau_w
@@ -423,6 +427,7 @@ class Driver(Supervisor):
         """
         curr_pos = self.robot.getField('translation').getSFVec3f()
         if (self.stage == "dmtp" and np.allclose(self.goal_location, [curr_pos[0], curr_pos[2]], 0, self.goal_r["exploit"])):
+            self.auto_pilot()
             print("Goal reached")
             print(f"Total distance traveled: {self.compute_path_length()}")
             print(f"Started at: {np.array([self.hmap_x[0], self.hmap_y[0]])}")
@@ -449,6 +454,45 @@ class Driver(Supervisor):
             root.destroy()  # Destroy the main window
             self.save(True)
             self.simulationSetMode(self.SIMULATION_MODE_PAUSE)        
+
+########################################### AUTO PILOT ###########################################
+
+    def auto_pilot(self):
+        s_start = 0
+        curr_pos = self.robot.getField('translation').getSFVec3f()
+        while not np.allclose(self.goal_location, [curr_pos[0], curr_pos[2]], 0, self.goal_r["explore"]):
+            curr_pos = self.robot.getField('translation').getSFVec3f()
+            delta_x = curr_pos[0] - self.goal_location[0]
+            delta_y = curr_pos[2] - self.goal_location[1]
+            
+            if delta_x >= 0:
+                theta = tf.math.atan(abs(delta_y), abs(delta_x))
+                desired =  np.pi * 2 - theta if delta_y >= 0 else np.pi + theta
+            elif delta_y >= 0:
+                theta = tf.math.atan(abs(delta_y), abs(delta_x))
+                desired = np.pi/2 - theta
+            else:
+                theta = tf.math.atan(abs(delta_x), abs(delta_y))
+                desired = np.pi - theta
+            print("loop di loop")
+            self.turn(-(desired - np.deg2rad(self.current_heading_deg))) # - np.pi - np.deg2rad(self.n_index))
+            
+            self.sense()
+            self.compute()
+            self.forward()
+            self.current_pcn_state += self.pcn.place_cell_activations
+            s_start += 1
+        self.current_pcn_state /= s_start
+        # self.trans_prob += np.nan_to_num(.1 * self.hdv[:, np.newaxis, np.newaxis] * (self.s[:, np.newaxis] * (self.s[:, np.newaxis] - tf.reduce_mean(tf.pow(self.s, 2))) * self.s_prev[np.newaxis, :]/tf.reduce_mean(tf.pow(self.s, 2))))
+        # self.pcn.w_rec = self.trans_prob
+        
+        # currPos = self.robot.getField('translation').getSFVec3f()
+        # print("New location", currPos[0], currPos[2])
+        # print(self.hmap_z.shape, self.hmap_h.shape)
+        # self.pcn.offline_learning(self.hmap_z.T, self.hmap_h.T)
+        # plot.imshow(tf.reduce_max(self.pcn.w_rec, 0))
+        # plot.show()
+        self.rcn.new_reward(pc_net=self.pcn, context=self.context)
 
 ########################################### HELPER METHODS ###########################################
 
@@ -561,7 +605,7 @@ class Driver(Supervisor):
         Clears the saved state files for the Place Cell Network (PCN), Reward Cell Network (RCN),
         and the history maps by removing their corresponding pickle files.
         """
-        files_to_remove = ['pcn.pkl', 'rcn.pkl', 'hmap_x.pkl', 'hmap_y.pkl', 'hmap_z.pkl', 'hmap_g.pkl']
+        files_to_remove = ['pcn.pkl', 'rcn.pkl', 'hmap_x.pkl', 'hmap_y.pkl', 'hmap_z.pkl', 'hmap_g.pkl', 'hmap_h.pkl']
         
         for file in files_to_remove:
             try:
