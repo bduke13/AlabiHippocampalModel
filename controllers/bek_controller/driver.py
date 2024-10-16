@@ -107,8 +107,9 @@ class Driver(Supervisor):
         self.stage = None
         self.run_mode = None
         self.new_stage = new_stage
+
         if self.new_stage == RobotStage.PLOTTING:
-            self.stage = "plotting"
+            self.stage = "explore"
             self.run_mode = "explore"
         elif self.new_stage == RobotStage.LEARN_OJAS:
             self.clear()
@@ -254,6 +255,7 @@ class Driver(Supervisor):
             elif (
                 self.new_stage == RobotStage.LEARN_OJAS
                 or self.new_stage == RobotStage.LEARN_HEBB
+                or self.new_stage == RobotStage.PLOTTING
             ):
                 self.explore()
             elif self.new_stage == RobotStage.EXPLOIT:
