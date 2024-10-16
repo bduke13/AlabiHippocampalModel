@@ -10,6 +10,30 @@ def weighted_mean(data, weights):
     return np.sum(data * weights) / np.sum(weights)
 
 
+# Function to plot place field centers with an optional background image
+def plot_place_fields(valid_means, image_path=""):
+    plt.figure(figsize=(8, 8))
+    ax = plt.gca()
+
+    if image_path:
+        # Load and plot the background image if provided
+        img = plt.imread(image_path)
+        ax.imshow(
+            img,
+            extent=[np.min(hmap_x), np.max(hmap_x), np.min(hmap_y), np.max(hmap_y)],
+            origin="upper",
+        )
+
+    # Plot the place field centers
+    plt.scatter(valid_means[:, 0], valid_means[:, 1], c="red", marker="x", s=50)
+    plt.title("Place Field Centers")
+    plt.xlabel("X Coordinate")
+    plt.ylabel("Y Coordinate")
+    plt.grid(True)
+    plt.gca().set_aspect("equal", adjustable="box")
+    plt.show()
+
+
 # Load hmap data
 with open("hmap_x.pkl", "rb") as f:
     hmap_x = np.array(pickle.load(f))[10:]
@@ -34,12 +58,8 @@ for i in range(num_cells):
 valid_cells = ~np.isnan(means).any(axis=1)
 valid_means = means[valid_cells]
 
-# Plot the centers of the valid place fields
-plt.figure(figsize=(8, 8))
-plt.scatter(valid_means[:, 0], valid_means[:, 1], c="red", marker="x", s=50)
-plt.title("Place Field Centers")
-plt.xlabel("X Coordinate")
-plt.ylabel("Y Coordinate")
-plt.grid(True)
-plt.gca().set_aspect("equal", adjustable="box")
-plt.show()
+# Plot with the environment image as background
+image_path = (
+    "5x5_env_image.jpg"  # Set this to an empty string if no background is needed
+)
+plot_place_fields(valid_means, image_path)
