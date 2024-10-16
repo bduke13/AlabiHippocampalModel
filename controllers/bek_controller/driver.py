@@ -33,15 +33,6 @@ try:
 except:
     pass
 
-
-##class RobotStage(Enum):
-##
-##    MANUAL_CONTROL = 0
-##    PLOTTING = 1
-##    LEARN_OJAS = 2
-##    LEARN_HEBB = 3
-##    EXPLOIT = 4
-
 RobotStage = Enum(
     "RobotStage", ["LEARN_OJAS", "LEARN_HEBB", "EXPLOIT", "PLOTTING", "MANUAL_CONTROL"]
 )
