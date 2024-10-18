@@ -3,6 +3,7 @@ import numpy as np  # Make sure to import numpy
 import matplotlib.pyplot as plt
 import pickle  # Import pickle
 from statsmodels.stats.weightstats import DescrStatsW
+import os
 
 
 # Custom function to calculate weighted mean
@@ -12,6 +13,10 @@ def weighted_mean(data, weights):
 
 # Function to plot place field centers with an optional background image
 def plot_place_fields(valid_means, image_path=""):
+    if not os.path.exists(image_path):
+        print(f"WARNING: {image_path} does not exist. Using blank background.")
+        image_path = None
+
     plt.figure(figsize=(8, 8))
     ax = plt.gca()
 
@@ -59,7 +64,5 @@ valid_cells = ~np.isnan(means).any(axis=1)
 valid_means = means[valid_cells]
 
 # Plot with the environment image as background
-image_path = (
-    "5x5_env_image.jpg"  # Set this to an empty string if no background is needed
-)
+image_path = "environment_images/5x5_env_image.jpg"  # Set this to an empty string if no background is needed
 plot_place_fields(valid_means, image_path)
