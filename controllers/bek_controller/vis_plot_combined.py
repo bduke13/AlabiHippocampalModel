@@ -41,68 +41,93 @@ if not os.path.exists(combined_dir):
 grid_size = 5  # 5x5 grid for subplots
 cells_per_grid = grid_size * grid_size
 
-# Loop over cells and save combined images in batches of 5x5
-for i in range(0, len(cell_indices), cells_per_grid):
-    fig, axes = plt.subplots(grid_size, grid_size, figsize=(15, 15))
 
-    for idx in range(cells_per_grid):
-        row, col = divmod(idx, grid_size)
-        if i + idx < len(cell_indices):
-            cell_index = cell_indices[i + idx]
+# Method to plot and optionally display the images
+def plot_cells(show_on_screen=False):
+    figures = []  # Store figures for later display
 
-            # Get activations for this cell
-            activations = hmap_z[:, cell_index]
+    # Loop over cells and save combined images in batches of 5x5
+    for i in range(0, len(cell_indices), cells_per_grid):
+        fig, axes = plt.subplots(grid_size, grid_size, figsize=(15, 15))
 
-            # Positions
-            x = hmap_x
-            y = hmap_y
+        for idx in range(cells_per_grid):
+            row, col = divmod(idx, grid_size)
+            if i + idx < len(cell_indices):
+                cell_index = cell_indices[i + idx]
 
-            # Color for this cell
-            color_rgb = colors_rgb[cell_index]
+                # Get activations for this cell
+                activations = hmap_z[:, cell_index]
 
-            # Create a hexbin plot in the grid
-            hb = axes[row, col].hexbin(
-                x,
-                y,
-                C=activations,
-                gridsize=50,
-                reduce_C_function=np.mean,
-                cmap=None,
-                edgecolors="none",
-            )
+                # Positions
+                x = hmap_x
+                y = hmap_y
 
-            # Get aggregated activations per bin
-            counts = hb.get_array()
+                # Color for this cell
+                color_rgb = colors_rgb[cell_index]
 
-            # Normalize counts for alpha values
-            max_count = counts.max()
-            if max_count > 0:
-                counts_normalized = counts / max_count
+                # Create a hexbin plot in the grid
+                hb = axes[row, col].hexbin(
+                    x,
+                    y,
+                    C=activations,
+                    gridsize=50,
+                    reduce_C_function=np.mean,
+                    cmap=None,
+                    edgecolors="none",
+                )
+
+                # Get aggregated activations per bin
+                counts = hb.get_array()
+
+                # Normalize counts for alpha values
+                max_count = counts.max()
+                if max_count > 0:
+                    counts_normalized = counts / max_count
+                else:
+                    counts_normalized = counts
+
+                # Create RGBA colors
+                rgba_colors = np.zeros((len(counts), 4))
+                rgba_colors[:, 0:3] = color_rgb  # Set RGB values
+                rgba_colors[:, 3] = counts_normalized  # Set alpha based on activation
+
+                # Set the facecolors of the hexbin collection
+                hb.set_facecolors(rgba_colors)
+
+                # Customize each subplot
+                axes[row, col].set_title(f"Cell {cell_index}", fontsize=10)
+                axes[row, col].axis("off")
             else:
-                counts_normalized = counts
+                # Turn off axes for empty subplots
+                axes[row, col].axis("off")
 
-            # Create RGBA colors
-            rgba_colors = np.zeros((len(counts), 4))
-            rgba_colors[:, 0:3] = color_rgb  # Set RGB values
-            rgba_colors[:, 3] = counts_normalized  # Set alpha based on activation
+        # Save the combined grid plot
+        output_path_combined = os.path.join(
+            combined_dir, f"cells_{i+1}_to_{i+cells_per_grid}.jpg"
+        )
+        plt.savefig(output_path_combined, dpi=300)
 
-            # Set the facecolors of the hexbin collection
-            hb.set_facecolors(rgba_colors)
+        # If show_on_screen is True, display the figure in non-blocking mode
+        if show_on_screen:
+            plt.show(block=False)  # Non-blocking mode, allows the script to continue
 
-            # Customize each subplot
-            axes[row, col].set_title(f"Cell {cell_index}", fontsize=10)
-            axes[row, col].axis("off")
-        else:
-            # Turn off axes for empty subplots
-            axes[row, col].axis("off")
+        # Store the figure to keep track (don't close it yet)
+        figures.append(fig)
 
-    # Save the combined grid plot
-    output_path_combined = os.path.join(
-        combined_dir, f"cells_{i+1}_to_{i+cells_per_grid}.jpg"
-    )
-    plt.savefig(output_path_combined, dpi=300)
-    plt.close()
+        print(
+            f"Grid of cells {i+1} to {min(i+cells_per_grid, len(cell_indices))} saved to {output_path_combined}"
+        )
 
-    print(
-        f"Grid of cells {i+1} to {min(i+cells_per_grid, len(cell_indices))} saved to {output_path_combined}"
-    )
+    # If showing on screen, keep figures open
+    if show_on_screen:
+        input("Press Enter to close all figures...")
+
+    # Close all figures after the loop if necessary
+    for fig in figures:
+        plt.close(fig)
+
+
+# Call the method with show_on_screen flag
+plot_cells(
+    show_on_screen=True
+)  # Change to False if you don't want to display on screen
