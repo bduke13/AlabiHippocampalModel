@@ -72,7 +72,7 @@ class RewardCellLayer:
             # Update pc_net_copy.place_cell_activations
             v = tf.identity(pc_net_copy.place_cell_activations)
             w_rec_max = tf.reduce_max(pc_net_copy.w_rec_hd_place, axis=0)
-            v = tf.nn.relu(tf.tensordot(tf.cast(w_rec_max, tf.float32), v, axes=1) + v)
+            v = tf.nn.relu(tf.tensordot(tf.cast(w_rec_max, tf.float32), pc_net.place_cell_activations, axes=1) + v)
             pc_net_copy.place_cell_activations = tf.tanh(v)
 
         # Update weights

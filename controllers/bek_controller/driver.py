@@ -304,6 +304,7 @@ class Driver(Supervisor):
 
             # If the max reward is too low, switch to exploration
             if max_reward <= 1e-3:
+                print("Max reward too low. Switching to exploration.")
                 self.explore()
                 return
 
@@ -474,24 +475,13 @@ class Driver(Supervisor):
             else:
                 theta = tf.math.atan(abs(delta_x), abs(delta_y))
                 desired = np.pi - theta
-            print("loop di loop")
-            self.turn(-(desired - np.deg2rad(self.current_heading_deg))) # - np.pi - np.deg2rad(self.n_index))
-            
+            self.turn(-(desired - np.deg2rad(self.current_heading_deg)))
             self.sense()
             self.compute()
             self.forward()
             self.current_pcn_state += self.pcn.place_cell_activations
             s_start += 1
         self.current_pcn_state /= s_start
-        # self.trans_prob += np.nan_to_num(.1 * self.hdv[:, np.newaxis, np.newaxis] * (self.s[:, np.newaxis] * (self.s[:, np.newaxis] - tf.reduce_mean(tf.pow(self.s, 2))) * self.s_prev[np.newaxis, :]/tf.reduce_mean(tf.pow(self.s, 2))))
-        # self.pcn.w_rec = self.trans_prob
-        
-        # currPos = self.robot.getField('translation').getSFVec3f()
-        # print("New location", currPos[0], currPos[2])
-        # print(self.hmap_z.shape, self.hmap_h.shape)
-        # self.pcn.offline_learning(self.hmap_z.T, self.hmap_h.T)
-        # plot.imshow(tf.reduce_max(self.pcn.w_rec, 0))
-        # plot.show()
         self.rcn.new_reward(pc_net=self.pcn, context=self.context)
 
 ########################################### HELPER METHODS ###########################################
