@@ -119,8 +119,8 @@ class Driver(Supervisor):
         self.num_place_cells = 1000
         self.num_reward_cells = 10
         self.n_hd = 8
-        self.timestep = 32 * 3  # WorldInfo.basicTimeStep = 32ms
-        self.tau_w = 5  # time constant for the window function
+        self.timestep = 32 * 2  # WorldInfo.basicTimeStep = 32ms
+        self.tau_w = 10  # time constant for the window function
 
         # Robot parameters
         self.max_speed = 16
@@ -173,7 +173,7 @@ class Driver(Supervisor):
         # Initialize boundaries
         self.boundary_data = tf.Variable(tf.zeros((720, 1)))
 
-        self.act = tf.zeros(self.n_hd)
+        self.directional_reward_estimates  = tf.zeros(self.n_hd)
         self.step(self.timestep)
         self.step_count += 1
 
@@ -290,29 +290,28 @@ class Driver(Supervisor):
         """
         Executes the exploitation routine.
         """
-        self.current_pcn_state *= 0  # Reset the current place cell state
+        # Reset the current place cell state
+        self.current_pcn_state *= 0
+
+        # Stop movement and update sensor readings
         self.stop()
         self.sense()
         self.compute()
         self.check_goal_reached()
 
+        # Proceed only if enough steps have been taken
         if self.step_count > self.tau_w:
-            act, max_reward, num_steps = 0, 0, 1
+            # Initialize variables
+            action_angle, max_reward, num_steps = 0, 0, 1
             pot_rew = np.empty(self.n_hd)
             pot_e = np.empty(self.n_hd)
 
             # Update reward cell network based on current place cell activations
             self.rcn.update_reward_cell_activations(
-                self.pcn.place_cell_activations, True
-            )
-            print(
-                "Reward",
-                self.rcn.reward_cell_activations,
-                "Most Active",
-                self.pcn.place_cell_activations.numpy().argsort()[-3:],
+                self.pcn.place_cell_activations, visit=True
             )
 
-            # Check if the reward is too low and switch to exploration if so
+            # Check if the reward is too low; if so, switch to exploration
             max_reward_activation = tf.reduce_max(self.rcn.reward_cell_activations)
             if max_reward_activation <= 1e-6:
                 print("Reward too low. Switching to exploration.")
@@ -321,51 +320,61 @@ class Driver(Supervisor):
 
             # Calculate potential reward and energy for each direction
             for d in range(self.n_hd):
-                pcn_activations = self.pcn.exploit(d, num_steps=num_steps)
+                # Simulate future place cell activations in direction 'd'
+                pcn_activations = self.pcn.preplay(d, num_steps=num_steps)
+                # Update reward cell activations based on the simulated activations
                 self.rcn.update_reward_cell_activations(pcn_activations)
 
+                # Store potential energy and reward
                 pot_e[d] = tf.norm(pcn_activations, ord=1).numpy()
                 pot_rew[d] = tf.reduce_max(
                     np.nan_to_num(self.rcn.reward_cell_activations)
                 )
 
-            # Update action based on computed rewards
-            self.act += pot_rew - self.act
+            # Update directional reward estimates based on computed potential rewards
+            self.directional_reward_estimates = pot_rew
+
+            # Calculate the action angle using circular mean
             angles = np.linspace(0, 2 * np.pi, self.n_hd, endpoint=False)
-            act = circmean(angles, weights=self.act)
-            max_reward = pot_rew[int(act // (2 * np.pi / self.n_hd))]
+            action_angle = circmean(angles, weights=self.directional_reward_estimates)
+
+            # Determine the maximum reward for the chosen action
+            index = int(action_angle // (2 * np.pi / self.n_hd))
+            max_reward = pot_rew[index]
 
             # If the max reward is too low, switch to exploration
             if max_reward <= 1e-3:
                 self.explore()
                 return
 
-            # Handle collision: turn and update the reward cell network
+            # Handle collision by turning and updating the reward cell network
             if np.any(self.collided):
                 self.turn(np.deg2rad(60))
                 self.stop()
                 self.rcn.td_update(self.pcn.place_cell_activations, max_reward)
                 return
-
             else:
-                if abs(act) > np.pi:
-                    act = act - np.sign(act) * 2 * np.pi
-                print("turning...")
-                print()
-                self.turn(
-                    -np.deg2rad(np.rad2deg(act) - self.current_heading_deg)
-                    % (np.pi * 2)
-                )
+                # Adjust the action angle if necessary
+                if abs(action_angle) > np.pi:
+                    action_angle -= np.sign(action_angle) * 2 * np.pi
+                # Calculate the angle to turn towards the desired heading
+                angle_to_turn = -np.deg2rad(
+                    np.rad2deg(action_angle) - self.current_heading_deg
+                ) % (2 * np.pi)
+                self.turn(angle_to_turn)
 
+            # Move forward for a set duration while updating the place cell state
             for s in range(self.tau_w):
                 self.sense()
                 self.compute()
                 self.forward()
+                # Accumulate place cell activations
                 self.current_pcn_state += self.pcn.place_cell_activations
                 self.check_goal_reached()
 
-            # Normalize the accumulated place cell state over the window
+            # Normalize the accumulated place cell state over the time window
             self.current_pcn_state /= self.tau_w
+
 
     ########################################### SENSE ###########################################
 
@@ -471,7 +480,7 @@ class Driver(Supervisor):
         if self.stage == "dmtp" and np.allclose(
             self.goal_location, [curr_pos[0], curr_pos[2]], 0, self.goal_r["exploit"]
         ):
-            self.auto_pilot()
+            self.auto_pilot() # Navigate to the goal slowly and call rcn.replay()
             print("Goal reached")
             print(f"Total distance traveled: {self.compute_path_length()}")
             print(f"Started at: {np.array([self.hmap_x[0], self.hmap_y[0]])}")
@@ -509,6 +518,7 @@ class Driver(Supervisor):
     ########################################### AUTO PILOT ###########################################
 
     def auto_pilot(self):
+        print("Auto-piloting to the goal...")
         s_start = 0
         curr_pos = self.robot.getField("translation").getSFVec3f()
         while not np.allclose(
@@ -527,10 +537,9 @@ class Driver(Supervisor):
             else:
                 theta = tf.math.atan(abs(delta_x), abs(delta_y))
                 desired = np.pi - theta
-            print("loop di loop")
             self.turn(
                 -(desired - np.deg2rad(self.current_heading_deg))
-            )  # - np.pi - np.deg2rad(self.n_index))
+            ) 
 
             self.sense()
             self.compute()
@@ -538,16 +547,9 @@ class Driver(Supervisor):
             self.current_pcn_state += self.pcn.place_cell_activations
             s_start += 1
         self.current_pcn_state /= s_start
-        # self.trans_prob += np.nan_to_num(.1 * self.hdv[:, np.newaxis, np.newaxis] * (self.s[:, np.newaxis] * (self.s[:, np.newaxis] - tf.reduce_mean(tf.pow(self.s, 2))) * self.s_prev[np.newaxis, :]/tf.reduce_mean(tf.pow(self.s, 2))))
-        # self.pcn.w_rec = self.trans_prob
 
-        # currPos = self.robot.getField('translation').getSFVec3f()
-        # print("New location", currPos[0], currPos[2])
-        # print(self.hmap_z.shape, self.hmap_h.shape)
-        # self.pcn.offline_learning(self.hmap_z.T, self.hmap_h.T)
-        # plot.imshow(tf.reduce_max(self.pcn.w_rec, 0))
-        # plot.show()
-        self.rcn.new_reward(pc_net=self.pcn)
+        # Replay the place cell activations
+        self.rcn.replay(pcn=self.pcn)
 
     ########################################### HELPER METHODS ###########################################
 

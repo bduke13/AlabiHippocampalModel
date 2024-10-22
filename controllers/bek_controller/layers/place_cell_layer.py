@@ -163,7 +163,7 @@ class PlaceCellLayer:
                 )
             )
 
-        # If the mode is not "learning", update the input weights based on the current activations and BVC activations
+        # Update the input weights based on the current activations and BVC activations
         # This is the competitive learning rule from Equation (3.3)
         if np.any(self.place_cell_activations):
             # Compute the weight update according to Oja's rule (Equation 3.3)
@@ -184,7 +184,7 @@ class PlaceCellLayer:
         self.activation_update *= 0
         self.place_cell_trace = None
 
-    def exploit(self, direction, num_steps=1):
+    def preplay(self, direction, num_steps=1):
         """
         Simulates the exploitation or preplay of place cell activations based on the recurrent weights.
         This is used to predict future states without actual movement.
