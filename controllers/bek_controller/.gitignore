@@ -19,6 +19,5 @@ main.py
 *.hmap_*.pkl
 *.pkl
 
-# Ignore all files in the images directory
-images/
-
+# Ignore images in any output directory
+*outputs/*.jpg
