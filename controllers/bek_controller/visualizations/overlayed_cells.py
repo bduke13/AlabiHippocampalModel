@@ -14,20 +14,15 @@ with open("colors.json", "r") as f:
 colors_rgb = [mcolors.to_rgb(c) for c in colors]
 
 # Load hmap data
-with open("hmap_x.pkl", "rb") as f:
+with open("../hmap_x.pkl", "rb") as f:
     hmap_x = np.array(pickle.load(f))
-with open("hmap_y.pkl", "rb") as f:
+with open("../hmap_y.pkl", "rb") as f:
     hmap_y = np.array(pickle.load(f))
-with open("hmap_z.pkl", "rb") as f:
+with open("../hmap_z.pkl", "rb") as f:
     hmap_z = np.asarray(pickle.load(f))
 
 # Total number of place cells based on hmap_z's shape
-num_place_cells = hmap_z.shape[1]
-
-# Set num_cells_to_plot based on the number of place cells in hmap_z
-num_cells_to_plot = min(
-    200, num_place_cells
-)  # Modify to use at most 200 or less if fewer cells are available
+num_cells_to_plot = hmap_z.shape[1]
 
 # Calculate total activation per cell
 total_activation_per_cell = np.sum(hmap_z, axis=0)
