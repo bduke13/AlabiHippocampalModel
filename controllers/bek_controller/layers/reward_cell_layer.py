@@ -1,12 +1,10 @@
 import numpy as np
 import tensorflow as tf
 from copy import deepcopy
-
 tf.random.set_seed(5)
 
-
 class RewardCellLayer:
-    def __init__(self, num_reward_cells=10, input_dim=1000, num_replay=3):
+    def __init__(self, num_reward_cells=10, input_dim=1000, num_replay=3, context=0):
         """
         Initializes the Reward Cell Layer.
 
@@ -15,6 +13,9 @@ class RewardCellLayer:
         input_dim: Dimension of the input vector to the layer (== num_pc).
         num_replay: Number of replay iterations for the reward learning process.
         """
+        # Given n reward cells, each reward cell has a corresponding weight vector, accessed by the index of the cell. Just use 0 for now.
+        self.context = context
+
         # Number of reward cells
         self.num_reward_cells = num_reward_cells
 
@@ -36,111 +37,74 @@ class RewardCellLayer:
         )
 
     def update_reward_cell_activations(self, input_data, visit=False):
-        """
+        '''
         Computes the activations of reward cells based on input data.
 
         Parameters:
         input_data: The input data for the reward cells.
         visit: Boolean flag indicating if the cell is being visited.
-        """
+        '''
         # Calculate the norm of the input data
         input_norm = tf.linalg.norm(input_data, ord=1)
-        # Add a small epsilon to prevent division by zero
-        safe_denominator = tf.maximum(input_norm, 1e-6)
+
         # Calculate reward cell activations using effective weights
-        self.reward_cell_activations = (
-            tf.tensordot(self.w_in_effective, input_data, axes=1) / safe_denominator
-        )
+        self.reward_cell_activations = tf.tensordot(self.w_in_effective, input_data, axes=1) / input_norm
 
         if visit:
             # Update weights directly based on input data
             learning_rate = 0.1  # Increase the learning rate for significant updates
-            self.w_in_effective = self.w_in_effective + learning_rate * input_data
+            updated_weights = self.w_in_effective[self.context] + learning_rate * input_data
+            self.w_in_effective = tf.tensor_scatter_nd_update(self.w_in_effective, [[self.context]], [updated_weights])
 
-    def new_reward(self, pc_net):
-        """
+    def replay(self, pcn):
+        '''
         Replays the place cell activations and updates the reward cell weights.
 
         Parameters:
-        pc_net: The place cell network.
-        """
+        pcn: The place cell network.
+        '''
         # Create a copy of the place cell network
-        pc_net_copy = deepcopy(pc_net)
-        dw = tf.zeros_like(self.w_in)
+        pcn_copy = deepcopy(pcn)
+        weight_update = tf.zeros_like(self.w_in)
 
-        for t in range(10):
-            # Update dw
-            exp_factor = tf.math.exp(-t / 6)
-            pc_net_v_norm = tf.linalg.normalize(
-                pc_net_copy.place_cell_activations, ord=np.inf
-            )[0]
+        for time_step in range(10):
+            # Update weight_update
+            exponential_decay_factor = tf.math.exp(-time_step / 6)
+            
+            # Normalize the place cell activations using the infinity norm (max absolute value).
+            # This scales the activations so that the largest activation becomes 1, helping to prevent any
+            # single activation from dominating the update and improving numerical stability.
+            normalized_place_cell_activations = tf.linalg.normalize(pcn_copy.place_cell_activations, ord=2)[0]
 
-            dw = dw + exp_factor * pc_net_v_norm
+            # tf.tensor_scatter_nd_add() modifies the weight_update tensor at the specified index (self.context), 
+            # adding the normalized activations weighted by an exponential decay factor. 
+            # This gradually decreases the contribution of place cell activations over the iterations.
+            weight_update = tf.tensor_scatter_nd_add(weight_update, [[self.context]], [exponential_decay_factor * normalized_place_cell_activations])
 
-            # Update pc_net_copy.place_cell_activations
-            v = tf.identity(pc_net_copy.place_cell_activations)
-            w_rec_max = tf.reduce_max(pc_net_copy.w_rec_hd_place, axis=0)
-            v = tf.nn.relu(tf.tensordot(tf.cast(w_rec_max, tf.float32), v, axes=1) + v)
-            pc_net_copy.place_cell_activations = tf.tanh(v)
+            # Update pcn_copy.place_cell_activations
+            recurrent_weights_max = tf.reduce_max(pcn_copy.w_rec_hd_place, axis=0)
+            updated_place_cell_activations = tf.nn.relu(tf.tensordot(tf.cast(recurrent_weights_max, tf.float32), pcn_copy.place_cell_activations, axes=1) + pcn_copy.place_cell_activations)
+            pcn_copy.place_cell_activations = tf.tanh(updated_place_cell_activations)
 
-        # Update weights
-        dw_norm = tf.linalg.normalize(dw, ord=np.inf)[0]
-        self.w_in.assign_add(dw_norm)
+        # Normalize and update weights
+        normalized_weight_update = tf.linalg.normalize(weight_update, ord=np.inf)[0]
+        self.w_in.assign_add(normalized_weight_update)
         self.w_in_effective = tf.identity(self.w_in)
 
-    ##    def td_update(self, input_data, next_reward, context=0):
-    ##        """
-    ##        Temporal difference (TD) update method for reward learning.
-    ##
-    ##        Parameters:
-    ##        input_data: Input to the reward cell layer.
-    ##        next_reward: Reward at the next time step.
-    ##        context: Context index for selecting specific input weights.
-    ##        """
-    ##        print("Next reward:", next_reward)
-    ##        print("Before update:", tf.tensordot(self.w_in_effective, input_data, axes=1))
-    ##
-    ##        # Calculate the prediction error (delta)
-    ##        prediction = tf.tensordot(self.w_in_effective, input_data, axes=1)
-    ##        delta = next_reward - prediction
-    ##
-    ##        # Update weights based on the TD learning rule
-    ##        learning_rate = 0.01  # Adjust the learning rate as needed
-    ##        updated_weights = self.w_in_effective + learning_rate * delta * input_data
-    ##        self.w_in_effective = tf.tensor_scatter_nd_update(
-    ##            self.w_in_effective, [[0]], [updated_weights]
-    ##        )
-    ##
-    ##        print("After update:", tf.tensordot(self.w_in_effective, input_data, axes=1))
-    def td_update(self, input_data, next_reward, context=0):
-        """
+        
+    def td_update(self, input_data, next_reward):
+        '''
         Temporal difference (TD) update method for reward learning.
 
         Parameters:
         input_data: Input to the reward cell layer.
         next_reward: Reward at the next time step.
-        context: Context index for selecting specific input weights.
-        """
-        print("Next reward:", next_reward)
-        print(
-            "Before update:",
-            tf.tensordot(self.w_in_effective[context], input_data, axes=1),
-        )
-
+        '''
         # Calculate the prediction error (delta)
-        prediction = tf.tensordot(self.w_in_effective[context], input_data, axes=1)
+        prediction = tf.tensordot(self.w_in_effective[self.context], input_data, axes=1)
         delta = next_reward - prediction
 
         # Update weights based on the TD learning rule
         learning_rate = 0.01  # Adjust the learning rate as needed
-        updated_weights = (
-            self.w_in_effective[context] + learning_rate * delta * input_data
-        )
-        self.w_in_effective = tf.tensor_scatter_nd_update(
-            self.w_in_effective, [[context]], [updated_weights]
-        )
-
-        print(
-            "After update:",
-            tf.tensordot(self.w_in_effective[context], input_data, axes=1),
-        )
+        updated_weights = self.w_in_effective[self.context] + learning_rate * delta * input_data
+        self.w_in_effective = tf.tensor_scatter_nd_update(self.w_in_effective, [[self.context]], [updated_weights])
