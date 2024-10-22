@@ -21,3 +21,6 @@ main.py
 
 # Ignore images in any output directory
 *outputs/*.jpg
+
+# Ignore any recorded output numpy buffers
+*recorded*.npy
