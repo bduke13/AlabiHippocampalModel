@@ -34,7 +34,8 @@ except:
     pass
 
 RobotStage = Enum(
-    "RobotStage", ["LEARN_OJAS", "LEARN_HEBB", "EXPLOIT", "PLOTTING", "MANUAL_CONTROL"]
+    "RobotStage",
+    ["LEARN_OJAS", "LEARN_HEBB", "EXPLOIT", "PLOTTING", "MANUAL_CONTROL", "RECORDING"],
 )
 
 
@@ -99,7 +100,10 @@ class Driver(Supervisor):
         self.run_mode = None
         self.new_stage = new_stage
 
-        if self.new_stage == RobotStage.PLOTTING:
+        if (
+            self.new_stage == RobotStage.PLOTTING
+            or self.new_stage == RobotStage.RECORDING
+        ):
             self.stage = "explore"
             self.run_mode = "explore"
         elif self.new_stage == RobotStage.LEARN_OJAS:
@@ -115,12 +119,6 @@ class Driver(Supervisor):
         else:
             raise ValueError(f"Unknown run mode: {self.run_mode}")
 
-        # Model parameters
-        self.num_place_cells = 1000
-        self.num_reward_cells = 10
-        self.n_hd = 8
-        self.timestep = 32 * 2  # WorldInfo.basicTimeStep = 32ms
-        self.tau_w = 10  # time constant for the window function
 
         # Robot parameters
         self.max_speed = 16
@@ -165,15 +163,22 @@ class Driver(Supervisor):
         self.right_position_sensor = self.getDevice("right wheel sensor")
         self.right_position_sensor.enable(self.timestep)
 
+        # Model parameters
+        self.num_place_cells = 200
+        self.num_reward_cells = 10
+        self.n_hd = 8
+        self.timestep = 32 * 2  # WorldInfo.basicTimeStep = 32ms
+        self.tau_w = 10  # time constant for the window function
+
         # Initialize layers
-        self.load_pcn(self.num_place_cells, self.n_hd)
+        self.load_pcn(self.num_place_cells, self.n_hd, self.timestep)
         self.load_rcn(self.num_reward_cells, self.num_place_cells)
         self.head_direction_layer = HeadDirectionLayer(num_cells=self.n_hd)
 
         # Initialize boundaries
         self.boundary_data = tf.Variable(tf.zeros((720, 1)))
 
-        self.directional_reward_estimates  = tf.zeros(self.n_hd)
+        self.directional_reward_estimates = tf.zeros(self.n_hd)
         self.step(self.timestep)
         self.step_count += 1
 
@@ -192,7 +197,7 @@ class Driver(Supervisor):
         self.sense()
         self.compute()
 
-    def load_pcn(self, num_place_cells, n_hd):
+    def load_pcn(self, num_place_cells, n_hd, timestep):
         """
         Loads the place cell network from a file if available, or initializes a new one.
         """
@@ -202,11 +207,22 @@ class Driver(Supervisor):
                 self.pcn.reset_activations()
                 print("Loaded existing Place Cell Network.")
         except:
-            self.pcn = PlaceCellLayer(num_place_cells, 720, self.timestep, 10, n_hd)
+            bvcLayer = BoundaryVectorCellLayer(
+                max_dist=10,
+                input_dim=720,
+                n_hd=n_hd,
+                sigma_ang=90,
+                sigma_d=0.5,
+            )
+
+            self.pcn = PlaceCellLayer(
+                bvc_layer=bvcLayer, num_pc=num_place_cells, timestep=timestep, n_hd=n_hd, 
+
+            )
             print("Initialized new Place Cell Network.")
         return self.pcn
 
-    def load_rcn(self, num_reward_cells, num_place_cells):
+    def load_rcn(self, num_reward_cells, num_place_cells)
         """
         Loads the reward cell network from a file if available, or initializes a new one.
         """
@@ -219,6 +235,7 @@ class Driver(Supervisor):
                 num_reward_cells=num_reward_cells,
                 input_dim=num_place_cells,
                 num_replay=3,
+                context=1,
             )
             print("Initialized new Reward Cell Network.")
         return self.rcn
@@ -251,6 +268,8 @@ class Driver(Supervisor):
                 self.explore()
             elif self.new_stage == RobotStage.EXPLOIT:
                 self.exploit()
+            elif self.new_stage == RobotStage.RECORDING:
+                self.recording_mode()
             else:
                 print("Unknown state. Exiting...")
                 break
@@ -375,6 +394,79 @@ class Driver(Supervisor):
             # Normalize the accumulated place cell state over the time window
             self.current_pcn_state /= self.tau_w
 
+    ########################################### RECORDING ###########################################
+
+    def record_sensor_data(self):
+        """
+        Records the necessary sensor data: LiDAR readings, positions, and heading angles.
+        """
+        # Get current position
+        curr_pos = self.robot.getField("translation").getSFVec3f()
+        self.sensor_data["positions"].append([curr_pos[0], curr_pos[2]])
+
+        # Get current heading angle in degrees
+        current_heading_deg = int(self.get_bearing_in_degrees(self.compass.getValues()))
+        self.sensor_data["headings"].append(current_heading_deg)
+
+        # Get LiDAR readings
+        lidar_readings = self.range_finder.getRangeImage()
+        self.sensor_data["lidar"].append(
+            lidar_readings.copy()
+        )  # Copy to avoid referencing issues
+
+    def save_sensor_data(self):
+        """
+        Saves the recorded sensor data to files for later use.
+        """
+        # Convert lists to NumPy arrays
+        positions = np.array(self.sensor_data["positions"])
+        headings = np.array(self.sensor_data["headings"])
+        lidar_data = np.array(self.sensor_data["lidar"])
+
+        # Save data to files
+        np.save("recorded_positions.npy", positions)
+        np.save("recorded_headings.npy", headings)
+        np.save("recorded_lidar.npy", lidar_data)
+
+        print("Sensor data saved.")
+
+    def recording_mode(self):
+        """
+        Handles the logic for recording sensor data without using place fields.
+        """
+        # Sense the environment
+        self.sense()
+
+        # Record sensor data
+        self.record_sensor_data()
+
+        # Move the robot forward
+        if not np.any(self.collided):
+            self.forward()
+        else:
+            # If collided, turn by a random angle to avoid obstacle
+            self.turn(np.random.uniform(-np.pi / 2, np.pi / 2))
+            self.collided.assign([0, 0])  # Reset collision status
+
+        # Introduce a 5% chance to rotate randomly
+        if rng.uniform(0, 1) < 0.05:  # 5% probability
+            self.turn(
+                np.random.normal(0, np.deg2rad(30))
+            )  # Random turn with normal distribution
+
+        # Increment the step count
+        self.step_count += 1
+
+        # Check if the maximum number of steps has been reached
+        if self.step_count >= self.num_steps:
+            print("Data recording complete.")
+            self.save_sensor_data()
+            messagebox.showinfo("Information", "Press OK to save recorded data")
+            print("Saved!")
+            root.destroy()  # Destroy the main window
+            self.save(True)
+            self.stop()
+            self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
 
     ########################################### SENSE ###########################################
 
@@ -480,7 +572,7 @@ class Driver(Supervisor):
         if self.stage == "dmtp" and np.allclose(
             self.goal_location, [curr_pos[0], curr_pos[2]], 0, self.goal_r["exploit"]
         ):
-            self.auto_pilot() # Navigate to the goal slowly and call rcn.replay()
+            self.auto_pilot()  # Navigate to the goal slowly and call rcn.replay()
             print("Goal reached")
             print(f"Total distance traveled: {self.compute_path_length()}")
             print(f"Started at: {np.array([self.hmap_x[0], self.hmap_y[0]])}")
@@ -537,9 +629,7 @@ class Driver(Supervisor):
             else:
                 theta = tf.math.atan(abs(delta_x), abs(delta_y))
                 desired = np.pi - theta
-            self.turn(
-                -(desired - np.deg2rad(self.current_heading_deg))
-            ) 
+            self.turn(-(desired - np.deg2rad(self.current_heading_deg)))
 
             self.sense()
             self.compute()

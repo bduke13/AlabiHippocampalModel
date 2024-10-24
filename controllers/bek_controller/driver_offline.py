@@ -1,8 +1,10 @@
 import numpy as np
 import tensorflow as tf
 import pickle
+
 from layers.place_cell_layer import PlaceCellLayer
 from layers.head_direction_layer import HeadDirectionLayer
+from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
 
 # Set random seed for reproducibility
 tf.random.set_seed(5)
@@ -59,11 +61,18 @@ class OfflineDriver:
         """
         Initializes the Place Cell Network and Head Direction Layer.
         """
+        bvcLayer = BoundaryVectorCellLayer(
+            max_dist=10,
+            input_dim=720,
+            n_hd=self.n_hd,
+            sigma_ang=90,
+            sigma_d=0.5,
+        )
+
         self.pcn = PlaceCellLayer(
+            bvc_layer=bvcLayer,
             num_pc=self.num_place_cells,
-            input_dim=750,
             timestep=self.timestep,
-            max_dist=12,
             n_hd=self.n_hd,
         )
         self.pcn.reset_activations()
