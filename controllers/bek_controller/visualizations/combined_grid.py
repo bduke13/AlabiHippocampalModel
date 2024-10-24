@@ -74,15 +74,15 @@ if __name__ == "__main__":
     output_dir = "combined_plots"
 
     # Load hmap data
-    with open("../hmap_x.pkl", "rb") as f:
+    with open("hmap_x.pkl", "rb") as f:
         hmap_x = np.array(pickle.load(f))
-    with open("../hmap_y.pkl", "rb") as f:
+    with open("hmap_y.pkl", "rb") as f:
         hmap_y = np.array(pickle.load(f))
-    with open("../hmap_z.pkl", "rb") as f:
+    with open("hmap_z.pkl", "rb") as f:
         hmap_z = np.asarray(pickle.load(f))
 
     # Load the colors list
-    with open("colors.json", "r") as f:
+    with open("visualizations/colors.json", "r") as f:
         colors = json.load(f)
 
     # Convert hex colors to RGB format

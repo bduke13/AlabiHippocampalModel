@@ -4,21 +4,21 @@ import pickle
 import json
 import matplotlib.colors as mcolors
 
-gridsize = 80
+gridsize = 100
 
 # Load the colors list
-with open("colors.json", "r") as f:
+with open("visualizations/colors.json", "r") as f:
     colors = json.load(f)
 
 # Convert hex colors to RGB format
 colors_rgb = [mcolors.to_rgb(c) for c in colors]
 
 # Load hmap data
-with open("../hmap_x.pkl", "rb") as f:
+with open("hmap_x.pkl", "rb") as f:
     hmap_x = np.array(pickle.load(f))
-with open("../hmap_y.pkl", "rb") as f:
+with open("hmap_y.pkl", "rb") as f:
     hmap_y = np.array(pickle.load(f))
-with open("../hmap_z.pkl", "rb") as f:
+with open("hmap_z.pkl", "rb") as f:
     hmap_z = np.asarray(pickle.load(f))
 
 # Total number of place cells based on hmap_z's shape
@@ -32,7 +32,7 @@ nonzero_activation_indices = np.where(total_activation_per_cell > 0)[0]
 
 # Check if there are enough cells with non-zero activation
 if len(nonzero_activation_indices) < num_cells_to_plot:
-    print(f"Only {len(nonzero_activation_indices)} cells have non-zero activation.")
+    print(f"{len(nonzero_activation_indices)} cells have non-zero activation.")
     num_cells_to_plot = len(nonzero_activation_indices)
 
 # Randomly select the specified number of place cells with non-zero activation

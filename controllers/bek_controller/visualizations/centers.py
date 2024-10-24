@@ -121,18 +121,18 @@ def get_place_field_centers(
 
 if __name__ == "__main__":
     # Load hmap data
-    with open("../hmap_x.pkl", "rb") as f:
-        hmap_x = np.array(pickle.load(f))[10:]
-    with open("../hmap_y.pkl", "rb") as f:
-        hmap_y = np.array(pickle.load(f))[10:]
-    with open("../hmap_z.pkl", "rb") as f:
-        hmap_z = np.asarray(pickle.load(f))[10:]
+    with open("hmap_x.pkl", "rb") as f:
+        hmap_x = np.array(pickle.load(f))
+    with open("hmap_y.pkl", "rb") as f:
+        hmap_y = np.array(pickle.load(f))
+    with open("hmap_z.pkl", "rb") as f:
+        hmap_z = np.asarray(pickle.load(f))
 
     # Optional specific cell indices (e.g., [0, 5, 10]) or None to plot all
-    specific_cells = [5]  # Replace with a list of specific cell indices if needed
+    specific_cells = None  # Replace with a list of specific cell indices if needed
 
     # Plot with the environment image as background
-    image_path = "environment_images/5x5_env_image.jpg"  # Set this to an empty string if no background is needed
+    image_path = "visualizations/environment_images/5x5_env_image.jpg"  # Set this to an empty string if no background is needed
 
     # Get and plot place field centers
     get_place_field_centers(
