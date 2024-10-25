@@ -119,6 +119,12 @@ class Driver(Supervisor):
         else:
             raise ValueError(f"Unknown run mode: {self.run_mode}")
 
+        # Model parameters
+        self.num_place_cells = 200
+        self.num_reward_cells = 10
+        self.n_hd = 8
+        self.timestep = 32 * 2  # WorldInfo.basicTimeStep = 32ms
+        self.tau_w = 10  # time constant for the window function
 
         # Robot parameters
         self.max_speed = 16
@@ -163,13 +169,6 @@ class Driver(Supervisor):
         self.right_position_sensor = self.getDevice("right wheel sensor")
         self.right_position_sensor.enable(self.timestep)
 
-        # Model parameters
-        self.num_place_cells = 200
-        self.num_reward_cells = 10
-        self.n_hd = 8
-        self.timestep = 32 * 2  # WorldInfo.basicTimeStep = 32ms
-        self.tau_w = 10  # time constant for the window function
-
         # Initialize layers
         self.load_pcn(self.num_place_cells, self.n_hd, self.timestep)
         self.load_rcn(self.num_reward_cells, self.num_place_cells)
@@ -207,7 +206,7 @@ class Driver(Supervisor):
                 self.pcn.reset_activations()
                 print("Loaded existing Place Cell Network.")
         except:
-            bvcLayer = BoundaryVectorCellLayer(
+            bvc = BoundaryVectorCellLayer(
                 max_dist=10,
                 input_dim=720,
                 n_hd=n_hd,
@@ -216,13 +215,15 @@ class Driver(Supervisor):
             )
 
             self.pcn = PlaceCellLayer(
-                bvc_layer=bvcLayer, num_pc=num_place_cells, timestep=timestep, n_hd=n_hd, 
-
+                bvc_layer=bvc,
+                num_pc=num_place_cells,
+                timestep=timestep,
+                n_hd=n_hd,
             )
             print("Initialized new Place Cell Network.")
         return self.pcn
 
-    def load_rcn(self, num_reward_cells, num_place_cells)
+    def load_rcn(self, num_reward_cells, num_place_cells):
         """
         Loads the reward cell network from a file if available, or initializes a new one.
         """
