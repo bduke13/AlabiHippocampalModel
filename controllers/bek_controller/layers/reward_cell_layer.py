@@ -49,21 +49,20 @@ class RewardCellLayer:
         """
         # Calculate the norm of the input data
         input_norm = tf.linalg.norm(input_data, ord=1)
-
+        # Add a small epsilon to prevent division by zero
+        safe_denominator = tf.maximum(input_norm, 1e-6)
         # Calculate reward cell activations using effective weights
-        self.reward_cell_activations = (
-            tf.tensordot(self.w_in_effective, input_data, axes=1) / input_norm
-        )
+        self.reward_cell_activations = tf.tensordot(self.w_in_effective, input_data, axes=1) / safe_denominator
 
         if visit:
             # Update weights directly based on input data
-            learning_rate = 0.1  # Increase the learning rate for significant updates
-            updated_weights = (
-                self.w_in_effective[self.context] + learning_rate * input_data
-            )
+            learning_rate = 0.1  # Adjust as needed
+            updated_weights = self.w_in_effective[self.context] + learning_rate * input_data
             self.w_in_effective = tf.tensor_scatter_nd_update(
                 self.w_in_effective, [[self.context]], [updated_weights]
             )
+            # # Synchronize weights
+            # self.w_in = tf.identity(self.w_in_effective)
 
     def replay(self, pcn):
         """
@@ -126,10 +125,6 @@ class RewardCellLayer:
         delta = next_reward - prediction
 
         # Update weights based on the TD learning rule
-        learning_rate = 0.01  # Adjust the learning rate as needed
-        updated_weights = (
-            self.w_in_effective[self.context] + learning_rate * delta * input_data
-        )
-        self.w_in_effective = tf.tensor_scatter_nd_update(
-            self.w_in_effective, [[self.context]], [updated_weights]
-        )
+        learning_rate = 0.1  # Adjust the learning rate as needed
+        updated_weights = self.w_in_effective[self.context] + learning_rate * delta * input_data
+        self.w_in_effective = tf.tensor_scatter_nd_update(self.w_in_effective, [[self.context]], [updated_weights])
