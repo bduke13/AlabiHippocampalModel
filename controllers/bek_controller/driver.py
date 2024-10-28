@@ -32,6 +32,10 @@ try:
 except:
     pass
 
+RobotStage = Enum(
+    "RobotStage", ["LEARN_OJAS", "LEARN_HEBB", "EXPLOIT", "PLOTTING", "MANUAL_CONTROL"]
+)
+
 class Driver(Supervisor):
     """
     The Driver class controls the robot, manages its sensory inputs, and coordinates the activation of neural network layers 
@@ -96,9 +100,8 @@ class Driver(Supervisor):
         self.num_place_cells = 1000
         self.num_reward_cells = 10
         self.n_hd = 8
-        self.timestep = 32*3 # WorldInfo.basicTimeStep = 32ms
-        self.tau_w = 5 # time constant for the window function
-        self.context = 0  # TODO: Get rid of this
+        self.timestep = 32  # WorldInfo.basicTimeStep = 32ms
+        self.tau_w = 10  # time constant for the window function
 
         # Robot parameters
         self.max_speed = 16
@@ -242,6 +245,15 @@ class Driver(Supervisor):
         for s in range(self.tau_w):
             self.sense()
 
+            # Update the reward cell activations
+            self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations)
+            
+            # Determine the actual reward (you may need to define how to calculate this)
+            actual_reward = self.get_actual_reward()
+            
+            # Perform TD update
+            self.rcn.td_update(self.pcn.place_cell_activations, next_reward=actual_reward)
+
             if np.any(self.collided):
                 self.turn(np.deg2rad(60))
                 break
@@ -254,12 +266,13 @@ class Driver(Supervisor):
             self.forward()
             self.check_goal_reached()
 
-        if self.stage == "dmtp":
-            self.current_pcn_state /= s # NOTE: 'self.tau_w' is 's' in Ade's code. Not sure how that would have worked...
-        
-        self.turn(np.random.normal(0, np.deg2rad(30))) # Choose a new random direction
-        
-########################################### EXPLOIT ###########################################
+        if self.new_stage == RobotStage.LEARN_HEBB:
+            self.current_pcn_state /= s  # 's' should be greater than 0
+
+        self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
+
+
+    ########################################### EXPLOIT ###########################################
 
     def exploit(self):
         """
@@ -330,9 +343,32 @@ class Driver(Supervisor):
                 self.current_pcn_state += self.pcn.place_cell_activations
                 self.check_goal_reached()
 
-            # Normalize the accumulated place cell state over the window
+                # Update reward cell activations and perform TD update
+                self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations)
+                actual_reward = self.get_actual_reward()
+                self.rcn.td_update(self.pcn.place_cell_activations, next_reward=actual_reward)
+
+            # Normalize the accumulated place cell state over the time window
             self.current_pcn_state /= self.tau_w
 
+    ########################################### GET ACTUAL REWARD ###########################################
+
+    def get_actual_reward(self):
+        """
+        Determines the actual reward for the agent at the current state.
+
+        Returns:
+            float: The actual reward value.
+        """
+        curr_pos = self.robot.getField("translation").getSFVec3f()
+        distance_to_goal = np.linalg.norm(
+            [curr_pos[0] - self.goal_location[0], curr_pos[2] - self.goal_location[1]]
+        )
+
+        if distance_to_goal <= self.goal_r["exploit"]:
+            return 1.0  # Reward for reaching the goal
+        else:
+            return 0.0  # No reward otherwise
 
 ########################################### SENSE ###########################################
 

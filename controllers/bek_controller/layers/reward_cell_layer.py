@@ -47,9 +47,13 @@ class RewardCellLayer:
 
         if visit:
             # Update weights directly based on input data
-            learning_rate = 0.1  # Increase the learning rate for significant updates
-            updated_weights = self.w_in_effective[context] + learning_rate * input_data
-            self.w_in_effective = tf.tensor_scatter_nd_update(self.w_in_effective, [[context]], [updated_weights])
+            learning_rate = 0.1  # Adjust as needed
+            updated_weights = self.w_in_effective[self.context] + learning_rate * input_data
+            self.w_in_effective = tf.tensor_scatter_nd_update(
+                self.w_in_effective, [[self.context]], [updated_weights]
+            )
+            # # Synchronize weights
+            # self.w_in = tf.identity(self.w_in_effective)
 
     def new_reward(self, pc_net, context=0):
         '''
@@ -97,8 +101,6 @@ class RewardCellLayer:
         delta = next_reward - prediction
 
         # Update weights based on the TD learning rule
-        learning_rate = 0.01  # Adjust the learning rate as needed
-        updated_weights = self.w_in_effective[context] + learning_rate * delta * input_data
-        self.w_in_effective = tf.tensor_scatter_nd_update(self.w_in_effective, [[context]], [updated_weights])
-
-        print("After update:", tf.tensordot(self.w_in_effective[context], input_data, axes=1))
+        learning_rate = 0.1  # Adjust the learning rate as needed
+        updated_weights = self.w_in_effective[self.context] + learning_rate * delta * input_data
+        self.w_in_effective = tf.tensor_scatter_nd_update(self.w_in_effective, [[self.context]], [updated_weights])
