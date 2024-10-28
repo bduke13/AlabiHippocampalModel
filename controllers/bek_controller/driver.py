@@ -82,7 +82,7 @@ class Driver(Supervisor):
 
     def initialization(
         self,
-        new_stage=RobotStage.PLOTTING,
+        stage=RobotStage.PLOTTING,
         randomize_start_loc=True,
         run_time_hours=1,
     ):
@@ -98,22 +98,22 @@ class Driver(Supervisor):
         # Stage and RunMode
         self.stage = None
         self.run_mode = None
-        self.new_stage = new_stage
+        self.robot_stage = stage
 
         if (
-            self.new_stage == RobotStage.PLOTTING
-            or self.new_stage == RobotStage.RECORDING
+            self.robot_stage == RobotStage.PLOTTING
+            or self.robot_stage == RobotStage.RECORDING
         ):
             self.stage = "explore"
             self.run_mode = "explore"
-        elif self.new_stage == RobotStage.LEARN_OJAS:
+        elif self.robot_stage == RobotStage.LEARN_OJAS:
             self.clear()
             self.stage = "learning"
             self.run_mode = "explore"
-        elif self.new_stage == RobotStage.LEARN_HEBB:
+        elif self.robot_stage == RobotStage.LEARN_HEBB:
             self.stage = "dmtp"
             self.run_mode = "explore"
-        elif self.new_stage == RobotStage.EXPLOIT:
+        elif self.robot_stage == RobotStage.EXPLOIT:
             self.stage = "dmtp"
             self.run_mode = "exploit"
         else:
@@ -121,7 +121,7 @@ class Driver(Supervisor):
 
         # Model parameters
         self.num_place_cells = 200
-        self.num_reward_cells = 10
+        self.num_reward_cells = 1
         self.n_hd = 8
         self.timestep = 32  # WorldInfo.basicTimeStep = 32ms
         self.tau_w = 10  # time constant for the window function
@@ -189,7 +189,7 @@ class Driver(Supervisor):
         self.prev_pcn_state = tf.zeros_like(self.pcn.place_cell_activations)
 
         if randomize_start_loc:
-            INITIAL = [rng.uniform(-2.4, 2.4), 0.5, rng.uniform(-2.4, 2.4)]
+            INITIAL = [rng.uniform(-2.3, 2.3), 0.5, rng.uniform(-2.3, 2.3)]
             self.robot.getField("translation").setSFVec3f(INITIAL)
             self.robot.resetPhysics()
 
@@ -236,7 +236,6 @@ class Driver(Supervisor):
                 num_reward_cells=num_reward_cells,
                 input_dim=num_place_cells,
                 num_replay=3,
-                context=1,
             )
             print("Initialized new Reward Cell Network.")
         return self.rcn
@@ -248,7 +247,7 @@ class Driver(Supervisor):
         Runs the main control loop of the robot, managing its behavior based on the current state.
         """
 
-        print(f"Starting robot in stage {self.new_stage.name}")
+        print(f"Starting robot in stage {self.robot_stage.name}")
         print(f"Goal at {self.goal_location}")
 
         while True:
@@ -259,17 +258,17 @@ class Driver(Supervisor):
             #    self.new_stage = self.STATE_MANUAL_CONTROL
 
             # Handle the robot's state
-            if self.new_stage == RobotStage.MANUAL_CONTROL:
+            if self.robot_stage == RobotStage.MANUAL_CONTROL:
                 self.manual_control()
             elif (
-                self.new_stage == RobotStage.LEARN_OJAS
-                or self.new_stage == RobotStage.LEARN_HEBB
-                or self.new_stage == RobotStage.PLOTTING
+                self.robot_stage == RobotStage.LEARN_OJAS
+                or self.robot_stage == RobotStage.LEARN_HEBB
+                or self.robot_stage == RobotStage.PLOTTING
             ):
                 self.explore()
-            elif self.new_stage == RobotStage.EXPLOIT:
+            elif self.robot_stage == RobotStage.EXPLOIT:
                 self.exploit()
-            elif self.new_stage == RobotStage.RECORDING:
+            elif self.robot_stage == RobotStage.RECORDING:
                 self.recording_mode()
             else:
                 print("Unknown state. Exiting...")
@@ -300,7 +299,7 @@ class Driver(Supervisor):
                 self.turn(np.deg2rad(60))
                 break
 
-            if self.new_stage == RobotStage.LEARN_HEBB:
+            if self.robot_stage == RobotStage.LEARN_HEBB:
                 self.current_pcn_state += self.pcn.place_cell_activations
                 self.check_goal_reached()
 
@@ -308,7 +307,7 @@ class Driver(Supervisor):
             self.forward()
             self.check_goal_reached()
 
-        if self.new_stage == RobotStage.LEARN_HEBB:
+        if self.robot_stage == RobotStage.LEARN_HEBB:
             self.current_pcn_state /= s  # 's' should be greater than 0
 
         self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
