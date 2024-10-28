@@ -14,6 +14,6 @@ bot = Driver()
 # 4. (optional) PLOTTING
 
 bot.initialization(
-    new_stage=RobotStage.EXPLOIT, randomize_start_loc=True, run_time_hours=1
+    stage=RobotStage.EXPLOIT, randomize_start_loc=True, run_time_hours=1
 )
 bot.run()
