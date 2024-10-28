@@ -5,7 +5,7 @@ from copy import deepcopy
 
 class RewardCellLayer:
     def __init__(self, num_reward_cells=1, input_dim=200, num_replay=3, context=0):
-        """
+        '''
         Initializes the Reward Cell Layer.
 
         Parameters:
