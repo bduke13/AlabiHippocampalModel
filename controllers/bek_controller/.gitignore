@@ -18,6 +18,7 @@ main.py
 # Ignore hmap and pkl files
 *.hmap_*.pkl
 *.pkl
+*.wbproj
 
 # Ignore all files in the images directory
 images/
