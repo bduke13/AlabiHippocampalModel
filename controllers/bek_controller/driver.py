@@ -78,7 +78,12 @@ class Driver(Supervisor):
         prev_pcn_state (Tensor): Tensor representing the previous state.
     """
 
-    def initialization(self, stage="learning", run_mode='explore', randomize_start_loc=True, run_time_hours=1):
+    def initialization(
+        self,
+        stage=RobotStage.PLOTTING,
+        randomize_start_loc=True,
+        run_time_hours=1,
+    ):
         """
         Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
@@ -89,16 +94,32 @@ class Driver(Supervisor):
             run_time_hours (int): Total run time for the simulation in hours.
         """
         # Stage and RunMode
-        self.stage = stage
-        self.run_mode = run_mode
+        self.stage = None
+        self.run_mode = None
+        self.robot_stage = stage
 
-        self.STATE_MANUAL_CONTROL = 0
-        self.STATE_EXPLORE = 1
-        self.STATE_EXPLOIT = 2
+        if (
+            self.robot_stage == RobotStage.PLOTTING
+            or self.robot_stage == RobotStage.RECORDING
+        ):
+            self.stage = "explore"
+            self.run_mode = "explore"
+        elif self.robot_stage == RobotStage.LEARN_OJAS:
+            self.clear()
+            self.stage = "learning"
+            self.run_mode = "explore"
+        elif self.robot_stage == RobotStage.LEARN_HEBB:
+            self.stage = "dmtp"
+            self.run_mode = "explore"
+        elif self.robot_stage == RobotStage.EXPLOIT:
+            self.stage = "dmtp"
+            self.run_mode = "exploit"
+        else:
+            raise ValueError(f"Unknown run mode: {self.run_mode}")
 
         # Model parameters
-        self.num_place_cells = 1000
-        self.num_reward_cells = 10
+        self.num_place_cells = 200
+        self.num_reward_cells = 1
         self.n_hd = 8
         self.timestep = 32  # WorldInfo.basicTimeStep = 32ms
         self.tau_w = 10  # time constant for the window function
@@ -162,8 +183,8 @@ class Driver(Supervisor):
         self.prev_pcn_state = tf.zeros_like(self.pcn.place_cell_activations)
 
         if randomize_start_loc:
-            INITIAL = [rng.uniform(-2.4, 2.4), 0.5, rng.uniform(-2.4, 2.4)]
-            self.robot.getField('translation').setSFVec3f(INITIAL)
+            INITIAL = [rng.uniform(-2.3, 2.3), 0.5, rng.uniform(-2.3, 2.3)]
+            self.robot.getField("translation").setSFVec3f(INITIAL)
             self.robot.resetPhysics()
         
         self.sense()
@@ -192,7 +213,11 @@ class Driver(Supervisor):
                 self.rcn = pickle.load(f)
                 print("Loaded existing Reward Cell Network.")
         except:
-            self.rcn = RewardCellLayer(num_reward_cells=num_reward_cells, input_dim=num_place_cells, num_replay=3)
+            self.rcn = RewardCellLayer(
+                num_reward_cells=num_reward_cells,
+                input_dim=num_place_cells,
+                num_replay=3,
+            )
             print("Initialized new Reward Cell Network.")
         return self.rcn
     
@@ -202,17 +227,8 @@ class Driver(Supervisor):
         """
         Runs the main control loop of the robot, managing its behavior based on the current state.
         """
-        # Initialize the state based on run_mode
-        if self.run_mode == 'manual_control':
-            self.state = self.STATE_MANUAL_CONTROL
-        elif self.run_mode == 'explore':
-            self.state = self.STATE_EXPLORE
-        elif self.run_mode == 'exploit':
-            self.state = self.STATE_EXPLOIT
-        else:
-            raise ValueError(f"Unknown run mode: {self.run_mode}")
 
-        print(f"Starting {self.stage} stage in {self.run_mode} mode.")
+        print(f"Starting robot in stage {self.robot_stage.name}")
         print(f"Goal at {self.goal_location}")
 
         while True:
@@ -223,12 +239,18 @@ class Driver(Supervisor):
                 self.state = self.STATE_MANUAL_CONTROL
 
             # Handle the robot's state
-            if self.state == self.STATE_MANUAL_CONTROL:
+            if self.robot_stage == RobotStage.MANUAL_CONTROL:
                 self.manual_control()
-            elif self.state == self.STATE_EXPLORE:
+            elif (
+                self.robot_stage == RobotStage.LEARN_OJAS
+                or self.robot_stage == RobotStage.LEARN_HEBB
+                or self.robot_stage == RobotStage.PLOTTING
+            ):
                 self.explore()
-            elif self.state == self.STATE_EXPLOIT:
+            elif self.robot_stage == RobotStage.EXPLOIT:
                 self.exploit()
+            elif self.robot_stage == RobotStage.RECORDING:
+                self.recording_mode()
             else:
                 print("Unknown state. Exiting...")
                 break 
@@ -258,7 +280,7 @@ class Driver(Supervisor):
                 self.turn(np.deg2rad(60))
                 break
 
-            if self.stage == "dmtp":
+            if self.robot_stage == RobotStage.LEARN_HEBB:
                 self.current_pcn_state += self.pcn.place_cell_activations
                 self.check_goal_reached()
                 
@@ -266,7 +288,7 @@ class Driver(Supervisor):
             self.forward()
             self.check_goal_reached()
 
-        if self.new_stage == RobotStage.LEARN_HEBB:
+        if self.robot_stage == RobotStage.LEARN_HEBB:
             self.current_pcn_state /= s  # 's' should be greater than 0
 
         self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
