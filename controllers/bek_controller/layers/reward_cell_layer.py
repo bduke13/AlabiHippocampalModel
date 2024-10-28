@@ -4,8 +4,8 @@ tf.random.set_seed(5)
 from copy import deepcopy
 
 class RewardCellLayer:
-    def __init__(self, num_reward_cells=10, input_dim=1000, num_replay=3):
-        '''
+    def __init__(self, num_reward_cells=1, input_dim=200, num_replay=3, context=0):
+        """
         Initializes the Reward Cell Layer.
 
         Parameters:
@@ -24,10 +24,15 @@ class RewardCellLayer:
         self.num_replay = num_replay
 
         # Initialize weights with small random values
-        self.w_in = tf.Variable(tf.zeros((num_reward_cells, input_dim)), dtype=tf.float32)
-        
-        # Effective input weight matrix, used for updating during visits
-        self.w_in_effective = tf.Variable(tf.zeros((num_reward_cells, input_dim)), dtype=tf.float32)
+        initializer = tf.keras.initializers.RandomNormal(mean=0.0, stddev=0.01)
+    
+        self.w_in = tf.Variable(
+            initializer(shape=(num_reward_cells, input_dim)), dtype=tf.float32
+        )
+    
+        self.w_in_effective = tf.Variable(
+            tf.identity(self.w_in), dtype=tf.float32
+        )
 
     def update_reward_cell_activations(self, input_data, visit=False, context=0):
         '''
@@ -101,6 +106,6 @@ class RewardCellLayer:
         delta = next_reward - prediction
 
         # Update weights based on the TD learning rule
-        learning_rate = 0.1  # Adjust the learning rate as needed
+        learning_rate = 0.2  # Adjust the learning rate as needed
         updated_weights = self.w_in_effective[self.context] + learning_rate * delta * input_data
         self.w_in_effective = tf.tensor_scatter_nd_update(self.w_in_effective, [[self.context]], [updated_weights])
