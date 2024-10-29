@@ -24,62 +24,86 @@ PI = tf.constant(np.pi)
 rng = default_rng()  # random number generator
 cmap = get_cmap("plasma")
 
-# Robot stages
+
 class RobotMode(Enum):
-    # Random exploration only enabling competition (ojas) between place cells until time limit
+    """Defines the different operating modes for the robot's behavior and learning.
+
+    The robot can operate in several modes that control its behavior, learning mechanisms,
+    and data collection. These modes determine how the robot explores its environment,
+    learns from experiences, and utilizes learned information.
+
+    Modes:
+        LEARN_OJAS: Initial learning phase where the robot randomly explores while only
+            enabling competition (Oja's rule) between place cells. Runs until time limit.
+
+        LEARN_HEBB: Secondary learning phase with both Oja's rule and tripartite (Hebbian)
+            learning enabled during random exploration. Must run after LEARN_OJAS since
+            place cells need to stabilize first.
+
+        DMTP: Delayed Matching to Place task. Random exploration with both learning rules
+            enabled until goal is reached, then updates reward map in reward cell network.
+
+        EXPLOIT: Goal-directed navigation using the learned reward map. Both learning
+            rules remain enabled while the robot navigates to known goals.
+
+        PLOTTING: Random exploration mode with all learning disabled in both place cell
+            and reward cell networks. Used for visualization and analysis.
+
+        MANUAL_CONTROL: Enables direct user control of the robot in the Webots simulator
+            through keyboard inputs.
+
+        RECORDING: Random exploration with learning disabled, focused on collecting and
+            saving sensor data for offline analysis or training.
+    """
+
     LEARN_OJAS = auto()
-    # Random exploration with both ojas and tripartite learning until time limit. Only run after learn_ojas (place cells havent stabilized before then)
     LEARN_HEBB = auto()
-    # Random exploration with both ojas and tripartite learning until goal reached then updates reward map in rcn
     DMTP = auto()
-    # Drives towards goal using learned reward map. Both ojas and tripartite are enabled
     EXPLOIT = auto()
-    # Random exploration with no learning enabled in pcn or rcn
     PLOTTING = auto()
-    # Manual control from user to robot in Webots
     MANUAL_CONTROL = auto()
-    # Random exploration with no learning. Saves out sensor data for offline driver
     RECORDING = auto()
 
+
 class Driver(Supervisor):
-    """
-    The Driver class controls the robot, manages its sensory inputs, and coordinates the activation of neural network layers
-    (place cells and reward cells) to simulate navigation and learning in an environment.
+    """Controls robot navigation and learning using neural networks for place and reward cells.
+
+    This class manages the robot's sensory inputs, motor outputs, and neural network layers
+    to enable autonomous navigation and learning in an environment. It coordinates between
+    place cells for spatial representation and reward cells for goal-directed behavior.
 
     Attributes:
-        max_speed (float): The maximum speed of the robot.
-        left_speed (float): The current speed of the left wheel.
-        right_speed (float): The current speed of the right wheel.
-        timestep (int): The timestep for each simulation step.
-        wheel_radius (float): The radius of the robot's wheels.
-        axle_length (float): The distance between the robot's wheels.
-        run_time (int): The total run time for the simulation in seconds.
-        num_steps (int): The number of simulation steps based on run time and timestep.
-        sensor_data_x (ndarray): Array to store x-coordinates of sensor data.
-        sensor_data_y (ndarray): Array to store y-coordinates of sensor data.
-        place_cell_activations (ndarray): Array to store activations of place cells over time.
-        head_direction_activations (ndarray): Array to store head direction cell activations over time.
-        goal_estimates (ndarray): Array to store estimates of the goal location over time.
-        robot (object): Placeholder for the robot instance.
-        keyboard (object): Placeholder for the keyboard instance.
-        compass (object): Placeholder for the compass sensor.
-        range_finder (object): Placeholder for the range finder sensor.
-        left_bumper (object): Placeholder for the left bumper sensor.
-        right_bumper (object): Placeholder for the right bumper sensor.
-        display (object): Placeholder for the display instance.
-        rotation_field (object): Placeholder for the rotation field of the robot.
-        left_motor (object): Placeholder for the left motor of the robot.
-        right_motor (object): Placeholder for the right motor of the robot.
-        left_position_sensor (object): Placeholder for the left wheel position sensor.
-        right_position_sensor (object): Placeholder for the right wheel position sensor.
-        pcn (PlaceCellLayer): Instance of the place cell network.
-        rcn (RewardCellLayer): Instance of the reward cell network.
-        boundary_data (Tensor): Tensor to store boundary data from sensors.
-        goal_location (list): The coordinates of the goal location.
-        expected_reward (float): The expected reward at the current state.
-        last_reward (float): The reward received in the previous step.
-        current_pcn_state (Tensor): Tensor representing the current state.
-        prev_pcn_state (Tensor): Tensor representing the previous state.
+        max_speed (float): Maximum wheel rotation speed in rad/s.
+        left_speed (float): Current left wheel speed in rad/s.
+        right_speed (float): Current right wheel speed in rad/s.
+        timestep (int): Duration of each simulation step in ms.
+        wheel_radius (float): Radius of robot wheels in meters.
+        axle_length (float): Distance between wheels in meters.
+        num_steps (int): Total number of simulation steps.
+        hmap_x (ndarray): History of x-coordinates.
+        hmap_y (ndarray): History of y-coordinates.
+        hmap_z (ndarray): History of place cell activations.
+        hmap_h (ndarray): History of head direction activations.
+        hmap_g (ndarray): History of goal estimates.
+        robot (Robot): Main robot controller instance.
+        keyboard (Keyboard): Keyboard input device.
+        compass (Compass): Compass sensor device.
+        range_finder (RangeFinder): LiDAR sensor device.
+        left_bumper (TouchSensor): Left collision sensor.
+        right_bumper (TouchSensor): Right collision sensor.
+        rotation_field (Field): Robot rotation field.
+        left_motor (Motor): Left wheel motor controller.
+        right_motor (Motor): Right wheel motor controller.
+        left_position_sensor (PositionSensor): Left wheel encoder.
+        right_position_sensor (PositionSensor): Right wheel encoder.
+        pcn (PlaceCellLayer): Place cell neural network.
+        rcn (RewardCellLayer): Reward cell neural network.
+        boundary_data (Tensor): Current LiDAR readings.
+        goal_location (List[float]): Target [x,y] coordinates.
+        expected_reward (float): Predicted reward at current state.
+        last_reward (float): Reward received in previous step.
+        current_pcn_state (Tensor): Current place cell activations.
+        prev_pcn_state (Tensor): Previous place cell activations.
     """
 
     def initialization(
@@ -91,12 +115,23 @@ class Driver(Supervisor):
         enable_ojas: Optional[bool] = None,
         enable_hebb: Optional[bool] = None,
     ):
-        """
-        Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
+        """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
-        Parameters:
-            randomize_start_loc: Randomize agent spawn location
-            run_time_hours (int): Total run time for the simulation in hours.
+        Args:
+            mode (RobotMode): The operating mode for the robot.
+            randomize_start_loc (bool, optional): Whether to randomize the agent's spawn location.
+                Defaults to True.
+            run_time_hours (int, optional): Total run time for the simulation in hours.
+                Defaults to 1.
+            start_loc (Optional[List[int]], optional): Specific starting location coordinates [x,y].
+                Defaults to None.
+            enable_ojas (Optional[bool], optional): Flag to enable Oja's learning rule.
+                If None, determined by robot mode. Defaults to None.
+            enable_hebb (Optional[bool], optional): Flag to enable Hebbian learning.
+                If None, determined by robot mode. Defaults to None.
+
+        Returns:
+            None
         """
         self.mode = mode
 
@@ -126,15 +161,21 @@ class Driver(Supervisor):
             with open("hmap_z.pkl", "rb") as f:
                 self.hmap_z = np.asarray(pickle.load(f))
             with open("hmap_h.pkl", "rb") as f:
-                self.hmap_h = np.zeros((self.num_steps, self.n_hd))  # head direction cell activations
+                self.hmap_h = np.zeros(
+                    (self.num_steps, self.n_hd)
+                )  # head direction cell activations
             with open("hmap_g.pkl", "rb") as f:
                 self.hmap_g = np.zeros(self.num_steps)  # goal estimates
         except:
             # Sensor data storage initialization if loading fails
             self.hmap_x = np.zeros(self.num_steps)  # x-coordinates
             self.hmap_y = np.zeros(self.num_steps)  # y-coordinates
-            self.hmap_z = np.zeros((self.num_steps, self.num_place_cells))  # place cell activations
-            self.hmap_h = np.zeros((self.num_steps, self.n_hd))  # head direction cell activations
+            self.hmap_z = np.zeros(
+                (self.num_steps, self.num_place_cells)
+            )  # place cell activations
+            self.hmap_h = np.zeros(
+                (self.num_steps, self.n_hd)
+            )  # head direction cell activations
             self.hmap_g = np.zeros(self.num_steps)  # goal estimates
 
         # Initialize hardware components and sensors
@@ -219,8 +260,19 @@ class Driver(Supervisor):
         enable_ojas: Optional[bool] = None,
         enable_hebb: Optional[bool] = None,
     ):
-        """
-        Loads the place cell network from a file if available, or initializes a new one.
+        """Loads an existing place cell network from disk or initializes a new one.
+
+        Args:
+            num_place_cells (int): Number of place cells in the network.
+            n_hd (int): Number of head direction cells.
+            timestep (int): Time step duration in milliseconds.
+            enable_ojas (Optional[bool], optional): Flag to enable Oja's learning rule.
+                If None, determined by robot mode. Defaults to None.
+            enable_hebb (Optional[bool], optional): Flag to enable Hebbian learning.
+                If None, determined by robot mode. Defaults to None.
+
+        Returns:
+            PlaceCellLayer: The loaded or newly initialized place cell network.
         """
         try:
             with open("pcn.pkl", "rb") as f:
@@ -258,8 +310,15 @@ class Driver(Supervisor):
         return self.pcn
 
     def load_rcn(self, num_reward_cells: int, num_place_cells: int, num_replay: int):
-        """
-        Loads the reward cell network from a file if available, or initializes a new one.
+        """Loads or initializes the reward cell network.
+
+        Args:
+            num_reward_cells (int): Number of reward cells in the network.
+            num_place_cells (int): Number of place cells providing input.
+            num_replay (int): Number of replay iterations for memory consolidation.
+
+        Returns:
+            RewardCellLayer: The loaded or newly initialized reward cell network.
         """
         try:
             with open("rcn.pkl", "rb") as f:
@@ -277,8 +336,13 @@ class Driver(Supervisor):
     ########################################### RUN LOOP ###########################################
 
     def run(self):
-        """
-        Runs the main control loop of the robot, managing its behavior based on the current state.
+        """Runs the main control loop of the robot.
+
+        The method manages the robot's behavior based on its current mode:
+        - MANUAL_CONTROL: Allows user keyboard control
+        - LEARN_OJAS/LEARN_HEBB/DMTP/PLOTTING: Runs exploration behavior
+        - EXPLOIT: Runs goal-directed navigation
+        - RECORDING: Records sensor data
         """
 
         print(f"Starting robot in stage {self.mode}")
@@ -305,9 +369,18 @@ class Driver(Supervisor):
 
     ########################################### EXPLORE ###########################################
 
-    def explore(self):
-        """
-        Handles the logic for the 'explore' mode.
+    def explore(self) -> None:
+        """Handles the exploration mode logic for the robot.
+
+        The robot moves forward for a set number of steps while:
+        - Updating place and reward cell activations
+        - Checking for collisions and turning if needed
+        - Computing TD updates for reward learning
+        - Monitoring goal proximity
+        - Randomly changing direction periodically
+
+        Returns:
+            None
         """
         self.prev_pcn_state = self.current_pcn_state
         self.current_pcn_state *= 0
@@ -354,8 +427,17 @@ class Driver(Supervisor):
     ########################################### EXPLOIT ###########################################
 
     def exploit(self):
-        """
-        Executes the exploitation routine.
+        """Executes goal-directed navigation using learned reward maps.
+
+        The robot:
+        - Computes potential rewards in different directions
+        - Selects movement direction with highest expected reward
+        - Updates place and reward cell activations during movement
+        - Monitors goal proximity and collision status
+        - Switches to exploration if reward expectations are too low
+
+        Returns:
+            None
         """
         # Reset the current place cell state
         self.current_pcn_state *= 0
@@ -450,11 +532,10 @@ class Driver(Supervisor):
             self.current_pcn_state /= self.tau_w
 
     def get_actual_reward(self):
-        """
-        Determines the actual reward for the agent at the current state.
+        """Determines the actual reward for the agent at the current state.
 
         Returns:
-            float: The actual reward value.
+            float: The actual reward value (1.0 if at goal, 0.0 otherwise)
         """
         curr_pos = self.robot.getField("translation").getSFVec3f()
         distance_to_goal = np.linalg.norm(
@@ -469,8 +550,18 @@ class Driver(Supervisor):
     ########################################### RECORDING ###########################################
 
     def record_sensor_data(self):
-        """
-        Records the necessary sensor data: LiDAR readings, positions, and heading angles.
+        """Records sensor data during robot operation.
+
+        Stores:
+            - Current position coordinates
+            - Heading angle in degrees
+            - LiDAR range readings
+
+        The data is stored in the sensor_data dictionary with keys:
+        'positions', 'headings', and 'lidar'.
+
+        Returns:
+            None
         """
         # Get current position
         curr_pos = self.robot.getField("translation").getSFVec3f()
@@ -537,17 +628,21 @@ class Driver(Supervisor):
     ########################################### SENSE ###########################################
 
     def sense(self):
-        """
-        The 'sense' method updates the robot's perception of its environment, including its orientation,
-        distance to obstacles (boundaries), head direction cell activations, and collision detection.
+        """Updates the robot's perception of its environment.
 
-        Steps:
-        1. Capture the LiDAR (range finder) data, which provides distances to obstacles in all directions.
-        2. Get the robot's current heading using the compass, convert it to radians, and adjust the LiDAR data
-        using np.roll() to align it with the robot's heading.
-        3. Compute the current head direction vector and update the activations of the head direction cells.
-        4. Update the collision status by checking the bumper sensors.
-        5. Proceed to the next timestep in the robot's control loop.
+        Updates orientation, distance to obstacles (boundaries), head direction cell
+        activations, and collision detection. The method performs the following steps:
+        1. Captures LiDAR data for obstacle distances
+        2. Gets robot heading and aligns LiDAR data
+        3. Computes head direction vector and cell activations
+        4. Updates collision status from bumper sensors
+        5. Advances to next timestep
+
+        Updates the following instance variables:
+            boundaries: LiDAR range data (720 points)
+            current_heading_deg: Current heading in degrees
+            hd_activations: Head direction cell activations
+            collided: Collision status from bumpers
         """
 
         # 1. Capture distance data from the range finder (LiDAR), which provides 720 points around the robot.
@@ -592,7 +687,15 @@ class Driver(Supervisor):
         # 10. Proceed to the next timestep in the robot's control loop.
         self.step(self.timestep)
 
-    def get_bearing_in_degrees(self, north):
+    def get_bearing_in_degrees(self, north: List[float]) -> float:
+        """Converts compass readings to bearing in degrees.
+
+        Args:
+            north (List[float]): List containing the compass sensor values [x, y, z].
+
+        Returns:
+            float: Bearing angle in degrees (0-360), where 0 is North.
+        """
         rad = np.arctan2(north[0], north[2])
         bearing = (rad - 1.5708) / np.pi * 180.0
         if bearing < 0:
@@ -699,8 +802,13 @@ class Driver(Supervisor):
     ########################################### HELPER METHODS ###########################################
 
     def manual_control(self):
-        """
-        Allows for manual control of the robot using keyboard inputs.
+        """Enables manual control of the robot using keyboard inputs.
+
+        Controls:
+            W: Move forward
+            A: Turn left 90 degrees
+            D: Turn right 90 degrees
+            S: Stop movement
         """
         k = self.keyboard.getKey()
         if k != -1:
@@ -717,12 +825,23 @@ class Driver(Supervisor):
             print("After:", self.hd_activations.argmax(), self.current_heading)
 
     def forward(self):
+        """Moves the robot forward at maximum speed.
+
+        Sets both wheels to max speed, updates motor movement and sensor readings.
+        """
         self.left_speed = self.max_speed
         self.right_speed = self.max_speed
         self.move()
         self.sense()
 
-    def turn(self, angle, circle=False):
+    def turn(self, angle: float, circle: bool = False):
+        """Rotates the robot by the specified angle.
+
+        Args:
+            angle (float): Rotation angle in radians. Positive for counterclockwise, negative for clockwise.
+            circle (bool, optional): If True, only right wheel moves, causing rotation around left wheel.
+                   If False, wheels move in opposite directions. Defaults to False.
+        """
         self.stop()
         self.move()
         l_offset = self.left_position_sensor.getValue()
@@ -747,10 +866,23 @@ class Driver(Supervisor):
         self.sense()
 
     def stop(self):
+        """Stops the robot by setting both wheel velocities to zero.
+
+        Sets both left and right motor velocities to 0, bringing the robot to a complete stop.
+        """
         self.left_motor.setVelocity(0)
         self.right_motor.setVelocity(0)
 
     def move(self):
+        """Updates motor positions and velocities based on current speed settings.
+
+        Sets motor positions to infinity for continuous rotation and applies
+        the current left_speed and right_speed values to the motors.
+
+        Note:
+            Position is set to infinity to allow continuous rotation rather than
+            targeting a specific angle.
+        """
         self.left_motor.setPosition(float("inf"))
         self.right_motor.setPosition(float("inf"))
         self.left_motor.setVelocity(self.left_speed)
