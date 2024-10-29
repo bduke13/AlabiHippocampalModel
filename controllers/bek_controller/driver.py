@@ -400,7 +400,8 @@ class Driver(Supervisor):
             )
 
             if np.any(self.collided):
-                self.turn(np.deg2rad(60))
+                random_angle = np.random.uniform(-np.pi, np.pi) # Random angle between -180 and 180 degrees (in radians)
+                self.turn(random_angle)
                 break
 
             if (
@@ -498,7 +499,9 @@ class Driver(Supervisor):
 
             # Handle collision by turning and updating the reward cell network
             if np.any(self.collided):
-                self.turn(np.deg2rad(60))
+                # Generate a random angle between -180 and 180 degrees (in radians)
+                random_angle = np.random.uniform(-np.pi, np.pi)
+                self.turn(random_angle)
                 self.stop()
                 self.rcn.td_update(self.pcn.place_cell_activations, max_reward)
                 return

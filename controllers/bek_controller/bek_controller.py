@@ -4,7 +4,7 @@ from driver import Driver, RobotMode
 
 bot = Driver()
 # 1. LEARN_OJAS
-# 2. LEARN_HEBB
+# 2. DMTP
 # 3. EXPLOIT
 # 4. (optional) PLOTTING
 
