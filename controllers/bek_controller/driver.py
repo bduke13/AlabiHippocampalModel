@@ -153,30 +153,11 @@ class Driver(Supervisor):
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
         self.goal_r = {"explore": 0.3, "exploit": 0.5}
 
-        try:
-            with open("hmap_x.pkl", "rb") as f:
-                self.hmap_x = pickle.load(f)
-            with open("hmap_y.pkl", "rb") as f:
-                self.hmap_y = pickle.load(f)
-            with open("hmap_z.pkl", "rb") as f:
-                self.hmap_z = np.asarray(pickle.load(f))
-            with open("hmap_h.pkl", "rb") as f:
-                self.hmap_h = np.zeros(
-                    (self.num_steps, self.n_hd)
-                )  # head direction cell activations
-            with open("hmap_g.pkl", "rb") as f:
-                self.hmap_g = np.zeros(self.num_steps)  # goal estimates
-        except:
-            # Sensor data storage initialization if loading fails
-            self.hmap_x = np.zeros(self.num_steps)  # x-coordinates
-            self.hmap_y = np.zeros(self.num_steps)  # y-coordinates
-            self.hmap_z = np.zeros(
-                (self.num_steps, self.num_place_cells)
-            )  # place cell activations
-            self.hmap_h = np.zeros(
-                (self.num_steps, self.n_hd)
-            )  # head direction cell activations
-            self.hmap_g = np.zeros(self.num_steps)  # goal estimates
+        self.hmap_x = np.zeros(self.num_steps)  # x-coordinates
+        self.hmap_y = np.zeros(self.num_steps)  # y-coordinates
+        self.hmap_z = np.zeros((self.num_steps, self.num_place_cells))  # place cell activations
+        self.hmap_h = np.zeros((self.num_steps, self.n_hd))  # head direction cell activations
+        self.hmap_g = np.zeros(self.num_steps)  # goal estimates
 
         # Initialize hardware components and sensors
         self.robot = self.getFromDef("agent")  # Placeholder for robot instance
