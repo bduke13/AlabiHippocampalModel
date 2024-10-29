@@ -15,23 +15,28 @@ This project explores the role of place cells in the hippocampus of rodents, foc
     Example:
     ```python
     from driver import Driver
+    from enums import RobotMode
 
-    driver = Driver(num_place_cells=1000, num_reward_cells=10, num_head_directions=8, run_time_hours=2, timestep=96)
-    driver.initialization(context=0, mode="explore", randomize=True)
+    driver = Driver(num_place_cells=200, num_reward_cells=10, num_head_directions=8, run_time_hours=2, timestep=96)
+    driver.initialization(mode=RobotMode.LEARN_OJAS, randomize_start_loc=True, run_time_hours=1)
     ```
 
-3. **Running the Simulation**: After initializing, use the `run` method to start the simulation in the specified mode.
+3. **Running the Simulation**: After initializing, use the `run` method to start the simulation in the mode set in initialization.
 
     Example:
     ```python
-    driver.run(mode="explore")
+    driver.run()
     ```
 
 4. **Customization**: Modify the `Driver` class parameters to suit your simulation needs, such as the number of place cells, reward cells, or the duration of the simulation.
 
 ## File Structure
 - `driver.py`: Contains the `Driver` class which manages the simulation.
-- `networks.py`: Contains neural network definitions used by the driver.
+- `networks/`: Directory that contains neural network definitions used by the driver.
+  - `boundary_vector_cell_layer`: Layer that activates cells based on obstacles and their placements in the environment relative to the agent
+  - `head_direction_layer`: Layer that activates cells based on the robot's position relative to its starting orientation
+  - `place_cell_layer`: Layer that activates cells based on the robot's learned representation of location in the environment
+  - `reward_cell_layer`: Layer that associates a set of place cell activations to a reward value
 - `requirements.txt`: Lists the dependencies required to run the project.
 
 ## Setting Up the Environment
