@@ -33,11 +33,6 @@ try:
 except:
     pass
 
-RobotStage = Enum(
-    "RobotStage",
-    ["LEARN_OJAS", "LEARN_HEBB", "EXPLOIT", "PLOTTING", "MANUAL_CONTROL", "RECORDING"],
-)
-
 
 class Driver(Supervisor):
     """
@@ -95,7 +90,7 @@ class Driver(Supervisor):
         """
         # Stage and RunMode
         self.stage = stage
-        
+
         # Set the run mode based on the current stage
         self.set_mode()
 
@@ -103,7 +98,7 @@ class Driver(Supervisor):
         self.num_place_cells = 200
         self.num_reward_cells = 1
         self.n_hd = 8
-        self.timestep = 32*2  # WorldInfo.basicTimeStep = 32ms
+        self.timestep = 32 * 2  # WorldInfo.basicTimeStep = 32ms
         self.tau_w = 10  # time constant for the window function
 
         # Robot parameters
@@ -219,7 +214,7 @@ class Driver(Supervisor):
             )
             print("Initialized new Reward Cell Network.")
         return self.rcn
-    
+
     def set_mode(self):
         """
         Configures the operational mode of the robot based on the current stage.
@@ -236,7 +231,7 @@ class Driver(Supervisor):
             self.mode = RobotMode.EXPLOIT
         else:
             raise ValueError(f"Unknown robot stage: {self.stage}")
-        
+
     ########################################### RUN LOOP ###########################################
 
     def run(self):
@@ -285,12 +280,14 @@ class Driver(Supervisor):
 
             # Update the reward cell activations
             self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations)
-            
+
             # Determine the actual reward (you may need to define how to calculate this)
             actual_reward = self.get_actual_reward()
-            
+
             # Perform TD update
-            self.rcn.td_update(self.pcn.place_cell_activations, next_reward=actual_reward)
+            self.rcn.td_update(
+                self.pcn.place_cell_activations, next_reward=actual_reward
+            )
 
             if np.any(self.collided):
                 self.turn(np.deg2rad(60))
@@ -308,7 +305,6 @@ class Driver(Supervisor):
             self.current_pcn_state /= s  # 's' should be greater than 0
 
         self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
-
 
     ########################################### EXPLOIT ###########################################
 
@@ -401,7 +397,9 @@ class Driver(Supervisor):
                 # Update reward cell activations and perform TD update
                 self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations)
                 actual_reward = self.get_actual_reward()
-                self.rcn.td_update(self.pcn.place_cell_activations, next_reward=actual_reward)
+                self.rcn.td_update(
+                    self.pcn.place_cell_activations, next_reward=actual_reward
+                )
 
             # Normalize the accumulated place cell state over the time window
             self.current_pcn_state /= self.tau_w
@@ -422,7 +420,7 @@ class Driver(Supervisor):
             return 1.0  # Reward for reaching the goal
         else:
             return 0.0  # No reward otherwise
-        
+
     ########################################### RECORDING ###########################################
 
     def record_sensor_data(self):
