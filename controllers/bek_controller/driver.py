@@ -13,7 +13,7 @@ import tkinter as tk
 from tkinter import N, messagebox
 from typing import Optional, List
 from controller import Supervisor, Robot
-from enums import RobotMode
+from enum import Enum, auto
 from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
 from layers.head_direction_layer import HeadDirectionLayer
 from layers.place_cell_layer import PlaceCellLayer
@@ -24,16 +24,22 @@ PI = tf.constant(np.pi)
 rng = default_rng()  # random number generator
 cmap = get_cmap("plasma")
 
-try:
-    with open("hmap_x.pkl", "rb") as f:
-        hmap_x = pickle.load(f)
-    with open("hmap_y.pkl", "rb") as f:
-        hmap_y = pickle.load(f)
-    with open("hmap_z.pkl", "rb") as f:
-        hmap_z = np.asarray(pickle.load(f))
-except:
-    pass
-
+# Robot stages
+class RobotMode(Enum):
+    # Random exploration only enabling competition (ojas) between place cells until time limit
+    LEARN_OJAS = auto()
+    # Random exploration with both ojas and tripartite learning until time limit. Only run after learn_ojas (place cells havent stabilized before then)
+    LEARN_HEBB = auto()
+    # Random exploration with both ojas and tripartite learning until goal reached then updates reward map in rcn
+    DMTP = auto()
+    # Drives towards goal using learned reward map. Both ojas and tripartite are enabled
+    EXPLOIT = auto()
+    # Random exploration with no learning enabled in pcn or rcn
+    PLOTTING = auto()
+    # Manual control from user to robot in Webots
+    MANUAL_CONTROL = auto()
+    # Random exploration with no learning. Saves out sensor data for offline driver
+    RECORDING = auto()
 
 class Driver(Supervisor):
     """
@@ -112,16 +118,24 @@ class Driver(Supervisor):
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
         self.goal_r = {"explore": 0.3, "exploit": 0.5}
 
-        # Sensor data storage
-        self.hmap_x = np.zeros(self.num_steps)
-        self.hmap_y = np.zeros(self.num_steps)
-        self.hmap_z = np.zeros(
-            (self.num_steps, self.num_place_cells)
-        )  # place cell activations
-        self.hmap_h = np.zeros(
-            (self.num_steps, self.n_hd)
-        )  # head direction cell activations
-        self.hmap_g = np.zeros(self.num_steps)  # goal estimates
+        try:
+            with open("hmap_x.pkl", "rb") as f:
+                self.hmap_x = pickle.load(f)
+            with open("hmap_y.pkl", "rb") as f:
+                self.hmap_y = pickle.load(f)
+            with open("hmap_z.pkl", "rb") as f:
+                self.hmap_z = np.asarray(pickle.load(f))
+            with open("hmap_h.pkl", "rb") as f:
+                self.hmap_h = np.zeros((self.num_steps, self.n_hd))  # head direction cell activations
+            with open("hmap_g.pkl", "rb") as f:
+                self.hmap_g = np.zeros(self.num_steps)  # goal estimates
+        except:
+            # Sensor data storage initialization if loading fails
+            self.hmap_x = np.zeros(self.num_steps)  # x-coordinates
+            self.hmap_y = np.zeros(self.num_steps)  # y-coordinates
+            self.hmap_z = np.zeros((self.num_steps, self.num_place_cells))  # place cell activations
+            self.hmap_h = np.zeros((self.num_steps, self.n_hd))  # head direction cell activations
+            self.hmap_g = np.zeros(self.num_steps)  # goal estimates
 
         # Initialize hardware components and sensors
         self.robot = self.getFromDef("agent")  # Placeholder for robot instance
