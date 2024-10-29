@@ -1,8 +1,9 @@
 
-# Context-Dependent Spatial Representations in the Hippocampus using Place Cell Dendritic Computing
+# Self Organizing Place Cell Navigation Model
 
-## Citation
+## Citations
 A. Alabi, D. Vanderelst and A. A. Minai, "Context-Dependent Spatial Representations in the Hippocampus using Place Cell Dendritic Computation," 2022 International Joint Conference on Neural Networks (IJCNN), Padua, Italy, 2022, pp. 1-8, doi: 10.1109/IJCNN55064.2022.9892401.
+B. FILL IN ANY MORE
 
 ## Overview
 This project explores the role of place cells in the hippocampus of rodents, focusing on how they encode physical space and exhibit context-dependent spatial representations. The project includes simulations that model place cells using dendritic computation to demonstrate how they can reuse spatial representations across different contexts while maintaining uncorrelated place fields.
