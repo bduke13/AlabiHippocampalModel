@@ -1,5 +1,8 @@
 astropy==5.1
-matplotlib==3.7.1
+keras==2.13.1
 numpy==1.24.3
-tensorflow==2.15.0
-tensorflow_intel==2.15.0
+pandas==2.2.3
+scikit-learn==1.5.2
+scipy==1.13.1
+tensorflow==2.13.0
+tk==0.1.0
