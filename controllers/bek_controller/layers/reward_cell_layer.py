@@ -7,14 +7,17 @@ tf.random.set_seed(5)
 
 class RewardCellLayer:
     def __init__(self, num_reward_cells=1, input_dim=200, num_replay=3, context=0):
-        """
-        Initializes the Reward Cell Layer.
+        """Initialize the Reward Cell Layer.
 
-        Parameters:
-        num_reward_cells: Number of reward cells in the model. One reward cell tracks an individual reward map or context.
-        input_dim: Dimension of the input vector to the layer (== num_pc).
-        num_replay: Number of replay iterations for the reward learning process.
-        context: Decides which context to use for activations. Context 0 selects the first reward cell.
+        Args:
+            num_reward_cells: Number of reward cells in the model. One reward cell
+                tracks an individual reward map or context. Defaults to 1.
+            input_dim: Dimension of the input vector to the layer (== num_pc).
+                Defaults to 200.
+            num_replay: Number of replay iterations for the reward learning process.
+                Defaults to 3.
+            context: Decides which context to use for activations. Context 0 selects
+                the first reward cell. Defaults to 0.
         """
         # Given n reward cells, each reward cell has a corresponding weight vector, accessed by the index of the cell. Just use 0 for now.
         self.context = context
@@ -39,12 +42,11 @@ class RewardCellLayer:
         self.w_in_effective = tf.Variable(tf.identity(self.w_in), dtype=tf.float32)
 
     def update_reward_cell_activations(self, input_data, visit=False):
-        """
-        Computes the activations of reward cells based on input data.
+        """Compute the activations of reward cells based on input data.
 
-        Parameters:
-        input_data: The input data for the reward cells.
-        visit: Boolean flag indicating if the cell is being visited.
+        Args:
+            input_data: array-like, the input data for the reward cells.
+            visit: Flag indicating if the cell is being visited. Defaults to False.
         """
         # Calculate the norm of the input data
         input_norm = tf.linalg.norm(input_data, ord=1)
@@ -70,11 +72,10 @@ class RewardCellLayer:
             # self.w_in = tf.identity(self.w_in_effective)
 
     def replay(self, pcn):
-        """
-        Replays the place cell activations and updates the reward cell weights.
+        """Replay the place cell activations and update reward cell weights.
 
-        Parameters:
-        pcn: The place cell network.
+        Args:
+            pcn: PlaceCellNetwork instance for replay processing.
         """
         # Create a copy of the place cell network
         pcn_copy = deepcopy(pcn)
@@ -122,12 +123,11 @@ class RewardCellLayer:
         self.w_in_effective = tf.identity(self.w_in)
 
     def td_update(self, input_data, next_reward):
-        """
-        Temporal difference (TD) update method for reward learning.
+        """Perform temporal difference (TD) update for reward learning.
 
-        Parameters:
-        input_data: Input to the reward cell layer.
-        next_reward: Reward at the next time step.
+        Args:
+            input_data: array-like, input to the reward cell layer.
+            next_reward: float, reward at the next time step.
         """
         # Calculate the prediction error (delta)
         prediction = tf.tensordot(self.w_in_effective[self.context], input_data, axes=1)

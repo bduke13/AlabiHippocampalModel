@@ -7,11 +7,13 @@ tf.random.set_seed(5)
 
 
 class PlaceCellLayer:
-    """
-    The PlaceCellLayer class models a layer of place cells that receive input from a Boundary Vector Cell (BVC) layer.
-    Place cells develop spatially localized receptive fields (place fields) through competitive learning and synaptic plasticity.
+    """Model a layer of place cells receiving input from Boundary Vector Cells.
 
-    This implementation is based on the model described in Chapter 3 of the dissertation, specifically Equations (3.2a), (3.2b), and (3.3).
+    Place cells develop spatially localized receptive fields (place fields) through
+    competitive learning and synaptic plasticity.
+
+    This implementation is based on the model described in Chapter 3 of the
+    dissertation, specifically Equations (3.2a), (3.2b), and (3.3).
     """
 
     def __init__(
@@ -23,16 +25,15 @@ class PlaceCellLayer:
         enable_ojas: bool = False,
         enable_hebb: bool = False,
     ):
-        """
-        Initializes the Place Cell Layer.
+        """Initialize the Place Cell Layer.
 
-        Parameters:
-        - bvc_layer (BoundaryVectorCellLayer): The bvc layer used as input to the place cell activations
-        - num_pc (int): Number of place cells in the layer.
-        - input_dim (int): Dimension of the input vector to the layer (e.g., 720 for RPLidar).
-        - timestep (int): Time step for simulation or learning updates (in milliseconds).
-        - max_dist (float): Maximum distance that the boundary vector cells (BVCs) respond to.
-        - n_hd (int): Number of head direction cells.
+        Args:
+            bvc_layer: The BVC layer used as input to place cell activations.
+            num_pc: Number of place cells in the layer.
+            timestep: Time step for simulation/learning updates in milliseconds.
+            n_hd: Number of head direction cells.
+            enable_ojas: Enable weight updates via competition.
+            enable_hebb: Enable tripartite synapse weight updates.
         """
         rng = default_rng()
 
@@ -112,16 +113,15 @@ class PlaceCellLayer:
         # Enables/disables updating weights in the tripartite synapses to track adjacencies between cells
         self.enable_hebb = enable_hebb
 
-    def get_place_cell_activations(self, input_data, hd_activations, collided=False):
-        """
-        Computes the activation of place cells based on the input from boundary vector cells (BVCs) and head direction activations.
+    def get_place_cell_activations(
+        self, input_data, hd_activations, collided: bool = False
+    ):
+        """Compute place cell activations from BVC and head direction inputs.
 
-        Parameters:
-        - input_data (tuple): Input to the BVC layer.
-            - input_data[0]: Array of distances (e.g., from LiDAR or range finder).
-            - input_data[1]: Array of angles corresponding to those distances.
-        - hd_activations (array): Head direction activations.
-        - collided (bool): Indicates if the agent has collided with an obstacle.
+        Args:
+            input_data: Tuple of (distances, angles) as input to BVC layer.
+            hd_activations: Head direction cell activations.
+            collided: Whether agent has collided with obstacle.
         """
         # Store the previous place cell activations
         self.prev_place_cell_activations = tf.identity(self.place_cell_activations)
@@ -211,31 +211,29 @@ class PlaceCellLayer:
             self.w_in.assign_add(weight_update)
 
     def reset_activations(self):
-        """
-        Resets the place cell activations and related variables to zero.
-        """
+        """Reset place cell activations and related variables to zero."""
         self.place_cell_activations *= 0
         self.activation_update *= 0
         self.place_cell_trace = None
 
     def preplay(self, direction, num_steps=1):
-        """
-        Simulates the exploitation or preplay of place cell activations based on the recurrent weights.
-        This is used to predict future states without actual movement.
+        """Simulate preplay of place cell activations using recurrent weights.
 
-        Parameters:
-        - direction (int): The index of the head direction in which to exploit the recurrent weights.
-        - num_steps (int): Number of exploitation steps to perform (simulates looking ahead).
+        Used to predict future states without actual movement.
+
+        Args:
+            direction: Index of head direction for exploiting recurrent weights.
+            num_steps: Number of exploitation steps to simulate looking ahead.
 
         Returns:
-        - place_cell_activations (tf.Tensor): The updated place cell activations after exploitation.
+            Updated place cell activations after exploitation.
         """
         # Copy the current place cell activations
         # Shape: (num_pc,)
         place_cell_activations = tf.identity(self.place_cell_activations)
 
         # Iterate to update the place cell activations
-        for step in range(num_steps):
+        for _ in range(num_steps):
             # Store previous activations
             previous_activations = tf.identity(place_cell_activations)
 

@@ -1,3 +1,4 @@
+from typing import Union
 import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
@@ -11,20 +12,19 @@ class BoundaryVectorCellLayer:
         n_hd: int,
         sigma_ang: float,
         sigma_d: float,
-    ):
-        """
-        Initializes the boundary vector cell (BVC) layer.
-
-        Parameters:
-        max_dist (float): Max distance that the BVCs respond to. Units depend on the context of the environment.
-        input_dim (int): Size of input vector to the BVC layer (e.g., 720 for RPLidar).
-        n_hd (int): Number of head direction cells, each representing a preferred angular direction for the BVCs.
-        sigma_ang (float): Standard deviation (tuning width) for the Gaussian function modeling angular tuning of BVCs (in degrees).
-        sigma_d (float): Standard deviation (tuning width) for the Gaussian function modeling distance tuning of BVCs.
+    ) -> None:
+        """Initialize the boundary vector cell (BVC) layer.
 
         This layer models neurons that respond to obstacles at specific distances and angles. It creates
         8 head directions with 48 neurons for each head direction based on the default parameters,
         resulting in 384 total neurons.
+
+        Args:
+            max_dist: Max distance that the BVCs respond to. Units depend on the context of the environment.
+            input_dim: Size of input vector to the BVC layer (e.g., 720 for RPLidar).
+            n_hd: Number of head direction cells, each representing a preferred angular direction for the BVCs.
+            sigma_ang: Standard deviation (tuning width) for the Gaussian function modeling angular tuning of BVCs (in degrees).
+            sigma_d: Standard deviation (tuning width) for the Gaussian function modeling distance tuning of BVCs.
         """
         # Preferred distances for each BVC; determines how sensitive each BVC is to specific distances.
         self.d_i = np.tile(np.arange(0, max_dist, sigma_d / 2), n_hd)[np.newaxis, :]
@@ -50,16 +50,15 @@ class BoundaryVectorCellLayer:
     def get_bvc_activation(
         self, distances: np.ndarray, angles: np.ndarray
     ) -> tf.Tensor:
-        """
-        Calculates the activation of BVCs based on input distances and angles (e.g., from a LiDAR).
+        """Calculate the activation of BVCs based on input distances and angles.
 
-        Parameters:
-        distances (np.ndarray): Array of distance readings, representing obstacles' distances from the sensor.
-        angles (np.ndarray): Array of angles corresponding to the distance readings.
+        Args:
+            distances: Array of distance readings, representing obstacles' distances from the sensor.
+            angles: Array of angles corresponding to the distance readings.
 
         Returns:
-        tf.Tensor: Activations of the BVC neurons, computed as the product of Gaussian functions for
-                   distance and angle tuning.
+            Activations of the BVC neurons, computed as the product of Gaussian functions for
+            distance and angle tuning.
         """
         PI = tf.constant(np.pi)
 
@@ -81,16 +80,18 @@ class BoundaryVectorCellLayer:
         distances: np.ndarray,
         angles: np.ndarray,
         return_plot: bool = False,
-    ):
-        """
-        Plots the BVC activation on a polar plot and overlays the raw data over the plot as well.
-
-        Parameters:
-        distances (np.ndarray): Input distances to the BVC layer (e.g., from a LiDAR).
-        angles (np.ndarray): Input angles corresponding to the distance measurements.
-        return_plot (bool): If True, returns the plot object instead of showing it.
+    ) -> Union[None, plt.Figure]:
+        """Plot the BVC activation on a polar plot and overlay the raw data.
 
         This function will plot each BVC's activation and the synthetic boundary.
+
+        Args:
+            distances: Input distances to the BVC layer (e.g., from a LiDAR).
+            angles: Input angles corresponding to the distance measurements.
+            return_plot: If True, returns the plot object instead of showing it.
+
+        Returns:
+            The matplotlib Figure object if return_plot is True, otherwise None.
         """
         # Get BVC activations based on distances and angles
         activations = self.get_bvc_activation(distances, angles).numpy()
