@@ -1,7 +1,5 @@
 import numpy as np
 import tensorflow as tf
-
-tf.random.set_seed(5)
 from numpy.random import default_rng
 import matplotlib.pyplot as plt
 from matplotlib.cm import get_cmap
@@ -19,6 +17,7 @@ from layers.head_direction_layer import HeadDirectionLayer
 from layers.place_cell_layer import PlaceCellLayer
 from layers.reward_cell_layer import RewardCellLayer
 
+tf.random.set_seed(5)
 np.set_printoptions(precision=2)
 PI = tf.constant(np.pi)
 rng = default_rng()  # random number generator
@@ -155,8 +154,12 @@ class Driver(Supervisor):
 
         self.hmap_x = np.zeros(self.num_steps)  # x-coordinates
         self.hmap_y = np.zeros(self.num_steps)  # y-coordinates
-        self.hmap_z = np.zeros((self.num_steps, self.num_place_cells))  # place cell activations
-        self.hmap_h = np.zeros((self.num_steps, self.n_hd))  # head direction cell activations
+        self.hmap_z = np.zeros(
+            (self.num_steps, self.num_place_cells)
+        )  # place cell activations
+        self.hmap_h = np.zeros(
+            (self.num_steps, self.n_hd)
+        )  # head direction cell activations
         self.hmap_g = np.zeros(self.num_steps)  # goal estimates
 
         # Initialize hardware components and sensors
@@ -381,7 +384,9 @@ class Driver(Supervisor):
             )
 
             if np.any(self.collided):
-                random_angle = np.random.uniform(-np.pi, np.pi) # Random angle between -180 and 180 degrees (in radians)
+                random_angle = np.random.uniform(
+                    -np.pi, np.pi
+                )  # Random angle between -180 and 180 degrees (in radians)
                 self.turn(random_angle)
                 break
 
