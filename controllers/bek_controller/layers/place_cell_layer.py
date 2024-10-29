@@ -6,6 +6,7 @@ from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
 
 tf.random.set_seed(5)
 
+
 class PlaceCellLayer:
     """
     The PlaceCellLayer class models a layer of place cells that receive input from a Boundary Vector Cell (BVC) layer.
@@ -51,7 +52,7 @@ class PlaceCellLayer:
 
         # Recurrent weight matrix for head direction and place cell interactions
         # Shape: (n_hd, num_pc, num_pc)
-        self.w_rec_hd_place = tf.zeros(shape=(n_hd, num_pc, num_pc), dtype=tf.float32)
+        self.w_rec_tripartite = tf.zeros(shape=(n_hd, num_pc, num_pc), dtype=tf.float32)
 
         # Activation values for place cells
         # Shape: (num_pc,)
@@ -106,6 +107,12 @@ class PlaceCellLayer:
         # Shape: (n_hd, 1, 1)
         self.hd_cell_trace = tf.zeros((n_hd, 1, 1), tf.float64)
 
+        # Enables/disables updating weights to spread place cells through environment via competition
+        self.enable_ojas = False
+
+        # Enables/disables updating weights in the tripartite synapses to track adjacencies between cells
+        self.enable_hebb = False
+
     def get_place_cell_activations(
         self, input_data, hd_activations, mode=RobotMode.LEARNING, collided=False
     ):
@@ -157,7 +164,7 @@ class PlaceCellLayer:
         self.place_cell_activations = tf.tanh(tf.nn.relu(self.activation_update))
 
         # Update the eligibility trace and weights if in "dmtp" mode and no collision
-        if np.any(self.place_cell_activations) and mode == RobotMode.DMTP and not collided:
+        if self.enable_hebb and np.any(self.place_cell_activations):
             # Update the eligibility trace for place cells and head direction cells
             # Eligibility traces are used for temporal difference learning and sequence encoding
             if self.place_cell_trace is None:
@@ -176,7 +183,7 @@ class PlaceCellLayer:
 
             # Update recurrent weights for place cell interactions modulated by head direction
             # This implements sequence learning and is similar to STDP
-            self.w_rec_hd_place += tf.cast(
+            self.w_rec_tripartite += tf.cast(
                 np.nan_to_num(hd_activations)[:, np.newaxis, np.newaxis], tf.float32
             ) * (
                 tf.tensordot(
@@ -193,7 +200,7 @@ class PlaceCellLayer:
 
         # Update the input weights based on the current activations and BVC activations
         # This is the competitive learning rule from Equation (3.3)
-        if np.any(self.place_cell_activations):
+        if self.enable_ojas and np.any(self.place_cell_activations):
             # Compute the weight update according to Oja's rule (Equation 3.3)
             weight_update = self.tau * (
                 self.place_cell_activations[:, np.newaxis]
@@ -241,7 +248,7 @@ class PlaceCellLayer:
             place_cell_activations = tf.tanh(
                 tf.nn.relu(
                     tf.tensordot(
-                        tf.cast(self.w_rec_hd_place[direction], tf.float32),
+                        tf.cast(self.w_rec_tripartite[direction], tf.float32),
                         previous_activations,
                         axes=1,
                     )
