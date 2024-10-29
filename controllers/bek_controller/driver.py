@@ -12,7 +12,7 @@ import time
 import tkinter as tk
 from tkinter import messagebox
 from controller import Supervisor, Robot
-from enum import Enum, auto
+from enums import RobotStage, RobotMode
 from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
 from layers.head_direction_layer import HeadDirectionLayer
 from layers.place_cell_layer import PlaceCellLayer
@@ -32,12 +32,6 @@ try:
         hmap_z = np.asarray(pickle.load(f))
 except:
     pass
-
-RobotStage = Enum(
-    "RobotStage",
-    ["LEARN_OJAS", "LEARN_HEBB", "EXPLOIT", "PLOTTING", "MANUAL_CONTROL", "RECORDING"],
-)
-
 
 class Driver(Supervisor):
     """
@@ -90,40 +84,20 @@ class Driver(Supervisor):
         Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
         Parameters:
-            stage: 'explore'-->'dmpt'-->'exploit'
-            run_mode: 'explore' or 'exploit'
             randomize_start_loc: Randomize agent spawn location
             run_time_hours (int): Total run time for the simulation in hours.
         """
         # Stage and RunMode
-        self.stage = None
-        self.run_mode = None
-        self.robot_stage = stage
-
-        if (
-            self.robot_stage == RobotStage.PLOTTING
-            or self.robot_stage == RobotStage.RECORDING
-        ):
-            self.stage = "explore"
-            self.run_mode = "explore"
-        elif self.robot_stage == RobotStage.LEARN_OJAS:
-            self.clear()
-            self.stage = "learning"
-            self.run_mode = "explore"
-        elif self.robot_stage == RobotStage.LEARN_HEBB:
-            self.stage = "dmtp"
-            self.run_mode = "explore"
-        elif self.robot_stage == RobotStage.EXPLOIT:
-            self.stage = "dmtp"
-            self.run_mode = "exploit"
-        else:
-            raise ValueError(f"Unknown run mode: {self.run_mode}")
+        self.stage = stage
+        
+        # Set the run mode based on the current stage
+        self.set_mode()
 
         # Model parameters
         self.num_place_cells = 200
         self.num_reward_cells = 1
         self.n_hd = 8
-        self.timestep = 32  # WorldInfo.basicTimeStep = 32ms
+        self.timestep = 32*2  # WorldInfo.basicTimeStep = 32ms
         self.tau_w = 10  # time constant for the window function
 
         # Robot parameters
@@ -239,7 +213,24 @@ class Driver(Supervisor):
             )
             print("Initialized new Reward Cell Network.")
         return self.rcn
-
+    
+    def set_mode(self):
+        """
+        Configures the operational mode of the robot based on the current stage.
+        This method helps avoid hardcoding mode strings and keeps the stage-to-mode mapping centralized.
+        """
+        if self.stage == RobotStage.PLOTTING or self.stage == RobotStage.RECORDING:
+            self.mode = RobotMode.EXPLORE
+        elif self.stage == RobotStage.LEARN_OJAS:
+            self.clear()  # Assuming clear is a method that resets relevant settings
+            self.mode = RobotMode.LEARNING
+        elif self.stage == RobotStage.LEARN_HEBB:
+            self.mode = RobotMode.DMTP
+        elif self.stage == RobotStage.EXPLOIT:
+            self.mode = RobotMode.EXPLOIT
+        else:
+            raise ValueError(f"Unknown robot stage: {self.stage}")
+        
     ########################################### RUN LOOP ###########################################
 
     def run(self):
@@ -247,7 +238,7 @@ class Driver(Supervisor):
         Runs the main control loop of the robot, managing its behavior based on the current state.
         """
 
-        print(f"Starting robot in stage {self.robot_stage.name}")
+        print(f"Starting robot in stage {self.stage}")
         print(f"Goal at {self.goal_location}")
 
         while True:
@@ -258,18 +249,18 @@ class Driver(Supervisor):
             #    self.new_stage = self.STATE_MANUAL_CONTROL
 
             # Handle the robot's state
-            if self.robot_stage == RobotStage.MANUAL_CONTROL:
+            if self.stage == RobotStage.MANUAL_CONTROL:
                 self.manual_control()
             elif (
-                self.robot_stage == RobotStage.LEARN_OJAS
-                or self.robot_stage == RobotStage.LEARN_HEBB
-                or self.robot_stage == RobotStage.PLOTTING
+                self.stage == RobotStage.LEARN_OJAS
+                or self.stage == RobotStage.LEARN_HEBB
+                or self.stage == RobotStage.PLOTTING
             ):
                 self.explore()
-            elif self.robot_stage == RobotStage.EXPLOIT:
+            elif self.stage == RobotStage.EXPLOIT:
                 self.exploit()
-            elif self.robot_stage == RobotStage.RECORDING:
-                self.recording_mode()
+            elif self.stage == RobotStage.RECORDING:
+                self.recording()
             else:
                 print("Unknown state. Exiting...")
                 break
@@ -299,7 +290,7 @@ class Driver(Supervisor):
                 self.turn(np.deg2rad(60))
                 break
 
-            if self.robot_stage == RobotStage.LEARN_HEBB:
+            if self.mode == RobotMode.DMTP:
                 self.current_pcn_state += self.pcn.place_cell_activations
                 self.check_goal_reached()
 
@@ -307,7 +298,7 @@ class Driver(Supervisor):
             self.forward()
             self.check_goal_reached()
 
-        if self.robot_stage == RobotStage.LEARN_HEBB:
+        if self.mode == RobotMode.DMTP:
             self.current_pcn_state /= s  # 's' should be greater than 0
 
         self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
@@ -409,8 +400,6 @@ class Driver(Supervisor):
             # Normalize the accumulated place cell state over the time window
             self.current_pcn_state /= self.tau_w
 
-    ########################################### GET ACTUAL REWARD ###########################################
-
     def get_actual_reward(self):
         """
         Determines the actual reward for the agent at the current state.
@@ -464,7 +453,7 @@ class Driver(Supervisor):
 
         print("Sensor data saved.")
 
-    def recording_mode(self):
+    def recording(self):
         """
         Handles the logic for recording sensor data without using place fields.
         """
@@ -497,6 +486,7 @@ class Driver(Supervisor):
             self.save_sensor_data()
             messagebox.showinfo("Information", "Press OK to save recorded data")
             print("Saved!")
+            root = tk.Tk()
             root.destroy()  # Destroy the main window
             self.save(True)
             self.stop()
@@ -577,7 +567,7 @@ class Driver(Supervisor):
         self.pcn.get_place_cell_activations(
             input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)],
             hd_activations=self.hd_activations,
-            mode=self.stage,
+            mode=self.mode,
             collided=np.any(self.collided),
         )
 
@@ -603,7 +593,7 @@ class Driver(Supervisor):
         Check if the robot has reached the goal and perform necessary actions when the goal is reached.
         """
         curr_pos = self.robot.getField("translation").getSFVec3f()
-        if self.stage == "dmtp" and np.allclose(
+        if self.mode == RobotMode.DMTP and np.allclose(
             self.goal_location, [curr_pos[0], curr_pos[2]], 0, self.goal_r["exploit"]
         ):
             self.auto_pilot()  # Navigate to the goal slowly and call rcn.replay()
@@ -628,7 +618,7 @@ class Driver(Supervisor):
             root.destroy()  # Destroy the main window
             self.save(True)
             self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
-        elif (self.stage == "learning" or self.stage == "explore") and (
+        elif (self.mode == RobotMode.LEARNING or self.mode == RobotMode.EXPLORE) and (
             self.getTime() >= 60 * self.run_time_minutes
         ):
             root = tk.Tk()

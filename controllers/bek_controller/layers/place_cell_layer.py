@@ -1,10 +1,10 @@
 import numpy as np
 import tensorflow as tf
 from numpy.random import default_rng
+from enums import RobotStage, RobotMode
 from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
 
 tf.random.set_seed(5)
-
 
 class PlaceCellLayer:
     """
@@ -107,7 +107,7 @@ class PlaceCellLayer:
         self.hd_cell_trace = tf.zeros((n_hd, 1, 1), tf.float64)
 
     def get_place_cell_activations(
-        self, input_data, hd_activations, mode="learn", collided=False
+        self, input_data, hd_activations, mode=RobotMode.LEARNING, collided=False
     ):
         """
         Computes the activation of place cells based on the input from boundary vector cells (BVCs) and head direction activations.
@@ -117,7 +117,7 @@ class PlaceCellLayer:
             - input_data[0]: Array of distances (e.g., from LiDAR or range finder).
             - input_data[1]: Array of angles corresponding to those distances.
         - hd_activations (array): Head direction activations.
-        - mode (str): Operation mode, typically "learn" or "dmtp".
+        - mode (str): Operation mode, typically "learning" or "dmtp".
         - collided (bool): Indicates if the agent has collided with an obstacle.
         """
         # Store the previous place cell activations
@@ -157,7 +157,7 @@ class PlaceCellLayer:
         self.place_cell_activations = tf.tanh(tf.nn.relu(self.activation_update))
 
         # Update the eligibility trace and weights if in "dmtp" mode and no collision
-        if np.any(self.place_cell_activations) and mode == "dmtp" and not collided:
+        if np.any(self.place_cell_activations) and mode == RobotMode.DMTP and not collided:
             # Update the eligibility trace for place cells and head direction cells
             # Eligibility traces are used for temporal difference learning and sequence encoding
             if self.place_cell_trace is None:
