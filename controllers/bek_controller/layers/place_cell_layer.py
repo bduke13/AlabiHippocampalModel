@@ -21,6 +21,8 @@ class PlaceCellLayer:
         num_pc: int = 200,
         timestep: int = 32 * 3,
         n_hd: int = 8,
+        enable_ojas: bool = False,
+        enable_hebb: bool = False,
     ):
         """
         Initializes the Place Cell Layer.
@@ -108,10 +110,10 @@ class PlaceCellLayer:
         self.hd_cell_trace = tf.zeros((n_hd, 1, 1), tf.float64)
 
         # Enables/disables updating weights to spread place cells through environment via competition
-        self.enable_ojas = False
+        self.enable_ojas = enable_ojas
 
         # Enables/disables updating weights in the tripartite synapses to track adjacencies between cells
-        self.enable_hebb = False
+        self.enable_hebb = enable_hebb
 
     def get_place_cell_activations(
         self, input_data, hd_activations, mode=RobotMode.LEARNING, collided=False
@@ -163,7 +165,7 @@ class PlaceCellLayer:
         # Here, ψ is implicitly set to 1
         self.place_cell_activations = tf.tanh(tf.nn.relu(self.activation_update))
 
-        # Update the eligibility trace and weights if in "dmtp" mode and no collision
+        # Update the eligibility trace and weights
         if self.enable_hebb and np.any(self.place_cell_activations):
             # Update the eligibility trace for place cells and head direction cells
             # Eligibility traces are used for temporal difference learning and sequence encoding
