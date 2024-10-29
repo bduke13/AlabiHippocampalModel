@@ -10,9 +10,10 @@ import pickle
 import os
 import time
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import N, messagebox
+from typing import Optional, List
 from controller import Supervisor, Robot
-from enums import RobotStage, RobotMode
+from enums import RobotMode
 from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
 from layers.head_direction_layer import HeadDirectionLayer
 from layers.place_cell_layer import PlaceCellLayer
@@ -77,9 +78,12 @@ class Driver(Supervisor):
 
     def initialization(
         self,
-        stage=RobotStage.PLOTTING,
-        randomize_start_loc=True,
-        run_time_hours=1,
+        mode=RobotMode.PLOTTING,
+        randomize_start_loc: bool = True,
+        run_time_hours: int = 1,
+        start_loc: Optional[List[int]] = None,
+        enable_ojas: Optional[bool] = None,
+        enable_hebb: Optional[bool] = None,
     ):
         """
         Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
@@ -88,17 +92,13 @@ class Driver(Supervisor):
             randomize_start_loc: Randomize agent spawn location
             run_time_hours (int): Total run time for the simulation in hours.
         """
-        # Stage and RunMode
-        self.stage = stage
-
-        # Set the run mode based on the current stage
-        self.set_mode()
+        self.mode = mode
 
         # Model parameters
         self.num_place_cells = 200
         self.num_reward_cells = 1
         self.n_hd = 8
-        self.timestep = 32 * 2  # WorldInfo.basicTimeStep = 32ms
+        self.timestep = 32 * 3
         self.tau_w = 10  # time constant for the window function
 
         # Robot parameters
@@ -144,9 +144,22 @@ class Driver(Supervisor):
         self.right_position_sensor = self.getDevice("right wheel sensor")
         self.right_position_sensor.enable(self.timestep)
 
+        if self.mode == RobotMode.LEARN_OJAS:
+            self.clear()
+
         # Initialize layers
-        self.load_pcn(self.num_place_cells, self.n_hd, self.timestep)
-        self.load_rcn(self.num_reward_cells, self.num_place_cells)
+        self.load_pcn(
+            num_place_cells=self.num_place_cells,
+            n_hd=self.n_hd,
+            timestep=self.timestep,
+            enable_ojas=enable_ojas,
+            enable_hebb=enable_hebb,
+        )
+        self.load_rcn(
+            num_reward_cells=self.num_reward_cells,
+            num_place_cells=self.num_place_cells,
+            num_replay=6,
+        )
         self.head_direction_layer = HeadDirectionLayer(num_cells=self.n_hd)
 
         # Initialize boundaries
@@ -164,14 +177,34 @@ class Driver(Supervisor):
         self.prev_pcn_state = tf.zeros_like(self.pcn.place_cell_activations)
 
         if randomize_start_loc:
-            INITIAL = [rng.uniform(-2.3, 2.3), 0.5, rng.uniform(-2.3, 2.3)]
+            while True:
+                INITIAL = [rng.uniform(-2.3, 2.3), 0.5, rng.uniform(-2.3, 2.3)]
+                # Check if distance to goal is at least 1 meter
+                dist_to_goal = np.sqrt(
+                    (INITIAL[0] - self.goal_location[0]) ** 2
+                    + (INITIAL[2] - self.goal_location[1]) ** 2
+                )
+                if dist_to_goal >= 1.0:
+                    break
             self.robot.getField("translation").setSFVec3f(INITIAL)
+            self.robot.resetPhysics()
+        else:
+            self.robot.getField("translation").setSFVec3f(
+                [start_loc[0], 0.5, start_loc[1]]
+            )
             self.robot.resetPhysics()
 
         self.sense()
         self.compute()
 
-    def load_pcn(self, num_place_cells, n_hd, timestep):
+    def load_pcn(
+        self,
+        num_place_cells: int,
+        n_hd: int,
+        timestep: int,
+        enable_ojas: Optional[bool] = None,
+        enable_hebb: Optional[bool] = None,
+    ):
         """
         Loads the place cell network from a file if available, or initializes a new one.
         """
@@ -190,15 +223,27 @@ class Driver(Supervisor):
             )
 
             self.pcn = PlaceCellLayer(
-                bvc_layer=bvc,
-                num_pc=num_place_cells,
-                timestep=timestep,
-                n_hd=n_hd,
+                bvc_layer=bvc, num_pc=num_place_cells, timestep=timestep, n_hd=n_hd
             )
             print("Initialized new Place Cell Network.")
+
+        if enable_ojas is not None:
+            self.pcn.enable_ojas = enable_ojas
+        elif (
+            self.mode == RobotMode.LEARN_OJAS
+            or self.mode == RobotMode.LEARN_HEBB
+            or self.mode == RobotMode.DMTP
+        ):
+            self.pcn.enable_ojas = True
+
+        if enable_hebb is not None:
+            self.pcn.enable_hebb = enable_hebb
+        elif self.mode == RobotMode.LEARN_HEBB or self.mode == RobotMode.DMTP:
+            self.pcn.enable_hebb = True
+
         return self.pcn
 
-    def load_rcn(self, num_reward_cells, num_place_cells):
+    def load_rcn(self, num_reward_cells: int, num_place_cells: int, num_replay: int):
         """
         Loads the reward cell network from a file if available, or initializes a new one.
         """
@@ -210,27 +255,10 @@ class Driver(Supervisor):
             self.rcn = RewardCellLayer(
                 num_reward_cells=num_reward_cells,
                 input_dim=num_place_cells,
-                num_replay=3,
+                num_replay=num_replay,
             )
             print("Initialized new Reward Cell Network.")
         return self.rcn
-
-    def set_mode(self):
-        """
-        Configures the operational mode of the robot based on the current stage.
-        This method helps avoid hardcoding mode strings and keeps the stage-to-mode mapping centralized.
-        """
-        if self.stage == RobotStage.PLOTTING or self.stage == RobotStage.RECORDING:
-            self.mode = RobotMode.EXPLORE
-        elif self.stage == RobotStage.LEARN_OJAS:
-            self.clear()  # Assuming clear is a method that resets relevant settings
-            self.mode = RobotMode.LEARNING
-        elif self.stage == RobotStage.LEARN_HEBB:
-            self.mode = RobotMode.DMTP
-        elif self.stage == RobotStage.EXPLOIT:
-            self.mode = RobotMode.EXPLOIT
-        else:
-            raise ValueError(f"Unknown robot stage: {self.stage}")
 
     ########################################### RUN LOOP ###########################################
 
@@ -239,28 +267,23 @@ class Driver(Supervisor):
         Runs the main control loop of the robot, managing its behavior based on the current state.
         """
 
-        print(f"Starting robot in stage {self.stage}")
+        print(f"Starting robot in stage {self.mode}")
         print(f"Goal at {self.goal_location}")
 
         while True:
-            # Process keyboard input and check if we need to switch to manual control
-            # key = self.keyboard.getKey()
-            # if key in (ord("W"), ord("D"), ord("A"), ord("S")):
-            #    print("Switching to manual control")
-            #    self.new_stage = self.STATE_MANUAL_CONTROL
-
             # Handle the robot's state
-            if self.stage == RobotStage.MANUAL_CONTROL:
+            if self.mode == RobotMode.MANUAL_CONTROL:
                 self.manual_control()
             elif (
-                self.stage == RobotStage.LEARN_OJAS
-                or self.stage == RobotStage.LEARN_HEBB
-                or self.stage == RobotStage.PLOTTING
+                self.mode == RobotMode.LEARN_OJAS
+                or self.mode == RobotMode.LEARN_HEBB
+                or self.mode == RobotMode.DMTP
+                or self.mode == RobotMode.PLOTTING
             ):
                 self.explore()
-            elif self.stage == RobotStage.EXPLOIT:
+            elif self.mode == RobotMode.EXPLOIT:
                 self.exploit()
-            elif self.stage == RobotStage.RECORDING:
+            elif self.mode == RobotMode.RECORDING:
                 self.recording()
             else:
                 print("Unknown state. Exiting...")
@@ -293,7 +316,11 @@ class Driver(Supervisor):
                 self.turn(np.deg2rad(60))
                 break
 
-            if self.mode == RobotMode.DMTP:
+            if (
+                self.mode == RobotMode.DMTP
+                or self.mode == RobotMode.LEARN_HEBB
+                or self.mode == RobotMode.EXPLOIT
+            ):
                 self.current_pcn_state += self.pcn.place_cell_activations
                 self.check_goal_reached()
 
@@ -301,7 +328,11 @@ class Driver(Supervisor):
             self.forward()
             self.check_goal_reached()
 
-        if self.mode == RobotMode.DMTP:
+        if (
+            self.mode == RobotMode.DMTP
+            or self.mode == RobotMode.LEARN_HEBB
+            or self.mode == RobotMode.EXPLOIT
+        ):
             self.current_pcn_state /= s  # 's' should be greater than 0
 
         self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
@@ -487,14 +518,7 @@ class Driver(Supervisor):
         # Check if the maximum number of steps has been reached
         if self.step_count >= self.num_steps:
             print("Data recording complete.")
-            self.save_sensor_data()
-            messagebox.showinfo("Information", "Press OK to save recorded data")
-            print("Saved!")
-            root = tk.Tk()
-            root.destroy()  # Destroy the main window
-            self.save(True)
-            self.stop()
-            self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
+            self.on_save()
 
     ########################################### SENSE ###########################################
 
@@ -571,7 +595,6 @@ class Driver(Supervisor):
         self.pcn.get_place_cell_activations(
             input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)],
             hd_activations=self.hd_activations,
-            mode=self.mode,
             collided=np.any(self.collided),
         )
 
@@ -597,7 +620,10 @@ class Driver(Supervisor):
         Check if the robot has reached the goal and perform necessary actions when the goal is reached.
         """
         curr_pos = self.robot.getField("translation").getSFVec3f()
-        if self.mode == RobotMode.DMTP and np.allclose(
+        # DMTP Mode and exploit mode both stop when they both see the goal
+        if (
+            self.mode == RobotMode.EXPLOIT or self.mode == RobotMode.DMTP
+        ) and np.allclose(
             self.goal_location, [curr_pos[0], curr_pos[2]], 0, self.goal_r["exploit"]
         ):
             self.auto_pilot()  # Navigate to the goal slowly and call rcn.replay()
@@ -613,27 +639,14 @@ class Driver(Supervisor):
             )
             print(f"Distance to goal: {distance_to_goal}")
             print(f"Time taken: {self.getTime()}")
-            root = tk.Tk()
-            root.withdraw()  # Hide the main window
-            root.attributes("-topmost", True)  # Always keep the window on top
-            root.update()
-            messagebox.showinfo("Information", "Press OK to save networks")
-            print("Saved!")
-            root.destroy()  # Destroy the main window
-            self.save(True)
-            self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
-        elif (self.mode == RobotMode.LEARNING or self.mode == RobotMode.EXPLORE) and (
-            self.getTime() >= 60 * self.run_time_minutes
-        ):
-            root = tk.Tk()
-            root.withdraw()  # Hide the main window
-            root.attributes("-topmost", True)  # Always keep the window on top
-            root.update()
-            messagebox.showinfo("Information", "Press OK to save networks")
-            print("Saved!")
-            root.destroy()  # Destroy the main window
-            self.save(True)
-            self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
+
+            # Don't save any of the layers during exploit mode
+            self.on_save(
+                include_rcn=(self.mode != RobotMode.EXPLOIT),
+                include_pcn=(self.mode != RobotMode.EXPLOIT),
+            )
+        elif self.getTime() >= 60 * self.run_time_minutes:
+            self.on_save()
 
     ########################################### AUTO PILOT ###########################################
 
@@ -744,7 +757,12 @@ class Driver(Supervisor):
 
         return path_length
 
-    def save(self, include_hmaps=True):
+    def on_save(
+        self,
+        include_pcn: bool = True,
+        include_rcn: bool = True,
+        include_hmaps: bool = True,
+    ):
         """
         Saves the state of the PCN (Place Cell Network), RCN (Reward Cell Network), and optionally
         the maps that store the agent's movement and activations.
@@ -752,28 +770,47 @@ class Driver(Supervisor):
         Parameters:
             include_maps (bool): If True, saves the history of the agent's path and activations.
         """
+
+        files_saved = []
         # Save the Place Cell Network (PCN)
-        with open("pcn.pkl", "wb") as output:
-            pickle.dump(self.pcn, output)
+        if include_pcn:
+            with open("pcn.pkl", "wb") as output:
+                pickle.dump(self.pcn, output)
+                files_saved.append("pcn.pkl")
 
         # Save the Reward Cell Network (RCN)
-        with open("rcn.pkl", "wb") as output:
-            pickle.dump(self.rcn, output)
+        if include_rcn:
+            with open("rcn.pkl", "wb") as output:
+                pickle.dump(self.rcn, output)
+                files_saved.append("rcn.pkl")
 
         # Save the history maps if specified
         if include_hmaps:
             with open("hmap_x.pkl", "wb") as output:
                 pickle.dump(self.hmap_x[: self.step_count], output)
+                files_saved.append("hmap_x.pkl")
             with open("hmap_y.pkl", "wb") as output:
                 pickle.dump(self.hmap_y[: self.step_count], output)
+                files_saved.append("hmap_y.pkl")
             with open("hmap_z.pkl", "wb") as output:
                 pickle.dump(self.hmap_z[: self.step_count], output)
+                files_saved.append("hmap_z.pkl")
             with open("hmap_g.pkl", "wb") as output:
                 pickle.dump(self.hmap_g[: self.step_count], output)
+                files_saved.append("hmap_g.pkl")
             with open("hmap_h.pkl", "wb") as output:
                 pickle.dump(self.hmap_h[: self.step_count], output)
+                files_saved.append("hmap_h.pkl")
 
-        print("Saved!")
+        root = tk.Tk()
+        root.withdraw()  # Hide the main window
+        root.attributes("-topmost", True)  # Always keep the window on top
+        root.update()
+        messagebox.showinfo("Information", "Press OK to save data")
+        root.destroy()  # Destroy the main window
+        self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
+        print(f"Files Saved: {files_saved}")
+        print("Saving Done!")
 
     def clear(self):
         """

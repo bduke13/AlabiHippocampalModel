@@ -31,14 +31,12 @@ class RewardCellLayer:
 
         # Initialize weights with small random values
         initializer = tf.keras.initializers.RandomNormal(mean=0.0, stddev=0.01)
-    
+
         self.w_in = tf.Variable(
             initializer(shape=(num_reward_cells, input_dim)), dtype=tf.float32
         )
-    
-        self.w_in_effective = tf.Variable(
-            tf.identity(self.w_in), dtype=tf.float32
-        )
+
+        self.w_in_effective = tf.Variable(tf.identity(self.w_in), dtype=tf.float32)
 
     def update_reward_cell_activations(self, input_data, visit=False):
         """
@@ -50,15 +48,21 @@ class RewardCellLayer:
         """
         # Calculate the norm of the input data
         input_norm = tf.linalg.norm(input_data, ord=1)
-        # Add a small epsilon to prevent division by zero
-        safe_denominator = tf.maximum(input_norm, 1e-6)
-        # Calculate reward cell activations using effective weights
-        self.reward_cell_activations = tf.tensordot(self.w_in_effective, input_data, axes=1) / safe_denominator
+        # Add a larger epsilon to prevent numerical instability
+        safe_denominator = tf.maximum(input_norm, 1e-4)
+        # Calculate reward cell activations using effective weights and clip values
+        activations = (
+            tf.tensordot(self.w_in_effective, input_data, axes=1) / safe_denominator
+        )
+        # Clip values to prevent extreme values
+        self.reward_cell_activations = tf.clip_by_value(activations, -1e6, 1e6)
 
         if visit:
             # Update weights directly based on input data
             learning_rate = 0.1  # Adjust as needed
-            updated_weights = self.w_in_effective[self.context] + learning_rate * input_data
+            updated_weights = (
+                self.w_in_effective[self.context] + learning_rate * input_data
+            )
             self.w_in_effective = tf.tensor_scatter_nd_update(
                 self.w_in_effective, [[self.context]], [updated_weights]
             )
@@ -80,12 +84,16 @@ class RewardCellLayer:
             # Update weight_update
             exponential_decay_factor = tf.math.exp(-time_step / 6)
 
-            # Normalize the place cell activations using the infinity norm (max absolute value).
-            # This scales the activations so that the largest activation becomes 1, helping to prevent any
-            # single activation from dominating the update and improving numerical stability.
-            normalized_place_cell_activations = tf.linalg.normalize(
-                pcn_copy.place_cell_activations, ord=2
-            )[0]
+            # Normalize the place cell activations using L2 norm with added stability
+            pc_activations = pcn_copy.place_cell_activations
+            norm = tf.sqrt(tf.maximum(tf.reduce_sum(tf.square(pc_activations)), 1e-12))
+            normalized_place_cell_activations = pc_activations / norm
+            # Ensure no NaN values
+            normalized_place_cell_activations = tf.where(
+                tf.math.is_nan(normalized_place_cell_activations),
+                tf.zeros_like(normalized_place_cell_activations),
+                normalized_place_cell_activations,
+            )
 
             # tf.tensor_scatter_nd_add() modifies the weight_update tensor at the specified index (self.context),
             # adding the normalized activations weighted by an exponential decay factor.
@@ -97,7 +105,7 @@ class RewardCellLayer:
             )
 
             # Update pcn_copy.place_cell_activations
-            recurrent_weights_max = tf.reduce_max(pcn_copy.w_rec_hd_place, axis=0)
+            recurrent_weights_max = tf.reduce_max(pcn_copy.w_rec_tripartite, axis=0)
             updated_place_cell_activations = tf.nn.relu(
                 tf.tensordot(
                     tf.cast(recurrent_weights_max, tf.float32),
@@ -126,6 +134,10 @@ class RewardCellLayer:
         delta = next_reward - prediction
 
         # Update weights based on the TD learning rule
-        learning_rate = 0.2  # Adjust the learning rate as needed
-        updated_weights = self.w_in_effective[self.context] + learning_rate * delta * input_data
-        self.w_in_effective = tf.tensor_scatter_nd_update(self.w_in_effective, [[self.context]], [updated_weights])
+        learning_rate = 0.1  # Adjust the learning rate as needed
+        updated_weights = (
+            self.w_in_effective[self.context] + learning_rate * delta * input_data
+        )
+        self.w_in_effective = tf.tensor_scatter_nd_update(
+            self.w_in_effective, [[self.context]], [updated_weights]
+        )

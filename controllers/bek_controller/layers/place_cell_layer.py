@@ -1,7 +1,6 @@
 import numpy as np
 import tensorflow as tf
 from numpy.random import default_rng
-from enums import RobotStage, RobotMode
 from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
 
 tf.random.set_seed(5)
@@ -28,6 +27,7 @@ class PlaceCellLayer:
         Initializes the Place Cell Layer.
 
         Parameters:
+        - bvc_layer (BoundaryVectorCellLayer): The bvc layer used as input to the place cell activations
         - num_pc (int): Number of place cells in the layer.
         - input_dim (int): Dimension of the input vector to the layer (e.g., 720 for RPLidar).
         - timestep (int): Time step for simulation or learning updates (in milliseconds).
@@ -49,7 +49,7 @@ class PlaceCellLayer:
         # Initialized with a 20% probability of connection
         # Shape: (num_pc, num_bvc)
         self.w_in = tf.Variable(
-            rng.binomial(1, 0.2, (num_pc, self.num_bvc)), dtype=tf.float32
+            rng.binomial(n=1, p=0.2, size=(num_pc, self.num_bvc)), dtype=tf.float32
         )
 
         # Recurrent weight matrix for head direction and place cell interactions
@@ -74,7 +74,7 @@ class PlaceCellLayer:
         self.gamma_pb = 0.3
 
         # Time constant for the membrane potential dynamics of place cells (τ_p in Equation 3.2a)
-        self.tau_p = 0.1
+        self.tau_p = 0.5
 
         # Normalization factor for synaptic weight updates (α_pb in Equation 3.3)
         self.alpha_pb = np.sqrt(0.5)
@@ -91,9 +91,6 @@ class PlaceCellLayer:
         self.activation_update = tf.zeros_like(
             self.place_cell_activations, dtype=tf.float32
         )
-
-        # Placeholder for recurrent inputs (not used in this simplified model)
-        self.recurrent_input = 0
 
         # Head direction modulation (if applicable)
         self.head_direction_modulation = None
@@ -115,9 +112,7 @@ class PlaceCellLayer:
         # Enables/disables updating weights in the tripartite synapses to track adjacencies between cells
         self.enable_hebb = enable_hebb
 
-    def get_place_cell_activations(
-        self, input_data, hd_activations, mode=RobotMode.LEARNING, collided=False
-    ):
+    def get_place_cell_activations(self, input_data, hd_activations, collided=False):
         """
         Computes the activation of place cells based on the input from boundary vector cells (BVCs) and head direction activations.
 
@@ -126,7 +121,6 @@ class PlaceCellLayer:
             - input_data[0]: Array of distances (e.g., from LiDAR or range finder).
             - input_data[1]: Array of angles corresponding to those distances.
         - hd_activations (array): Head direction activations.
-        - mode (str): Operation mode, typically "learning" or "dmtp".
         - collided (bool): Indicates if the agent has collided with an obstacle.
         """
         # Store the previous place cell activations
@@ -166,7 +160,7 @@ class PlaceCellLayer:
         self.place_cell_activations = tf.tanh(tf.nn.relu(self.activation_update))
 
         # Update the eligibility trace and weights
-        if self.enable_hebb and np.any(self.place_cell_activations):
+        if self.enable_hebb and np.any(self.place_cell_activations) and not collided:
             # Update the eligibility trace for place cells and head direction cells
             # Eligibility traces are used for temporal difference learning and sequence encoding
             if self.place_cell_trace is None:
@@ -260,15 +254,3 @@ class PlaceCellLayer:
 
         # Return the updated place cell activations
         return place_cell_activations
-
-    def __getitem__(self, index):
-        """
-        Retrieves the place cell activation at the specified index.
-        Example: activation = place_cell_layer[5]  # Activation of the place cell at index 5
-
-        Parameters:
-        - index (int): The index of the place cell activation to retrieve.
-
-        Returns:
-        - activation (float): The activation value of the place cell at the specified index.
-        """
