@@ -184,17 +184,12 @@ class Driver(Supervisor):
         self.right_position_sensor = self.getDevice("right wheel sensor")
         self.right_position_sensor.enable(self.timestep)
 
-        self.enable_camera_display = False
+        self.enable_camera_display = True
         # Initialize 360 camera
-        self.camera360 = self.getDevice("camera360")
-        self.camera360.enable(self.timestep)
-        self.camera_image = None
-
-        # Create figure for camera visualization
-        plt.ion()  # Enable interactive mode
         if self.enable_camera_display:
-            # Create window for camera visualization
-            cv2.namedWindow("Camera Feed", cv2.WINDOW_NORMAL)
+            self.camera360 = self.getDevice("camera360")
+            self.camera360.enable(self.timestep)
+            self.camera_image = None
 
         if self.mode == RobotMode.LEARN_OJAS:
             self.clear()
@@ -691,9 +686,8 @@ class Driver(Supervisor):
         self.collided.scatter_nd_update([[1]], [int(self.right_bumper.getValue())])
 
         # 10. Capture the image from camera. Display if enabled
-        self.camera_image = self.camera360.getImage()
         if self.enable_camera_display:
-            self.display_camera_data()
+            self.camera_image = self.camera360.getImage()
 
         # 11. Proceed to the next timestep in the robot's control loop.
         self.step(self.timestep)
@@ -712,19 +706,6 @@ class Driver(Supervisor):
         if bearing < 0:
             bearing = bearing + 360.0
         return bearing
-
-    def display_camera_data(self):
-        if not self.enable_camera_display:
-            return
-
-        if self.camera_image:
-            # Convert camera data to numpy array
-            img = np.frombuffer(self.camera_image, np.uint8).reshape((360, 720, 4))
-            # Convert RGBA to BGR for OpenCV
-            img_bgr = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
-            # Display the image
-            cv2.imshow("Camera Feed", img_bgr)
-            cv2.waitKey(30)  # Process window events, wait 30ms
 
     ########################################### COMPUTE ###########################################
 
