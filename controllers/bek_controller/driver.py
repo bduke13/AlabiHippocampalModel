@@ -184,7 +184,7 @@ class Driver(Supervisor):
         self.right_position_sensor = self.getDevice("right wheel sensor")
         self.right_position_sensor.enable(self.timestep)
 
-        self.enable_camera_display = True
+        self.enable_camera_display = False
         # Initialize 360 camera
         self.camera360 = self.getDevice("camera360")
         self.camera360.enable(self.timestep)
