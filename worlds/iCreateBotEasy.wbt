@@ -90,10 +90,9 @@ DEF agent Create {
 Wall {
   translation 0 0 -5
   size 10.3 2.4 0.3
-  appearance Roughcast {
-    colorOverride 0.8 0.45 0.25
+  appearance CorrugatedMetal {
     textureTransform TextureTransform {
-      scale 1 2.4
+      scale 2 2.4
     }
   }
 }
@@ -102,10 +101,9 @@ Wall {
   rotation 0 1 0 1.5708
   name "wall(2)"
   size 9.7 2.4 0.3
-  appearance Roughcast {
-    colorOverride 0.8 0.45 0.25
+  appearance RedBricks {
     textureTransform TextureTransform {
-      scale 1 2.4
+      scale 3 2.4
     }
   }
 }
@@ -114,7 +112,7 @@ Wall {
   name "wall(3)"
   size 10.3 2.4 0.3
   appearance Roughcast {
-    colorOverride 0.8 0.45 0.25
+    colorOverride 0.2 0.5 0.8
     textureTransform TextureTransform {
       scale 1 2.4
     }
@@ -125,13 +123,221 @@ Wall {
   rotation 0 1 0 1.5708
   name "wall(4)"
   size 9.7 2.4 0.3
-  appearance Roughcast {
-    colorOverride 0.8 0.45 0.25
+  appearance Pavement {
+    type "slate"
     textureTransform TextureTransform {
-      scale 1 2.4
+      scale 2 2.4
     }
   }
 }
 DirectionalLight {
   direction 0 -1 0
+}
+
+# Large red cube
+Solid {
+  translation -2 0.5 -2
+  name "red_cube"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 1 0 0
+        roughness 0.3
+      }
+      geometry Box {
+        size 1 1 1
+      }
+    }
+  ]
+  boundingObject Box {
+    size 1 1 1
+  }
+}
+
+# Tall blue cylinder
+Solid {
+  translation 2 0.75 2
+  name "blue_cylinder"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0 0 1
+        metalness 0.8
+      }
+      geometry Cylinder {
+        height 1.5
+        radius 0.3
+      }
+    }
+  ]
+  boundingObject Cylinder {
+    height 1.5
+    radius 0.3
+  }
+}
+
+# Small green sphere
+Solid {
+  translation -3 0.2 3
+  name "green_sphere"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0 1 0
+        roughness 0.1
+      }
+      geometry Sphere {
+        radius 0.2
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.2
+  }
+}
+
+# Yellow pyramid
+Solid {
+  translation 3 0.3 -3
+  name "yellow_pyramid"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 1 1 0
+        metalness 0.5
+      }
+      geometry Cone {
+        height 0.6
+        bottomRadius 0.4
+      }
+    }
+  ]
+  boundingObject Cylinder {
+    height 0.6
+    radius 0.4
+  }
+}
+
+# Purple tall box
+Solid {
+  translation 0 0.9 -3
+  name "purple_box"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.5 0 0.5
+        roughness 0.5
+      }
+      geometry Box {
+        size 0.4 1.8 0.4
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.4 1.8 0.4
+  }
+}
+
+# Orange wide cylinder
+Solid {
+  translation -3 0.15 0
+  name "orange_cylinder"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 1 0.5 0
+        metalness 0.3
+      }
+      geometry Cylinder {
+        height 0.3
+        radius 0.6
+      }
+    }
+  ]
+  boundingObject Cylinder {
+    height 0.3
+    radius 0.6
+  }
+}
+
+# Teal sphere
+Solid {
+  translation 3 0.4 0
+  name "teal_sphere"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0 0.8 0.8
+        roughness 0.2
+      }
+      geometry Sphere {
+        radius 0.4
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.4
+  }
+}
+
+# Pink cube
+Solid {
+  translation 0 0.25 3
+  name "pink_cube"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 1 0.7 0.7
+        metalness 0.1
+      }
+      geometry Box {
+        size 0.5 0.5 0.5
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.5 0.5 0.5
+  }
+}
+
+# White tall cone
+Solid {
+  translation -2 0.6 2
+  name "white_cone"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 1 1 1
+        roughness 0.8
+      }
+      geometry Cone {
+        height 1.2
+        bottomRadius 0.3
+      }
+    }
+  ]
+  boundingObject Cylinder {
+    height 1.2
+    radius 0.3
+  }
+}
+
+# Gray low box
+Solid {
+  translation 2 0.1 -2
+  name "gray_box"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.5 0.5 0.5
+        metalness 0.9
+      }
+      geometry Box {
+        size 0.8 0.2 0.8
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.8 0.2 0.8
+  }
 }
