@@ -184,9 +184,9 @@ class Driver(Supervisor):
         self.right_position_sensor = self.getDevice("right wheel sensor")
         self.right_position_sensor.enable(self.timestep)
 
-        self.enable_camera_display = True
+        self.enable_camera = True
         # Initialize 360 camera
-        if self.enable_camera_display:
+        if self.enable_camera:
             self.camera360 = self.getDevice("camera360")
             self.camera360.enable(self.timestep)
             self.camera_image = None
@@ -686,7 +686,7 @@ class Driver(Supervisor):
         self.collided.scatter_nd_update([[1]], [int(self.right_bumper.getValue())])
 
         # 10. Capture the image from camera. Display if enabled
-        if self.enable_camera_display:
+        if self.enable_camera:
             self.camera_image = self.camera360.getImage()
 
         # 11. Proceed to the next timestep in the robot's control loop.
