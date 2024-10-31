@@ -115,6 +115,13 @@ class Driver(Supervisor):
         enable_ojas: Optional[bool] = None,
         enable_hebb: Optional[bool] = None,
     ):
+        # Initialize sensor data dictionary
+        self.sensor_data = {
+            "positions": [],
+            "headings": [],
+            "lidar": [],
+            "images": [],  # Buffer for camera images
+        }
         """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
         Args:
@@ -557,9 +564,10 @@ class Driver(Supervisor):
             - Current position coordinates
             - Heading angle in degrees
             - LiDAR range readings
+            - Camera images (if enabled)
 
         The data is stored in the sensor_data dictionary with keys:
-        'positions', 'headings', and 'lidar'.
+        'positions', 'headings', 'lidar', and 'images'.
 
         Returns:
             None
@@ -578,6 +586,16 @@ class Driver(Supervisor):
             lidar_readings.copy()
         )  # Copy to avoid referencing issues
 
+        # Get camera image if enabled
+        if self.enable_camera and self.camera_image:
+            # Convert camera image to numpy array
+            width = self.camera360.getWidth()
+            height = self.camera360.getHeight()
+            image = np.frombuffer(self.camera_image, np.uint8).reshape(
+                (height, width, 4)
+            )
+            self.sensor_data["images"].append(image.copy())
+
     def save_sensor_data(self):
         """
         Saves the recorded sensor data to files for later use.
@@ -591,6 +609,12 @@ class Driver(Supervisor):
         np.save("recorded_positions.npy", positions)
         np.save("recorded_headings.npy", headings)
         np.save("recorded_lidar.npy", lidar_data)
+
+        # Save camera images if they were recorded
+        if self.enable_camera and len(self.sensor_data["images"]) > 0:
+            images = np.array(self.sensor_data["images"])
+            np.save("recorded_images.npy", images)
+            print(f"Saved {len(images)} camera frames")
 
         print("Sensor data saved.")
 
@@ -608,8 +632,9 @@ class Driver(Supervisor):
         if not np.any(self.collided):
             self.forward()
         else:
-            # If collided, turn by a random angle to avoid obstacle
-            self.turn(np.random.uniform(-np.pi / 2, np.pi / 2))
+            # If collided, turn by a random angle between -180 and 180 degrees (in radians)
+            random_angle = np.random.uniform(-np.pi, np.pi)
+            self.turn(random_angle)
             self.collided.assign([0, 0])  # Reset collision status
 
         # Introduce a 5% chance to rotate randomly
@@ -624,6 +649,7 @@ class Driver(Supervisor):
         # Check if the maximum number of steps has been reached
         if self.step_count >= self.num_steps:
             print("Data recording complete.")
+            self.save_sensor_data()  # Save all recorded sensor data
             self.on_save()
 
     ########################################### SENSE ###########################################
