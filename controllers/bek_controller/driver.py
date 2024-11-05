@@ -1,7 +1,5 @@
 import numpy as np
 import tensorflow as tf
-
-tf.random.set_seed(5)
 from numpy.random import default_rng
 import matplotlib.pyplot as plt
 from matplotlib.cm import get_cmap
@@ -19,6 +17,7 @@ from layers.head_direction_layer import HeadDirectionLayer
 from layers.place_cell_layer import PlaceCellLayer
 from layers.reward_cell_layer import RewardCellLayer
 
+tf.random.set_seed(5)
 np.set_printoptions(precision=2)
 PI = tf.constant(np.pi)
 rng = default_rng()  # random number generator
@@ -155,8 +154,12 @@ class Driver(Supervisor):
 
         self.hmap_x = np.zeros(self.num_steps)  # x-coordinates
         self.hmap_y = np.zeros(self.num_steps)  # y-coordinates
-        self.hmap_z = np.zeros((self.num_steps, self.num_place_cells))  # place cell activations
-        self.hmap_h = np.zeros((self.num_steps, self.n_hd))  # head direction cell activations
+        self.hmap_z = np.zeros(
+            (self.num_steps, self.num_place_cells)
+        )  # place cell activations
+        self.hmap_h = np.zeros(
+            (self.num_steps, self.n_hd)
+        )  # head direction cell activations
         self.hmap_g = np.zeros(self.num_steps)  # goal estimates
 
         # Initialize hardware components and sensors
@@ -333,6 +336,7 @@ class Driver(Supervisor):
             # Handle the robot's state
             if self.mode == RobotMode.MANUAL_CONTROL:
                 self.manual_control()
+
             elif (
                 self.mode == RobotMode.LEARN_OJAS
                 or self.mode == RobotMode.LEARN_HEBB
@@ -340,10 +344,13 @@ class Driver(Supervisor):
                 or self.mode == RobotMode.PLOTTING
             ):
                 self.explore()
+
             elif self.mode == RobotMode.EXPLOIT:
                 self.exploit()
+
             elif self.mode == RobotMode.RECORDING:
                 self.recording()
+
             else:
                 print("Unknown state. Exiting...")
                 break
@@ -381,7 +388,9 @@ class Driver(Supervisor):
             )
 
             if np.any(self.collided):
-                random_angle = np.random.uniform(-np.pi, np.pi) # Random angle between -180 and 180 degrees (in radians)
+                random_angle = np.random.uniform(
+                    -np.pi, np.pi
+                )  # Random angle between -180 and 180 degrees (in radians)
                 self.turn(random_angle)
                 break
 
@@ -789,24 +798,40 @@ class Driver(Supervisor):
         """Enables manual control of the robot using keyboard inputs.
 
         Controls:
-            W: Move forward
-            A: Turn left 90 degrees
-            D: Turn right 90 degrees
-            S: Stop movement
+            w or UP_ARROW: Move forward
+            a or LEFT_ARROW: Rotate counterclockwise
+            s or DOWN_ARROW: Stop movement
+            d or RIGHT_ARROW: Rotate clockwise
+
+        Note:
+        If control is not working try to click into the sim environment again.
+        Sometimes resetting the sim makes the keyboard disconnect.
         """
         k = self.keyboard.getKey()
-        if k != -1:
-            print("Before:", self.hd_activations.argmax(), self.current_heading)
-        if k == ord("W"):
+        if k == ord("W") or k == self.keyboard.UP:
             self.forward()
-        elif k == ord("D"):
-            self.turn(-np.deg2rad(90))
-        elif k == ord("A"):
-            self.turn(np.deg2rad(90))
-        elif k == ord("S"):
+        elif k == ord("A") or k == self.keyboard.LEFT:
+            self.rotate(direction=1, speed_factor=0.3)
+        elif k == ord("D") or k == self.keyboard.RIGHT:
+            self.rotate(direction=-1, speed_factor=0.3)
+        elif k == ord("S") or k == self.keyboard.DOWN:
             self.stop()
-        if k != -1:
-            print("After:", self.hd_activations.argmax(), self.current_heading)
+
+        # Always step simulation forward and update sensors
+        self.sense()
+        self.step(self.timestep)
+
+    def rotate(self, direction: int, speed_factor: float = 0.3):
+        """Rotates the robot continuously in the specified direction.
+
+        Args:
+            direction (int): 1 for clockwise, -1 for counterclockwise
+            speed_factor (float): Multiplier for rotation speed (0.0 to 1.0)
+        """
+        speed = self.max_speed * speed_factor
+        self.left_speed = speed * direction
+        self.right_speed = -speed * direction
+        self.move()
 
     def forward(self):
         """Moves the robot forward at maximum speed.
