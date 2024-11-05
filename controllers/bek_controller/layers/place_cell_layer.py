@@ -33,7 +33,7 @@ class PlaceCellLayer:
             timestep: Time step for simulation/learning updates in milliseconds.
             n_hd: Number of head direction cells.
             enable_ojas: Enable weight updates via competition.
-            enable_stdp: Enable tripartite synapse weight updates.
+            enable_stdp: Enable tripartite synapse weight updates via Spike-Timing-Dependent Plasticity.
         """
         rng = default_rng()
 
