@@ -126,7 +126,7 @@ class Driver(Supervisor):
                 Defaults to None.
             enable_ojas (Optional[bool], optional): Flag to enable Oja's learning rule.
                 If None, determined by robot mode. Defaults to None.
-            enable_stdp (Optional[bool], optional): Flag to enable Hebbian learning.
+            enable_stdp (Optional[bool], optional): Flag to enable Spike-Timing-Dependent Plasticity.
                 If None, determined by robot mode. Defaults to None.
 
         Returns:
@@ -252,7 +252,7 @@ class Driver(Supervisor):
             timestep (int): Time step duration in milliseconds.
             enable_ojas (Optional[bool], optional): Flag to enable Oja's learning rule.
                 If None, determined by robot mode. Defaults to None.
-            enable_stdp (Optional[bool], optional): Flag to enable Hebbian learning.
+            enable_stdp (Optional[bool], optional): Flag to enable Spike-Timing-Dependent Plasticity.
                 If None, determined by robot mode. Defaults to None.
 
         Returns:
