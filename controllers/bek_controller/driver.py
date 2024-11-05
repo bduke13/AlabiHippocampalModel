@@ -113,7 +113,7 @@ class Driver(Supervisor):
         run_time_hours: int = 1,
         start_loc: Optional[List[int]] = None,
         enable_ojas: Optional[bool] = None,
-        enable_hebb: Optional[bool] = None,
+        enable_stdp: Optional[bool] = None,
     ):
         """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
@@ -127,7 +127,7 @@ class Driver(Supervisor):
                 Defaults to None.
             enable_ojas (Optional[bool], optional): Flag to enable Oja's learning rule.
                 If None, determined by robot mode. Defaults to None.
-            enable_hebb (Optional[bool], optional): Flag to enable Hebbian learning.
+            enable_stdp (Optional[bool], optional): Flag to enable Hebbian learning.
                 If None, determined by robot mode. Defaults to None.
 
         Returns:
@@ -189,7 +189,7 @@ class Driver(Supervisor):
             n_hd=self.n_hd,
             timestep=self.timestep,
             enable_ojas=enable_ojas,
-            enable_hebb=enable_hebb,
+            enable_stdp=enable_stdp,
         )
         self.load_rcn(
             num_reward_cells=self.num_reward_cells,
@@ -239,7 +239,7 @@ class Driver(Supervisor):
         n_hd: int,
         timestep: int,
         enable_ojas: Optional[bool] = None,
-        enable_hebb: Optional[bool] = None,
+        enable_stdp: Optional[bool] = None,
     ):
         """Loads an existing place cell network from disk or initializes a new one.
 
@@ -249,7 +249,7 @@ class Driver(Supervisor):
             timestep (int): Time step duration in milliseconds.
             enable_ojas (Optional[bool], optional): Flag to enable Oja's learning rule.
                 If None, determined by robot mode. Defaults to None.
-            enable_hebb (Optional[bool], optional): Flag to enable Hebbian learning.
+            enable_stdp (Optional[bool], optional): Flag to enable Hebbian learning.
                 If None, determined by robot mode. Defaults to None.
 
         Returns:
@@ -283,10 +283,10 @@ class Driver(Supervisor):
         ):
             self.pcn.enable_ojas = True
 
-        if enable_hebb is not None:
-            self.pcn.enable_hebb = enable_hebb
+        if enable_stdp is not None:
+            self.pcn.enable_stdp = enable_stdp
         elif self.mode == RobotMode.LEARN_HEBB or self.mode == RobotMode.DMTP:
-            self.pcn.enable_hebb = True
+            self.pcn.enable_stdp = True
 
         return self.pcn
 
@@ -606,8 +606,8 @@ class Driver(Supervisor):
 
         # Check if the maximum number of steps has been reached
         if self.step_count >= self.num_steps:
+            self.save()
             print("Data recording complete.")
-            self.on_save()
 
     ########################################### SENSE ###########################################
 
@@ -742,12 +742,12 @@ class Driver(Supervisor):
             print(f"Time taken: {self.getTime()}")
 
             # Don't save any of the layers during exploit mode
-            self.on_save(
+            self.save(
                 include_rcn=(self.mode != RobotMode.EXPLOIT),
                 include_pcn=(self.mode != RobotMode.EXPLOIT),
             )
         elif self.getTime() >= 60 * self.run_time_minutes:
-            self.on_save()
+            self.save()
 
     ########################################### AUTO PILOT ###########################################
 
@@ -887,7 +887,7 @@ class Driver(Supervisor):
 
         return path_length
 
-    def on_save(
+    def save(
         self,
         include_pcn: bool = True,
         include_rcn: bool = True,
