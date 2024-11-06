@@ -21,7 +21,9 @@ main.py
 *.wbproj
 
 # Ignore images in any output directory
-*outputs/*.jpg
+*.jpg
 
 # Ignore any recorded output numpy buffers
-*recorded*.npy
+*.npy
+*.keras
+*.html
