@@ -2,7 +2,7 @@ import numpy as np
 import tensorflow as tf
 import pickle
 
-from layers.place_cell_layer import PlaceCellLayer
+from layers.place_cell_layer_vision import PlaceCellLayer
 from layers.head_direction_layer import HeadDirectionLayer
 from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
 

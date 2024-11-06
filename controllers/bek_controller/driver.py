@@ -15,7 +15,7 @@ from controller import Supervisor, Robot
 from enum import Enum, auto
 from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
 from layers.head_direction_layer import HeadDirectionLayer
-from layers.place_cell_layer import PlaceCellLayer
+from layers.place_cell_layer_vision import PlaceCellLayer
 from layers.reward_cell_layer import RewardCellLayer
 
 tf.random.set_seed(5)
@@ -122,6 +122,7 @@ class Driver(Supervisor):
             "lidar": [],
             "images": [],  # Buffer for camera images
         }
+        self.image_frame_counter = 0  # Counter for image sampling
         """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
         Args:
@@ -194,7 +195,7 @@ class Driver(Supervisor):
         self.enable_camera = True
         # Initialize 360 camera
         if self.enable_camera:
-            self.camera360 = self.getDevice("camera360")
+            self.camera360 = self.getDevice("frontCamera")
             self.camera360.enable(self.timestep)
             self.camera_image = None
 
@@ -279,16 +280,19 @@ class Driver(Supervisor):
                 self.pcn.reset_activations()
                 print("Loaded existing Place Cell Network.")
         except:
-            bvc = BoundaryVectorCellLayer(
-                max_dist=10,
-                input_dim=720,
-                n_hd=n_hd,
-                sigma_ang=90,
-                sigma_d=0.5,
-            )
+            # bvc = BoundaryVectorCellLayer(
+            # max_dist=10,
+            # input_dim=720,
+            # n_hd=n_hd,
+            # sigma_ang=90,
+            # sigma_d=0.5,
+            # )
 
             self.pcn = PlaceCellLayer(
-                bvc_layer=bvc, num_pc=num_place_cells, timestep=timestep, n_hd=n_hd
+                encoder_path="encoder_model.keras",
+                num_pc=num_place_cells,
+                timestep=timestep,
+                n_hd=n_hd,
             )
             print("Initialized new Place Cell Network.")
 
@@ -739,9 +743,23 @@ class Driver(Supervisor):
         """
         Compute the activations of place cells and handle the environment interactions.
         """
+        # Format camera image for place cell network
+        # Format camera image for place cell network
+        if self.camera_image:
+            width = self.camera360.getWidth()
+            height = self.camera360.getHeight()
+            image = np.frombuffer(self.camera_image, np.uint8).reshape(
+                (height, width, 4)
+            )
+            # Convert to RGB, resize to (96, 192), and normalize to [0, 1]
+            image = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
+            image = cv2.resize(image, (192, 96)) / 255.0
+        else:
+            image = None
+
         # Compute the place cell network activations
         self.pcn.get_place_cell_activations(
-            input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)],
+            input_data=image,
             hd_activations=self.hd_activations,
             collided=np.any(self.collided),
         )
@@ -756,7 +774,7 @@ class Driver(Supervisor):
             self.hmap_y[self.step_count] = curr_pos[2]
             self.hmap_z[self.step_count] = self.pcn.place_cell_activations
             self.hmap_h[self.step_count] = self.hd_activations
-            self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn.bvc_activations)
+            # self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn.bvc_activations)
 
         # Increment timestep
         self.step_count += 1
