@@ -170,7 +170,7 @@ class PlaceCellLayer:
         # Update the eligibility trace and weights
         if (
             self.enable_hebb
-            and tf.reduce_any(self.place_cell_activations)
+            and tf.reduce_any(tf.not_equal(self.place_cell_activations, 0))
             and not collided
         ):
             # Update the eligibility trace for place cells and head direction cells
@@ -180,14 +180,11 @@ class PlaceCellLayer:
             self.place_cell_trace += (
                 self.tau / 3 * (self.place_cell_activations - self.place_cell_trace)
             )
-            self.hd_cell_trace += (
-                self.tau
-                / 3
-                * (
-                    tf.expand_dims(tf.expand_dims(hd_activations, -1), -1)
-                    - self.hd_cell_trace
-                )
+            # Convert hd_activations to float32 and expand dimensions
+            hd_expanded = tf.cast(
+                tf.expand_dims(tf.expand_dims(hd_activations, -1), -1), dtype=tf.float32
             )
+            self.hd_cell_trace += self.tau / 3 * (hd_expanded - self.hd_cell_trace)
 
             # Update recurrent weights for place cell interactions modulated by head direction
             # This implements sequence learning and is similar to STDP
