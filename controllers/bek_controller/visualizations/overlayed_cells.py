@@ -7,7 +7,7 @@ import matplotlib.colors as mcolors
 gridsize = 100
 
 # Load the colors list
-with open("visualizations/colors.json", "r") as f:
+with open("c:/Users/jacks/OneDrive/Desktop/NeuroNav/AlabiHippocampalModel/controllers/bek_controller/visualizations/colors.json", "r") as f:
     colors = json.load(f)
 
 # Convert hex colors to RGB format

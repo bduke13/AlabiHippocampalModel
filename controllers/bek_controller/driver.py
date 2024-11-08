@@ -16,6 +16,7 @@ from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
 from layers.head_direction_layer import HeadDirectionLayer
 from layers.place_cell_layer import PlaceCellLayer
 from layers.reward_cell_layer import RewardCellLayer
+import networkx as nx
 
 tf.random.set_seed(5)
 np.set_printoptions(precision=2)
@@ -235,6 +236,8 @@ class Driver(Supervisor):
 
         self.sense()
         self.compute()
+        self.place_cell_positions = [[] for _ in range(self.num_place_cells)]
+        self.place_cell_centers = [None] * self.num_place_cells
 
     def load_pcn(
         self,
@@ -719,6 +722,12 @@ class Driver(Supervisor):
         # Increment timestep
         self.step_count += 1
 
+        # Record positions where place cells are active --> For adjacecy matrix
+        curr_pos = self.robot.getField("translation").getSFVec3f()
+        for i, activation in enumerate(self.current_pcn_state):
+            if activation > 0.5:  # Define a suitable threshold
+                self.place_cell_positions[i].append([curr_pos[0], curr_pos[2]])
+
     ########################################### CHECK GOAL REACHED ###########################################
 
     def check_goal_reached(self):
@@ -969,3 +978,140 @@ class Driver(Supervisor):
                 pass  # Ignore if the file does not exist
 
         print("State files cleared.")
+
+    ########################################### ADJACENCY MATRIX METHODS ###########################################
+
+    def extract_adjacency_matrix(self):
+        """
+        Extracts the adjacency matrix from the tripartite connections in the PlaceCellLayer.
+        """
+        # Get the tripartite weights from the PlaceCellLayer
+        # Shape of w_rec_tripartite: (n_hd, num_pc, num_pc)
+        tripartite_weights = self.pcn.w_rec_tripartite.numpy()
+
+        # Aggregate the weights across head directions using the maximum weight for each connection
+        adjacency_matrix = np.max(tripartite_weights, axis=0)
+
+        # Threshold to remove weak connections
+        threshold = 0.01  
+        adjacency_matrix[adjacency_matrix < threshold] = 0
+
+        # Normalize the adjacency matrix
+        max_weight = np.max(adjacency_matrix)
+        if max_weight > 0:
+            adjacency_matrix /= max_weight
+
+        # Store the adjacency matrix
+        self.adjacency_matrix = adjacency_matrix
+
+        # For bidirectional connections, use line below 
+        # adjacency_matrix = np.maximum(adjacency_matrix, adjacency_matrix.T)
+
+    def compute_place_cell_centers(self):
+        """
+        Computes the center point for each place cell based on recorded positions.
+        """
+        self.place_cell_centers = []
+        for positions in self.place_cell_positions:
+            if positions:
+                positions_array = np.array(positions)
+                mean_position = positions_array.mean(axis=0)
+                self.place_cell_centers.append(mean_position)
+            else:
+                self.place_cell_centers.append(None)
+    
+    def create_graph(self):
+        """
+        Creates a graph from the adjacency matrix and place cell centers.
+        """
+        self.graph = nx.Graph()
+
+        # Add nodes with positions
+        for i, center in enumerate(self.place_cell_centers):
+            if center is not None:
+                self.graph.add_node(i, pos=center)
+            else:
+                # If no center exclude the node
+                pass
+
+        # Add edges based on the adjacency matrix
+        num_nodes = self.adjacency_matrix.shape[0]
+        for i in range(num_nodes):
+            for j in range(num_nodes):
+                weight = self.adjacency_matrix[i, j]
+                if weight > 0:
+                    self.graph.add_edge(i, j, weight=weight)
+
+    def get_nearest_place_cell(self, position):
+        """
+        Finds the place cell whose center is closest to the given position.
+
+        Args:
+            position: [x, z] coordinates in the environment.
+
+        Returns:
+            The index of the nearest place cell.
+        """
+        min_distance = float('inf')
+        nearest_place_cell = None
+        for i, center in enumerate(self.place_cell_centers):
+            if center is not None:
+                distance = np.linalg.norm(np.array(position) - np.array(center))
+                if distance < min_distance:
+                    min_distance = distance
+                    nearest_place_cell = i
+        return nearest_place_cell
+    
+    def find_shortest_path(self, start_pos, goal_pos):
+        """
+        Finds the shortest path between two positions using the graph.
+
+        Args:
+            start_pos: [x, z] coordinates of the start position.
+            goal_pos: [x, z] coordinates of the goal position.
+
+        Returns:
+            A list of place cell indices representing the path.
+        """
+        start_cell = self.get_nearest_place_cell(start_pos)
+        goal_cell = self.get_nearest_place_cell(goal_pos)
+
+        if start_cell is None or goal_cell is None:
+            print("Could not find a valid place cell for the start or goal position.")
+            return None
+
+        try:
+            path = nx.dijkstra_path(self.graph, source=start_cell, target=goal_cell, weight='weight')
+            return path
+        except nx.NetworkXNoPath:
+            print("No path exists between the start and goal positions.")
+            return None
+        
+def navigate_along_path(self, path):
+    for place_cell_index in path:
+        waypoint = self.place_cell_centers[place_cell_index]
+        if waypoint is not None:
+            self.move_to_position(waypoint)
+        else:
+            print(f"Place cell {place_cell_index} has no recorded position.")
+
+def move_to_position(self, position):
+    curr_pos = self.robot.getField("translation").getSFVec3f()
+    delta_x = position[0] - curr_pos[0]
+    delta_z = position[1] - curr_pos[2]
+    desired_angle = np.arctan2(delta_z, delta_x)
+    angle_to_turn = desired_angle - np.deg2rad(self.current_heading_deg)
+    self.turn(angle_to_turn)
+
+    # Start moving forward
+    self.forward()
+
+    # Move until we reach the waypoint
+    while self.robot.step(self.timestep) != -1:
+        self.sense()
+        self.compute()
+        curr_pos = self.robot.getField("translation").getSFVec3f()
+        distance = np.linalg.norm([position[0] - curr_pos[0], position[1] - curr_pos[2]])
+        if distance < 0.1:  # Threshold for reaching the waypoint
+            self.stop()
+            break
