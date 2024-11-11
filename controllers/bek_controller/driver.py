@@ -113,6 +113,7 @@ class Driver(Supervisor):
         start_loc: Optional[List[int]] = None,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
+        enable_multiscale: Optional[bool] = None,
     ):
         """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
@@ -140,6 +141,8 @@ class Driver(Supervisor):
         self.n_hd = 8
         self.timestep = 32 * 3
         self.tau_w = 10  # time constant for the window function
+
+        self.bump_history = np.zeros(5, dtype=np.int32)
 
         # Robot parameters
         self.max_speed = 16
@@ -193,6 +196,7 @@ class Driver(Supervisor):
             timestep=self.timestep,
             enable_ojas=enable_ojas,
             enable_stdp=enable_stdp,
+            enable_multiscale=enable_multiscale
         )
         self.load_rcn(
             num_reward_cells=self.num_reward_cells,
@@ -243,6 +247,7 @@ class Driver(Supervisor):
         timestep: int,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
+        enable_multiscale: Optional[bool] = None,
     ):
         """Loads an existing place cell network from disk or initializes a new one.
 
@@ -273,7 +278,7 @@ class Driver(Supervisor):
             )
 
             self.pcn = PlaceCellLayer(
-                bvc_layer=bvc, num_pc=num_place_cells, timestep=timestep, n_hd=n_hd
+                bvc_layer=bvc, num_pc=num_place_cells, timestep=timestep, n_hd=n_hd, enable_multiscale=enable_multiscale
             )
             print("Initialized new Place Cell Network.")
 
@@ -677,6 +682,10 @@ class Driver(Supervisor):
         # Shape: scalar (int) - 1 if collision detected on the right bumper, 0 otherwise.
         self.collided.scatter_nd_update([[1]], [int(self.right_bumper.getValue())])
 
+        # Update bump history
+        self.bump_history = np.roll(self.bump_history, -1)
+        self.bump_history[-1] = int(np.any(self.collided))
+
         # 10. Proceed to the next timestep in the robot's control loop.
         self.step(self.timestep)
 
@@ -701,10 +710,12 @@ class Driver(Supervisor):
         """
         Compute the activations of place cells and handle the environment interactions.
         """
-        # Compute the place cell network activations
+        complexity = self.compute_environmental_complexity(self.bump_history, self.boundaries)
+
         self.pcn.get_place_cell_activations(
             input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)],
             hd_activations=self.hd_activations,
+            complexity=complexity,
             collided=np.any(self.collided),
         )
 
@@ -791,6 +802,28 @@ class Driver(Supervisor):
 
         # Replay the place cell activations
         self.rcn.replay(pcn=self.pcn)
+
+    ########################################### ENVIRONMENTAL COMPLEXITY ###########################################
+    
+    def compute_environmental_complexity(self, bump_history, lidar_data):
+        """
+        Compute environmental complexity based on bump sensor activations and LiDAR data.
+        Args:
+            bump_history: List of 5 most recent bump sensor activations (binary values).
+            lidar_data: Array of recent LiDAR distance measurements.
+        Returns:
+            complexity: A scalar value between 0 and 1 representing environmental complexity.
+        """
+        # Compute bump complexity (e.g., average over last few timesteps)
+        bump_complexity = np.mean(bump_history)  
+
+        # Compute LiDAR complexity (inverse of average distance)
+        lidar_complexity = 1 / np.mean(lidar_data)
+        lidar_complexity = np.clip(lidar_complexity, 0, 1)  # Ensure within [0, 1]
+        
+        # Combine the two measures
+        complexity = np.clip(bump_complexity + lidar_complexity, 0, 1)
+        return complexity
 
     ########################################### HELPER METHODS ###########################################
 

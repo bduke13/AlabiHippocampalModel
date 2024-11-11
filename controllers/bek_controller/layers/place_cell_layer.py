@@ -24,6 +24,7 @@ class PlaceCellLayer:
         n_hd: int = 8,
         enable_ojas: bool = False,
         enable_stdp: bool = False,
+        enable_multiscale: bool = False,
     ):
         """Initialize the Place Cell Layer.
 
@@ -34,6 +35,7 @@ class PlaceCellLayer:
             n_hd: Number of head direction cells.
             enable_ojas: Enable weight updates via competition.
             enable_stdp: Enable tripartite synapse weight updates via Spike-Timing-Dependent Plasticity.
+            enable_multiscale: Enable multiscale processing for place cells.
         """
         rng = default_rng()
 
@@ -46,12 +48,53 @@ class PlaceCellLayer:
         # Number of BVCs (Boundary Vector Cells)
         self.num_bvc = self.bvc_layer.num_bvc
 
-        # Input weight matrix connecting place cells to BVCs
-        # Initialized with a 20% probability of connection
-        # Shape: (num_pc, num_bvc)
-        self.w_in = tf.Variable(
-            rng.binomial(n=1, p=0.2, size=(num_pc, self.num_bvc)), dtype=tf.float32
-        )
+        # Enables/disables updating weights to spread place cells through environment via competition
+        self.enable_ojas = enable_ojas
+
+        # Enables/disables updating weights in the tripartite synapses to track adjacencies between cells
+        self.enable_stdp = enable_stdp
+
+        # Enables/disables multiscale functionality
+        self.enable_multiscale = enable_multiscale
+
+        ############### MULTISCALE ###############
+        if self.enable_multiscale:
+            proportion_small = 0.75  # Adjust as needed
+            num_small_pc = int(self.num_pc * proportion_small)
+            num_large_pc = self.num_pc - num_small_pc
+
+            # Assign scales to place cells
+            self.place_cell_scales = tf.constant(
+                ['small'] * num_small_pc + ['large'] * num_large_pc,
+                dtype=tf.string
+            )
+
+            # Indices for small-scale and large-scale place cells
+            self.small_scale_indices = tf.where(self.place_cell_scales == 'small')[:, 0]
+            self.large_scale_indices = tf.where(self.place_cell_scales == 'large')[:, 0]
+
+            # Initialize weights for small-scale place cells
+            w_in_small = tf.Variable(
+                rng.binomial(n=1, p=0.1, size=(num_small_pc, self.num_bvc)), dtype=tf.float32
+            )
+
+            # Initialize weights for large-scale place cells
+            w_in_large = tf.Variable(
+                rng.binomial(n=1, p=0.3, size=(num_large_pc, self.num_bvc)), dtype=tf.float32
+            )
+
+            # Combine the weights into the main input weight matrix
+            self.w_in = tf.concat([w_in_small, w_in_large], axis=0)
+
+        else:
+            # Input weight matrix connecting place cells to BVCs
+            # Initialized with a 20% probability of connection
+            # Shape: (num_pc, num_bvc)
+            self.w_in = tf.Variable(
+                rng.binomial(n=1, p=0.2, size=(num_pc, self.num_bvc)), dtype=tf.float32
+            )
+
+        ##########################################
 
         # Recurrent weight matrix for head direction and place cell interactions
         # Shape: (n_hd, num_pc, num_pc)
@@ -96,31 +139,22 @@ class PlaceCellLayer:
         # Head direction modulation (if applicable)
         self.head_direction_modulation = None
 
-        # Boundary cell activation values (if any boundary cells are used)
-        # Shape: (n_hd, num_pc)
-        self.boundary_cell_activations = tf.zeros((n_hd, num_pc))
-
         # Trace of place cell activations for eligibility tracking
-        self.place_cell_trace = tf.zeros_like(self.place_cell_activations)
+        self.place_cell_trace = None
 
         # Trace of head direction cells for eligibility tracking
         # Shape: (n_hd, 1, 1)
-        self.hd_cell_trace = tf.zeros((n_hd, 1, 1), tf.float64)
-
-        # Enables/disables updating weights to spread place cells through environment via competition
-        self.enable_ojas = enable_ojas
-
-        # Enables/disables updating weights in the tripartite synapses to track adjacencies between cells
-        self.enable_stdp = enable_stdp
+        self.hd_cell_trace = tf.zeros((n_hd, 1, 1), tf.float32)
 
     def get_place_cell_activations(
-        self, input_data, hd_activations, collided: bool = False
+        self, input_data, hd_activations, complexity, collided: bool = False
     ):
         """Compute place cell activations from BVC and head direction inputs.
 
         Args:
             input_data: Tuple of (distances, angles) as input to BVC layer.
             hd_activations: Head direction cell activations.
+            complexity: Environmental complexity between 0 and 1.
             collided: Whether agent has collided with obstacle.
         """
         # Store the previous place cell activations
@@ -159,8 +193,21 @@ class PlaceCellLayer:
         # Here, ψ is implicitly set to 1
         self.place_cell_activations = tf.tanh(tf.nn.relu(self.activation_update))
 
+        # Apply modulation based on complexity and place cell scale if multiscale is enabled
+        if self.enable_multiscale:
+            # Compute modulation factors for each place cell
+            modulation_factors = tf.where(
+                self.place_cell_scales == 'small',
+                complexity,
+                1 - complexity
+            )
+            modulation_factors = tf.cast(modulation_factors, tf.float32)
+
+            # Apply modulation to place cell activations
+            self.place_cell_activations *= modulation_factors
+
         # Update the eligibility trace and weights
-        if self.enable_stdp and np.any(self.place_cell_activations) and not collided:
+        if self.enable_stdp and tf.reduce_any(self.place_cell_activations) and not collided:
             # Update the eligibility trace for place cells and head direction cells
             # Eligibility traces are used for temporal difference learning and sequence encoding
             if self.place_cell_trace is None:
@@ -172,48 +219,54 @@ class PlaceCellLayer:
                 self.tau
                 / 3
                 * (
-                    np.nan_to_num(hd_activations)[:, np.newaxis, np.newaxis]
+                    tf.expand_dims(tf.expand_dims(hd_activations, axis=-1), axis=-1)
                     - self.hd_cell_trace
                 )
             )
 
             # Update recurrent weights for place cell interactions modulated by head direction
             # This implements sequence learning and is similar to STDP
-            self.w_rec_tripartite += tf.cast(
-                np.nan_to_num(hd_activations)[:, np.newaxis, np.newaxis], tf.float32
-            ) * (
-                tf.tensordot(
-                    self.place_cell_activations[:, np.newaxis],
-                    self.place_cell_trace[np.newaxis, :],
-                    axes=1,
-                )
-                - tf.tensordot(
-                    self.place_cell_trace[:, np.newaxis],
-                    self.place_cell_activations[np.newaxis, :],
-                    axes=1,
-                )
+            delta_w_rec = tf.einsum(
+                'i,j->ij', self.place_cell_activations, self.place_cell_trace
+            ) - tf.einsum(
+                'i,j->ij', self.place_cell_trace, self.place_cell_activations
             )
+            delta_w_rec = tf.expand_dims(delta_w_rec, axis=0)  # Shape: (1, num_pc, num_pc)
+            delta_w_rec = delta_w_rec * tf.expand_dims(
+                tf.expand_dims(hd_activations, axis=-1), axis=-1
+            )  # Shape: (n_hd, num_pc, num_pc)
+            self.w_rec_tripartite += delta_w_rec
 
         # Update the input weights based on the current activations and BVC activations
         # This is the competitive learning rule from Equation (3.3)
-        if self.enable_ojas and np.any(self.place_cell_activations):
+        if self.enable_ojas and tf.reduce_any(self.place_cell_activations):
+            if self.enable_multiscale:
+                # Compute learning rates based on modulation factors
+                learning_rates = modulation_factors  # Use the same modulation factors
+            else:
+                learning_rates = tf.ones_like(self.place_cell_activations)
+
             # Compute the weight update according to Oja's rule (Equation 3.3)
             weight_update = self.tau * (
-                self.place_cell_activations[:, np.newaxis]
+                self.place_cell_activations[:, tf.newaxis]
                 * (
-                    self.bvc_activations[np.newaxis, :]
+                    self.bvc_activations[tf.newaxis, :]
                     - (1 / self.alpha_pb)
-                    * self.place_cell_activations[:, np.newaxis]
+                    * self.place_cell_activations[:, tf.newaxis]
                     * self.w_in
                 )
             )
+
+            # Apply learning rates to weight updates
+            weight_update *= learning_rates[:, tf.newaxis]
+
             # Update the input weights from BVCs to place cells
             self.w_in.assign_add(weight_update)
 
     def reset_activations(self):
         """Reset place cell activations and related variables to zero."""
-        self.place_cell_activations *= 0
-        self.activation_update *= 0
+        self.place_cell_activations.assign(tf.zeros_like(self.place_cell_activations))
+        self.activation_update.assign(tf.zeros_like(self.activation_update))
         self.place_cell_trace = None
 
     def preplay(self, direction, num_steps=1):
@@ -239,16 +292,39 @@ class PlaceCellLayer:
 
             # Compute new activations based on recurrent weights and previous activations
             # The recurrent weights are modulated by the specified head direction
-            place_cell_activations = tf.tanh(
-                tf.nn.relu(
-                    tf.tensordot(
-                        tf.cast(self.w_rec_tripartite[direction], tf.float32),
-                        previous_activations,
-                        axes=1,
-                    )
-                    - previous_activations
-                )
+            weighted_sum = tf.tensordot(
+                self.w_rec_tripartite[direction], previous_activations, axes=1
             )
+            # Apply activation function
+            place_cell_activations = tf.tanh(tf.nn.relu(weighted_sum - previous_activations))
+
+            # Apply modulation based on complexity and place cell scale if multiscale is enabled
+            if self.enable_multiscale:
+                # Assume complexity remains the same during preplay
+                complexity = 0.5  # Or set to a default value or pass as an argument
+                modulation_factors = tf.where(
+                    self.place_cell_scales == 'small',
+                    complexity,
+                    1 - complexity
+                )
+                modulation_factors = tf.cast(modulation_factors, tf.float32)
+                place_cell_activations *= modulation_factors
 
         # Return the updated place cell activations
         return place_cell_activations
+
+    def modulation_factor(self, scale, complexity):
+        """
+        Determine modulation factor based on place cell scale and environmental complexity.
+        Args:
+            scale: 'small' or 'large'
+            complexity: Environmental complexity between 0 and 1
+        Returns:
+            Modulation factor for the place cell activation.
+        """
+        if scale == 'small':
+            return complexity  # Small-scale cells are more active in complex areas
+        elif scale == 'large':
+            return 1 - complexity  # Large-scale cells are more active in simple areas
+        else:
+            return 1.0  # Default factor
