@@ -26,25 +26,28 @@ class BoundaryVectorCellLayer:
             sigma_ang: Standard deviation (tuning width) for the Gaussian function modeling angular tuning of BVCs (in degrees).
             sigma_d: Standard deviation (tuning width) for the Gaussian function modeling distance tuning of BVCs.
         """
-        # Preferred distances for each BVC; determines how sensitive each BVC is to specific distances.
+        # Compute the number of preferred distances per head direction
+        N_dist = len(np.arange(0, max_dist, sigma_d / 2))
+
+        # Preferred distances for each BVC
         self.d_i = np.tile(np.arange(0, max_dist, sigma_d / 2), n_hd)[np.newaxis, :]
 
-        # Total number of BVC neurons = 8 head directions * 48 preferred distances per head direction.
+        # Total number of BVC neurons
         self.num_bvc = self.d_i.size
 
         # Indices to map input LiDAR angles to BVC neurons
         self.input_indices = np.repeat(
             np.linspace(0, input_dim, n_hd, endpoint=False, dtype=int),
-            max_dist / (sigma_d / 2),
+            N_dist,
         )[np.newaxis, :]
 
-        # Preferred angles for each BVC, spaced around 360 degrees.
+        # Preferred angles for each BVC
         self.phi_i = np.linspace(0, 2 * np.pi, input_dim)[self.input_indices]
 
-        # Angular standard deviation for the Gaussian function (converted to radians).
+        # Angular standard deviation (converted to radians)
         self.sigma_ang = tf.constant(np.deg2rad(sigma_ang), dtype=tf.float32)
 
-        # Distance standard deviation for the Gaussian function.
+        # Distance standard deviation
         self.sigma_d = tf.constant(sigma_d, dtype=tf.float32)
 
     def get_bvc_activation(
