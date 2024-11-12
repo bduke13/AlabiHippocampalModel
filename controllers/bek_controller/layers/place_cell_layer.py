@@ -207,7 +207,7 @@ class PlaceCellLayer:
             self.place_cell_activations *= modulation_factors
 
         # Update the eligibility trace and weights
-        if self.enable_stdp and tf.reduce_any(self.place_cell_activations) and not collided:
+        if self.enable_ojas and tf.reduce_any(self.place_cell_activations > 0):
             # Update the eligibility trace for place cells and head direction cells
             # Eligibility traces are used for temporal difference learning and sequence encoding
             if self.place_cell_trace is None:
@@ -239,7 +239,7 @@ class PlaceCellLayer:
 
         # Update the input weights based on the current activations and BVC activations
         # This is the competitive learning rule from Equation (3.3)
-        if self.enable_ojas and tf.reduce_any(self.place_cell_activations):
+        if self.enable_ojas and tf.reduce_any(self.place_cell_activations > 0):
             if self.enable_multiscale:
                 # Compute learning rates based on modulation factors
                 learning_rates = modulation_factors  # Use the same modulation factors

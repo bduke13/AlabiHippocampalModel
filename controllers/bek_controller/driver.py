@@ -164,6 +164,7 @@ class Driver(Supervisor):
             (self.num_steps, self.n_hd)
         )  # head direction cell activations
         self.hmap_g = np.zeros(self.num_steps)  # goal estimates
+        self.hmap_complexity = np.zeros(self.num_steps)  # environmental complexity
 
         # Initialize hardware components and sensors
         self.robot = self.getFromDef("agent")  # Placeholder for robot instance
@@ -270,7 +271,7 @@ class Driver(Supervisor):
                 print("Loaded existing Place Cell Network.")
         except:
             bvc = BoundaryVectorCellLayer(
-                max_dist=10,
+                max_dist=12,
                 input_dim=720,
                 n_hd=n_hd,
                 sigma_ang=90,
@@ -670,8 +671,8 @@ class Driver(Supervisor):
 
         # 7. Compute the activations of the head direction cells based on the current heading vector (v_in).
         # Shape: (self.num_cells,) - A 1D array where each element represents the activation of a head direction cell.
-        self.hd_activations = self.head_direction_layer.get_hd_activation(
-            theta_0=theta_0, v_in=v_in
+        self.hd_activations = tf.cast(
+            self.head_direction_layer.get_hd_activation(theta_0=theta_0, v_in=v_in), tf.float32
         )
 
         # 8. Update the collision status using the left bumper sensor.
@@ -685,6 +686,9 @@ class Driver(Supervisor):
         # Update bump history
         self.bump_history = np.roll(self.bump_history, -1)
         self.bump_history[-1] = int(np.any(self.collided))
+
+        # Get environmental complexity
+        self.complexity = self.compute_environmental_complexity(self.bump_history, self.boundaries, self.current_heading_deg)
 
         # 10. Proceed to the next timestep in the robot's control loop.
         self.step(self.timestep)
@@ -710,12 +714,10 @@ class Driver(Supervisor):
         """
         Compute the activations of place cells and handle the environment interactions.
         """
-        complexity = self.compute_environmental_complexity(self.bump_history, self.boundaries)
-
         self.pcn.get_place_cell_activations(
             input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)],
             hd_activations=self.hd_activations,
-            complexity=complexity,
+            complexity=self.complexity,
             collided=np.any(self.collided),
         )
 
@@ -730,6 +732,7 @@ class Driver(Supervisor):
             self.hmap_z[self.step_count] = self.pcn.place_cell_activations
             self.hmap_h[self.step_count] = self.hd_activations
             self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn.bvc_activations)
+            self.hmap_complexity[self.step_count] = self.complexity  # Record complexity
 
         # Increment timestep
         self.step_count += 1
@@ -805,24 +808,42 @@ class Driver(Supervisor):
 
     ########################################### ENVIRONMENTAL COMPLEXITY ###########################################
     
-    def compute_environmental_complexity(self, bump_history, lidar_data):
+    def compute_environmental_complexity(self, bump_history, lidar_data, heading_angle=None):
         """
-        Compute environmental complexity based on bump sensor activations and LiDAR data.
+        Compute environmental complexity based on the proportion of LiDAR readings
+        that are below a threshold distance, indicating nearby obstacles.
+        This method provides a steeper gradient and reduces noise.
+
         Args:
-            bump_history: List of 5 most recent bump sensor activations (binary values).
+            bump_history: List of recent bump sensor activations (binary values).
             lidar_data: Array of recent LiDAR distance measurements.
+            heading_angle: Optional heading angle in degrees for directional weighting.
+
         Returns:
             complexity: A scalar value between 0 and 1 representing environmental complexity.
         """
-        # Compute bump complexity (e.g., average over last few timesteps)
-        bump_complexity = np.mean(bump_history)  
+        # Define a threshold distance for 'near' obstacles
+        threshold_distance = 0.5  # meters, adjust as needed based on your robot and environment
 
-        # Compute LiDAR complexity (inverse of average distance)
-        lidar_complexity = 1 / np.mean(lidar_data)
-        lidar_complexity = np.clip(lidar_complexity, 0, 1)  # Ensure within [0, 1]
-        
-        # Combine the two measures
-        complexity = np.clip(bump_complexity + lidar_complexity, 0, 1)
+        # Count the number of readings below the threshold
+        near_obstacle_count = np.sum(lidar_data < threshold_distance)
+
+        # Proportion of readings that are near obstacles
+        proportion_near_obstacles = near_obstacle_count / len(lidar_data)
+
+        # Apply an exponential function to get the complexity
+        k = 5.0  # Adjust k for the steepness of the gradient
+        complexity = 1 - np.exp(-k * proportion_near_obstacles)
+
+        # Optionally apply directional weighting based on heading angle
+        if heading_angle is not None:
+            heading_angle_rad = np.deg2rad(heading_angle)
+            # Adjust the weighting factor as needed
+            directional_weight = 1 + 0.5 * np.cos(heading_angle_rad)
+            complexity *= directional_weight
+
+        # Ensure complexity is between 0 and 1
+        complexity = np.clip(complexity, 0, 1)
         return complexity
 
     ########################################### HELPER METHODS ###########################################
@@ -989,6 +1010,9 @@ class Driver(Supervisor):
             with open("hmap_h.pkl", "wb") as output:
                 pickle.dump(self.hmap_h[: self.step_count], output)
                 files_saved.append("hmap_h.pkl")
+            with open("hmap_complexity.pkl", "wb") as output:
+                pickle.dump(self.hmap_complexity[: self.step_count], output)
+                files_saved.append("hmap_complexity.pkl")
 
         root = tk.Tk()
         root.withdraw()  # Hide the main window
