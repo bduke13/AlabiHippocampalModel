@@ -217,7 +217,7 @@ class Driver(Supervisor):
         self.goal_location = [-1, 1]
         self.expected_reward = 0
         self.last_reward = 0
-        self.current_pcn_state = tf.zeros_like(self.pcn.place_cell_activations)
+        self.place_cell_trace = tf.zeros_like(self.pcn.place_cell_activations)
         self.prev_pcn_state = tf.zeros_like(self.pcn.place_cell_activations)
 
         if randomize_start_loc:
@@ -239,7 +239,8 @@ class Driver(Supervisor):
             self.robot.resetPhysics()
 
         self.sense()
-        self.compute()
+        self.compute_pcn_activations()
+        self.update_hmaps()
 
     def load_pcn(
         self,
@@ -376,10 +377,10 @@ class Driver(Supervisor):
         Returns:
             None
         """
-        self.prev_pcn_state = self.current_pcn_state
-        self.current_pcn_state *= 0
+        self.prev_pcn_state = self.place_cell_trace
+        self.place_cell_trace *= 0
 
-        for s in range(self.tau_w):
+        for step in range(self.tau_w):
             self.sense()
 
             # Update the reward cell activations
@@ -405,10 +406,11 @@ class Driver(Supervisor):
                 or self.mode == RobotMode.LEARN_HEBB
                 or self.mode == RobotMode.EXPLOIT
             ):
-                self.current_pcn_state += self.pcn.place_cell_activations
+                self.place_cell_trace += self.pcn.place_cell_activations
                 self.check_goal_reached()
 
-            self.compute()
+            self.compute_pcn_activations()
+            self.update_hmaps()
             self.forward()
             self.check_goal_reached()
 
@@ -417,7 +419,7 @@ class Driver(Supervisor):
             or self.mode == RobotMode.LEARN_HEBB
             or self.mode == RobotMode.EXPLOIT
         ):
-            self.current_pcn_state /= s  # 's' should be greater than 0
+            self.place_cell_trace /= step  # 'w' should be greater than 0
 
         self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
 
@@ -437,12 +439,13 @@ class Driver(Supervisor):
             None
         """
         # Reset the current place cell state
-        self.current_pcn_state *= 0
+        self.place_cell_trace *= 0
 
         # Stop movement and update sensor readings
         self.stop()
         self.sense()
-        self.compute()
+        self.compute_pcn_activations()
+        self.update_hmaps()
         self.check_goal_reached()
 
         # Proceed only if enough steps have been taken
@@ -514,10 +517,11 @@ class Driver(Supervisor):
             # Move forward for a set duration while updating the place cell state
             for s in range(self.tau_w):
                 self.sense()
-                self.compute()
+                self.compute_pcn_activations()
+                self.update_hmaps()
                 self.forward()
                 # Accumulate place cell activations
-                self.current_pcn_state += self.pcn.place_cell_activations
+                self.place_cell_trace += self.pcn.place_cell_activations
                 self.check_goal_reached()
 
                 # Update reward cell activations and perform TD update
@@ -528,7 +532,7 @@ class Driver(Supervisor):
                 )
 
             # Normalize the accumulated place cell state over the time window
-            self.current_pcn_state /= self.tau_w
+            self.place_cell_trace /= self.tau_w
 
     def get_actual_reward(self):
         """Determines the actual reward for the agent at the current state.
@@ -683,12 +687,8 @@ class Driver(Supervisor):
         # Shape: scalar (int) - 1 if collision detected on the right bumper, 0 otherwise.
         self.collided.scatter_nd_update([[1]], [int(self.right_bumper.getValue())])
 
-        # Update bump history
-        self.bump_history = np.roll(self.bump_history, -1)
-        self.bump_history[-1] = int(np.any(self.collided))
-
         # Get environmental complexity
-        self.complexity = self.compute_environmental_complexity(self.bump_history, self.boundaries, self.current_heading_deg)
+        self.complexity = self.compute_environmental_complexity(self.boundaries, self.current_heading_deg)
 
         # 10. Proceed to the next timestep in the robot's control loop.
         self.step(self.timestep)
@@ -708,9 +708,9 @@ class Driver(Supervisor):
             bearing = bearing + 360.0
         return bearing
 
-    ########################################### COMPUTE ###########################################
+    ########################################### COMPUTE PCN ACTIVATIONS ###########################################
 
-    def compute(self):
+    def compute_pcn_activations(self):
         """
         Compute the activations of place cells and handle the environment interactions.
         """
@@ -723,6 +723,10 @@ class Driver(Supervisor):
 
         # Advance the timestep and update position
         self.step(self.timestep)
+
+    ########################################### UPDATE HMAPS ###########################################
+
+    def update_hmaps(self):
         curr_pos = self.robot.getField("translation").getSFVec3f()
 
         # Update place cell and sensor maps
@@ -776,7 +780,7 @@ class Driver(Supervisor):
 
     def auto_pilot(self):
         print("Auto-piloting to the goal...")
-        s_start = 0
+        step = 0
         curr_pos = self.robot.getField("translation").getSFVec3f()
         while not np.allclose(
             self.goal_location, [curr_pos[0], curr_pos[2]], 0, self.goal_r["explore"]
@@ -795,27 +799,22 @@ class Driver(Supervisor):
                 theta = tf.math.atan(abs(delta_x), abs(delta_y))
                 desired = np.pi - theta
             self.turn(-(desired - np.deg2rad(self.current_heading_deg)))
-
             self.sense()
-            self.compute()
+            self.compute_pcn_activations()
+            self.update_hmaps()
             self.forward()
-            self.current_pcn_state += self.pcn.place_cell_activations
-            s_start += 1
-        self.current_pcn_state /= s_start
+            self.place_cell_trace += self.pcn.place_cell_activations
+            step += 1
+        self.place_cell_trace /= step
 
         # Replay the place cell activations
         self.rcn.replay(pcn=self.pcn)
 
     ########################################### ENVIRONMENTAL COMPLEXITY ###########################################
     
-    def compute_environmental_complexity(self, bump_history, lidar_data, heading_angle=None):
+    def compute_environmental_complexity(self, lidar_data, heading_angle=None):
         """
-        Compute environmental complexity based on the proportion of LiDAR readings
-        that are below a threshold distance, indicating nearby obstacles.
-        This method provides a steeper gradient and reduces noise.
-
         Args:
-            bump_history: List of recent bump sensor activations (binary values).
             lidar_data: Array of recent LiDAR distance measurements.
             heading_angle: Optional heading angle in degrees for directional weighting.
 
