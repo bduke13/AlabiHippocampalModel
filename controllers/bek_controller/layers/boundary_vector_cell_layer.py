@@ -26,6 +26,9 @@ class BoundaryVectorCellLayer:
             sigma_ang: Standard deviation (tuning width) for the Gaussian function modeling angular tuning of BVCs (in degrees).
             sigma_d: Standard deviation (tuning width) for the Gaussian function modeling distance tuning of BVCs.
         """
+        # Compute the number of preferred distances per head direction
+        N_dist = len(np.arange(0, max_dist, sigma_d / 2))
+
         # Preferred distances for each BVC; determines how sensitive each BVC is to specific distances.
         self.d_i = np.tile(np.arange(0, max_dist, sigma_d / 2), n_hd)[np.newaxis, :]
 
@@ -35,7 +38,7 @@ class BoundaryVectorCellLayer:
         # Indices to map input LiDAR angles to BVC neurons
         self.input_indices = np.repeat(
             np.linspace(0, input_dim, n_hd, endpoint=False, dtype=int),
-            max_dist / (sigma_d / 2),
+            N_dist,
         )[np.newaxis, :]
 
         # Preferred angles for each BVC, spaced around 360 degrees.
