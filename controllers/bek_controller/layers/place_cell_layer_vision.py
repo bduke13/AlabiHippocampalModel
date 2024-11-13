@@ -29,8 +29,6 @@ class PlaceCellLayer:
         n_hd: int = 8,
         enable_ojas: bool = False,
         enable_hebb: bool = False,
-        input_height: int = 96,
-        input_width: int = 192,
     ):
         """Initialize the Place Cell Layer.
 
@@ -53,10 +51,12 @@ class PlaceCellLayer:
         self.encoder = load_model(
             encoder_path
         )  # compile=False reduces startup messages
-        # Get the output shape of the encoder (1024 from your training script)
-        self.num_features = 200  # This should match your encoder's bottleneck size
+        # Get the output shape from the encoder model
+        self.num_features = self.encoder.output_shape[
+            -1
+        ]  # Gets the last dimension of output shape
 
-        self.input_width = 192
+        self.input_width = 96
         self.input_height = 96
         # Input weight matrix connecting place cells to encoder features
         # Initialized with a 20% probability of connection
@@ -81,13 +81,13 @@ class PlaceCellLayer:
         self.encoder_features = tf.zeros(self.num_features, dtype=tf.float32)
 
         # Coefficient to modify effect of place cell recurrent inhibition (Γ_pp in Equation 3.2a)
-        self.gamma_pp = 0.6
+        self.gamma_pp = 0.8
 
         # Coefficient to modify effect of encoder feature afferent inhibition (Γ_pb in Equation 3.2a)
-        self.gamma_pb = 0.2
+        self.gamma_pb = 0.03
 
         # Time constant for the membrane potential dynamics of place cells (τ_p in Equation 3.2a)
-        self.tau_p = 0.1
+        self.tau_p = 0.05
 
         # Normalization factor for synaptic weight updates (α_pb in Equation 3.3)
         self.alpha_pb = np.sqrt(0.5)

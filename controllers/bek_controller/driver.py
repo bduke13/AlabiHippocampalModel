@@ -4,6 +4,7 @@ from numpy.random import default_rng
 import matplotlib.pyplot as plt
 from matplotlib.cm import get_cmap
 import cv2
+from tensorflow.python.eager.context import num_gpus
 from astropy.stats import circmean, circvar
 import pickle
 import os
@@ -115,14 +116,6 @@ class Driver(Supervisor):
         enable_ojas: Optional[bool] = None,
         enable_hebb: Optional[bool] = None,
     ):
-        # Initialize sensor data dictionary
-        self.sensor_data = {
-            "positions": [],
-            "headings": [],
-            "lidar": [],
-            "images": [],  # Buffer for camera images
-        }
-        self.image_frame_counter = 0  # Counter for image sampling
         """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
         Args:
@@ -141,6 +134,13 @@ class Driver(Supervisor):
         Returns:
             None
         """
+        # Initialize sensor data dictionary
+        self.sensor_data = {
+            "headings": [],
+            "lidar": [],
+            "images": [],  # Buffer for camera images
+        }
+        self.image_frame_counter = 0  # Counter for image sampling
         self.mode = mode
 
         # Model parameters
@@ -565,24 +565,22 @@ class Driver(Supervisor):
         """Records sensor data during robot operation.
 
         Stores:
-            - Current position coordinates
-            - Heading angle in degrees
+            - Current position coordinates (in hmap_x, hmap_y)
+            - Head direction activations (in hmap_h)
             - LiDAR range readings
             - Camera images (if enabled)
-
-        The data is stored in the sensor_data dictionary with keys:
-        'positions', 'headings', 'lidar', and 'images'.
 
         Returns:
             None
         """
         # Get current position
         curr_pos = self.robot.getField("translation").getSFVec3f()
-        self.sensor_data["positions"].append([curr_pos[0], curr_pos[2]])
 
-        # Get current heading angle in degrees
-        current_heading_deg = int(self.get_bearing_in_degrees(self.compass.getValues()))
-        self.sensor_data["headings"].append(current_heading_deg)
+        # Store coordinates and head direction activations like other modes
+        if self.step_count < self.num_steps:
+            self.hmap_x[self.step_count] = curr_pos[0]
+            self.hmap_y[self.step_count] = curr_pos[2]
+            self.hmap_h[self.step_count] = self.hd_activations
 
         # Get LiDAR readings
         lidar_readings = self.range_finder.getRangeImage()
@@ -604,14 +602,11 @@ class Driver(Supervisor):
         """
         Saves the recorded sensor data to files for later use.
         """
-        # Convert lists to NumPy arrays
-        positions = np.array(self.sensor_data["positions"])
-        headings = np.array(self.sensor_data["headings"])
-        lidar_data = np.array(self.sensor_data["lidar"])
+        # Save position, heading and other map data using standard method
+        self.on_save(include_pcn=False, include_rcn=False)
 
-        # Save data to files
-        np.save("recorded_positions.npy", positions)
-        np.save("recorded_headings.npy", headings)
+        # Save additional sensor data
+        lidar_data = np.array(self.sensor_data["lidar"])
         np.save("recorded_lidar.npy", lidar_data)
 
         # Save camera images if they were recorded
@@ -753,7 +748,7 @@ class Driver(Supervisor):
             )
             # Convert to RGB, resize to (96, 192), and normalize to [0, 1]
             image = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
-            image = cv2.resize(image, (192, 96)) / 255.0
+            image = cv2.resize(image, (96, 96)) / 255.0
         else:
             image = None
 
@@ -875,6 +870,7 @@ class Driver(Supervisor):
 
         # Always step simulation forward and update sensors
         self.sense()
+        self.compute()
         self.step(self.timestep)
 
     def rotate(self, direction: int, speed_factor: float = 0.3):

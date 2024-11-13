@@ -14,7 +14,7 @@ def resize_images(images, new_size):
     return resized_images
 
 
-def preprocess_images(input_file, output_file):
+def preprocess_images(input_file, output_file, new_size):
     # Load the saved images file
     print(f"Loading images from {input_file}")
     images = np.load(input_file)
@@ -23,8 +23,6 @@ def preprocess_images(input_file, output_file):
     # Use only the first three channels (RGB)
     images = images[:, :, :, :3]
 
-    # Resize the images to a size that's a multiple of 8
-    new_size = (96, 192)  # (height, width)
     print("Resizing images...")
     resized_images = resize_images(images, new_size)
     print("Resized image shape:", resized_images.shape)
@@ -39,8 +37,8 @@ def preprocess_images(input_file, output_file):
 
 
 # Default filenames
-INPUT_FILE = "recorded_images_360_2.npy"
+INPUT_FILE = "recorded_images.npy"
 OUTPUT_FILE = "preprocessed_images.npy"
-
-if __name__ == "__main__":
-    preprocess_images(INPUT_FILE, OUTPUT_FILE)
+# Resize the images to a size that's a multiple of 8
+new_size = (96, 96)  # (height, width)
+preprocess_images(INPUT_FILE, OUTPUT_FILE, new_size)
