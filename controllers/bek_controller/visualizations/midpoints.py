@@ -123,25 +123,25 @@ def plot_place_fields_with_centers(
 
 if __name__ == "__main__":
     # Load hmap data
-    with open("../hmap_x.pkl", "rb") as f:
+    with open("hmap_x.pkl", "rb") as f:
         hmap_x = np.array(pickle.load(f))[10:]
-    with open("../hmap_y.pkl", "rb") as f:
+    with open("hmap_y.pkl", "rb") as f:
         hmap_y = np.array(pickle.load(f))[10:]
-    with open("../hmap_z.pkl", "rb") as f:
+    with open("hmap_z.pkl", "rb") as f:
         hmap_z = np.asarray(pickle.load(f))[10:]
 
     # Load the colors list
-    with open("colors.json", "r") as f:
+    with open("visualizations/colors.json", "r") as f:
         colors = json.load(f)
 
     # Convert hex colors to RGB format
     colors_rgb = [mcolors.to_rgb(c) for c in colors]
 
     # Optional specific cell indices (e.g., [0, 5, 10]) or None to plot all
-    specific_cells = [5]  # Replace with a list of specific cell indices if needed
+    specific_cells = [10,15,20,25,30]  # Replace with a list of specific cell indices if needed
 
     # Plot with the environment image as background
-    image_path = "environment_images/5x5_env_image.jpg"  # Set this to an empty string if no background is needed
+    image_path = "visualizations/environment_images/5x5_env_image.jpg"  # Set this to an empty string if no background is needed
 
     # Plot hexbin and place field centers
     plot_place_fields_with_centers(

@@ -48,11 +48,11 @@ def plot_place_fields_with_adjacencies(
 
 
 # Load hmap data
-with open("hmap_x.pkl", "rb") as f:
+with open("C:/Users/alexm/Documents/senior_design/AlabiHippocampalModel-1/controllers/bek_controller/hmap_x.pkl", "rb") as f:
     hmap_x = np.array(pickle.load(f))[10:]
-with open("hmap_y.pkl", "rb") as f:
+with open("C:/Users/alexm/Documents/senior_design/AlabiHippocampalModel-1/controllers/bek_controller/hmap_y.pkl", "rb") as f:
     hmap_y = np.array(pickle.load(f))[10:]
-with open("hmap_z.pkl", "rb") as f:
+with open("C:/Users/alexm/Documents/senior_design/AlabiHippocampalModel-1/controllers/bek_controller/hmap_z.pkl", "rb") as f:
     hmap_z = np.asarray(pickle.load(f))[10:]
 
 # Calculate the place field centers (means)
@@ -72,7 +72,7 @@ valid_cells = ~np.isnan(means).any(axis=1)
 valid_means = means[valid_cells]
 
 # Load the saved place cell network
-with open("pcn.pkl", "rb") as f:
+with open("C:/Users/alexm/Documents/senior_design/AlabiHippocampalModel-1/controllers/bek_controller/pcn.pkl", "rb") as f:
     pcn = pickle.load(f)
 
 # Get adjacencies

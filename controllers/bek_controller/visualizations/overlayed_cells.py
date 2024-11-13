@@ -7,18 +7,18 @@ import matplotlib.colors as mcolors
 gridsize = 100
 
 # Load the colors list
-with open("visualizations/colors.json", "r") as f:
+with open("C:/Users/alexm/Documents/senior_design/AlabiHippocampalModel-1/controllers/bek_controller/visualizations/colors.json", "r") as f:
     colors = json.load(f)
 
 # Convert hex colors to RGB format
 colors_rgb = [mcolors.to_rgb(c) for c in colors]
 
 # Load hmap data
-with open("hmap_x.pkl", "rb") as f:
+with open("C:/Users/alexm/Documents/senior_design/AlabiHippocampalModel-1/controllers/bek_controller/hmap_x.pkl", "rb") as f:
     hmap_x = np.array(pickle.load(f))
-with open("hmap_y.pkl", "rb") as f:
+with open("C:/Users/alexm/Documents/senior_design/AlabiHippocampalModel-1/controllers/bek_controller/hmap_y.pkl", "rb") as f:
     hmap_y = np.array(pickle.load(f))
-with open("hmap_z.pkl", "rb") as f:
+with open("C:/Users/alexm/Documents/senior_design/AlabiHippocampalModel-1/controllers/bek_controller/hmap_z.pkl", "rb") as f:
     hmap_z = np.asarray(pickle.load(f))
 
 # Total number of place cells based on hmap_z's shape

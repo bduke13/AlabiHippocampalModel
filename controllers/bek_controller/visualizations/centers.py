@@ -121,11 +121,11 @@ def get_place_field_centers(
 
 if __name__ == "__main__":
     # Load hmap data
-    with open("hmap_x.pkl", "rb") as f:
+    with open("C:/Users/alexm/Documents/senior_design/AlabiHippocampalModel-1/controllers/bek_controller/hmap_x.pkl", "rb") as f:
         hmap_x = np.array(pickle.load(f))
-    with open("hmap_y.pkl", "rb") as f:
+    with open("C:/Users/alexm/Documents/senior_design/AlabiHippocampalModel-1/controllers/bek_controller/hmap_y.pkl", "rb") as f:
         hmap_y = np.array(pickle.load(f))
-    with open("hmap_z.pkl", "rb") as f:
+    with open("C:/Users/alexm/Documents/senior_design/AlabiHippocampalModel-1/controllers/bek_controller/hmap_z.pkl", "rb") as f:
         hmap_z = np.asarray(pickle.load(f))
 
     # Optional specific cell indices (e.g., [0, 5, 10]) or None to plot all

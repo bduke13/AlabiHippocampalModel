@@ -7,6 +7,7 @@ from astropy.stats import circmean, circvar
 import pickle
 import os
 import time
+import math
 import tkinter as tk
 from tkinter import N, messagebox
 from typing import Optional, List
@@ -64,6 +65,21 @@ class RobotMode(Enum):
     RECORDING = auto()
 
 
+class ExploreMethod(Enum):
+    """Defines Methods for Exploration 
+    
+    Methods:
+        RAMNDOM_WALK: Default exploration mode
+
+        CURIOSITY: Creates a visiation_map and goes to areas less visited first
+
+        HYBRID: Curiosity mode with added randomness
+    """
+
+    RANDOM_WALK = auto()
+    CURIOSITY = auto()
+    HYBRID = auto()
+
 class Driver(Supervisor):
     """Controls robot navigation and learning using neural networks for place and reward cells.
 
@@ -113,6 +129,8 @@ class Driver(Supervisor):
         start_loc: Optional[List[int]] = None,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
+        explore_mthd: ExploreMethod = ExploreMethod.RANDOM_WALK,
+        use_existing_visitation_map: bool = False,
     ):
         """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
@@ -133,6 +151,7 @@ class Driver(Supervisor):
             None
         """
         self.mode = mode
+        self.explore_mthd = explore_mthd
 
         # Model parameters
         self.num_place_cells = 200
@@ -235,6 +254,30 @@ class Driver(Supervisor):
 
         self.sense()
         self.compute()
+
+         # Initialize attributes for curiosity-driven exploration
+        if self.explore_mthd in [ExploreMethod.CURIOSITY, ExploreMethod.HYBRID]:
+            self.grid_resolution = 0.5  # Cell size in meters; adjust as needed
+            self.decay_rate = 0.99  # Decay rate for visitation counts
+
+            # Initialize or load the visitation map based on the parameter
+            if use_existing_visitation_map:
+                # Try to load existing visitation map
+                try:
+                    with open("visitation_map.pkl", "rb") as f:
+                        self.visitation_map = pickle.load(f)
+                        print("Loaded existing visitation map.")
+                except FileNotFoundError:
+                    # If file does not exist, create a new visitation map
+                    self.visitation_map = {}
+                    print("No existing visitation map found. Initialized new visitation map.")
+            else:
+                # Always create a new visitation map
+                self.visitation_map = {}
+                print("Initialized new visitation map (existing map not used).")
+        else:
+            # If not using curiosity or hybrid methods, visitation map is not needed
+            self.visitation_map = {}
 
     def load_pcn(
         self,
@@ -360,6 +403,28 @@ class Driver(Supervisor):
     def explore(self) -> None:
         """Handles the exploration mode logic for the robot.
 
+        Selects Between:
+        Random Walk (original)
+        Curiosity (test)
+
+        Returns:
+            None
+        """
+        if self.explore_mthd == ExploreMethod.RANDOM_WALK:
+            self.random_walk_explore()
+        elif self.explore_mthd == ExploreMethod.CURIOSITY:
+            self.curiosity_explore()
+        elif self.explore_mthd == ExploreMethod.HYBRID:
+            self.hybrid_explore()
+        else:
+            self.random_walk_explore()
+
+        # Check if the simulation time has exceeded the limit
+        self.check_goal_reached()
+
+    def random_walk_explore(self):
+        """Performs random walk exploration.
+        
         The robot moves forward for a set number of steps while:
         - Updating place and reward cell activations
         - Checking for collisions and turning if needed
@@ -367,8 +432,6 @@ class Driver(Supervisor):
         - Monitoring goal proximity
         - Randomly changing direction periodically
 
-        Returns:
-            None
         """
         self.prev_pcn_state = self.current_pcn_state
         self.current_pcn_state *= 0
@@ -414,6 +477,216 @@ class Driver(Supervisor):
             self.current_pcn_state /= s  # 's' should be greater than 0
 
         self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
+
+    def curiosity_explore(self):
+        """Performs curiosity-driven exploration with learning updates and goal checks."""
+        self.prev_pcn_state = self.current_pcn_state
+        self.current_pcn_state *= 0
+
+        for s in range(self.tau_w):
+            self.sense()
+            self.compute()
+
+            # Update visitation map and decay counts
+            self.update_visitation_map()
+            self.decay_visitation_counts()
+
+            # Compute novelty scores and choose direction
+            directions, novelty_scores = self.compute_novelty_scores()
+            total_novelty = sum(novelty_scores)
+            if total_novelty == 0:
+                probabilities = [1 / len(novelty_scores)] * len(novelty_scores)
+            else:
+                probabilities = [n / total_novelty for n in novelty_scores]
+            chosen_direction = np.random.choice(directions, p=probabilities)
+            self.move_in_direction(chosen_direction)
+
+            # Update reward cell activations and perform TD update if applicable
+            self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations)
+            actual_reward = self.get_actual_reward()
+            self.rcn.td_update(self.pcn.place_cell_activations, next_reward=actual_reward)
+
+            # Accumulate place cell activations for learning
+            if (
+                self.mode == RobotMode.DMTP
+                or self.mode == RobotMode.LEARN_HEBB
+                or self.mode == RobotMode.EXPLOIT
+            ):
+                self.current_pcn_state += self.pcn.place_cell_activations
+                self.check_goal_reached()
+
+            # Handle collision by turning randomly
+            if np.any(self.collided):
+                random_angle = np.random.uniform(-np.pi, np.pi)
+                self.turn(random_angle)
+                break
+
+        # Normalize accumulated place cell activations
+        if (
+            self.mode == RobotMode.DMTP
+            or self.mode == RobotMode.LEARN_HEBB
+            or self.mode == RobotMode.EXPLOIT
+        ):
+            self.current_pcn_state /= s  # 's' should be greater than 0
+
+        self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
+    
+    def hybrid_explore(self):
+        """Performs exploration using a hybrid of random walk and curiosity-driven methods."""
+        epsilon = 0.2  # Probability of choosing a random action; adjust as needed
+
+        self.prev_pcn_state = self.current_pcn_state
+        self.current_pcn_state *= 0
+
+        for s in range(self.tau_w):
+            self.sense()
+            self.compute()
+
+            if np.random.rand() < epsilon:
+                # Random exploration
+                action = np.random.choice(['forward', 'left', 'right'])
+            else:
+                # Curiosity-driven exploration
+                action = self.select_curiosity_action()
+
+            self.move_in_direction_random(action)
+
+            # Update learning and check goal
+            self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations)
+            actual_reward = self.get_actual_reward()
+            self.rcn.td_update(self.pcn.place_cell_activations, next_reward=actual_reward)
+
+            # Accumulate place cell activations
+            if (
+                self.mode == RobotMode.DMTP
+                or self.mode == RobotMode.LEARN_HEBB
+                or self.mode == RobotMode.EXPLOIT
+            ):
+                self.current_pcn_state += self.pcn.place_cell_activations
+                self.check_goal_reached()
+
+            # Handle collision
+            if np.any(self.collided):
+                random_angle = np.random.uniform(-np.pi, np.pi)
+                self.turn(random_angle)
+                break
+
+        # Normalize accumulated activations
+        if (
+            self.mode == RobotMode.DMTP
+            or self.mode == RobotMode.LEARN_HEBB
+            or self.mode == RobotMode.EXPLOIT
+        ):
+            self.current_pcn_state /= s  # 's' should be greater than 0
+
+        # Choose a new random direction
+        self.turn(np.random.normal(0, np.deg2rad(30)))
+    
+    def update_visitation_map(self):
+        """Update the visitation map with the current cell based on robot's position."""
+        curr_pos = self.robot.getField("translation").getSFVec3f()
+        x_cell = int(curr_pos[0] / self.grid_resolution)
+        y_cell = int(curr_pos[2] / self.grid_resolution)
+        cell = (x_cell, y_cell)
+        self.visitation_map[cell] = self.visitation_map.get(cell, 0) + 1
+
+    def decay_visitation_counts(self):
+        """Decay visitation counts to allow areas to become novel again over time."""
+        for cell in self.visitation_map:
+            self.visitation_map[cell] *= self.decay_rate
+
+    def compute_novelty_scores(self):
+        """Compute novelty scores for possible movement directions."""
+        directions = ['forward', 'left', 'right']
+        novelty_scores = []
+
+        for direction in directions:
+            predicted_position = self.predict_position(direction)
+            if predicted_position is None:
+                novelty_scores.append(0)
+                continue
+
+            x_cell = int(predicted_position[0] / self.grid_resolution)
+            y_cell = int(predicted_position[1] / self.grid_resolution)
+            cell = (x_cell, y_cell)
+
+            visitation_count = self.visitation_map.get(cell, 0)
+            novelty = 1 / (visitation_count + 1)
+            novelty_scores.append(novelty)
+
+        return directions, novelty_scores
+
+    def predict_position(self, direction):
+        """Predict the robot's future position if it moves in the given direction."""
+        movement_distance = 0.5  # Adjust as needed
+        current_heading_rad = np.deg2rad(self.current_heading_deg)
+
+        if direction == 'forward':
+            angle = current_heading_rad
+        elif direction == 'left':
+            angle = current_heading_rad + np.pi / 4  # Turn 45 degrees left
+        elif direction == 'right':
+            angle = current_heading_rad - np.pi / 4  # Turn 45 degrees right
+        else:
+            return None
+
+        curr_pos = self.robot.getField("translation").getSFVec3f()
+        new_x = curr_pos[0] + movement_distance * np.cos(angle)
+        new_z = curr_pos[2] + movement_distance * np.sin(angle)
+
+        if self.is_collision_predicted(new_x, new_z):
+            return None
+
+        return (new_x, new_z)
+    
+    def is_collision_predicted(self, x, z):
+        """Check if moving to position (x, z) would result in a collision."""
+        # ToDo: Implement collision prediction based on sensor data
+        return False  # Placeholder implementation
+
+    def move_in_direction(self, direction):
+        """Move the robot in the specified direction."""
+        if direction == 'forward':
+            self.forward()
+        elif direction == 'left':
+            self.turn(np.deg2rad(45))  # Turn 45 degrees left
+            self.forward()
+        elif direction == 'right':
+            self.turn(-np.deg2rad(45))  # Turn 45 degrees right
+            self.forward()
+
+    def move_in_direction_random(self, direction):
+        """Move the robot in the specified direction with adjusted turning angles."""
+        if direction == 'forward':
+            self.forward()
+        elif direction == 'left':
+            turn_angle = np.deg2rad(np.random.uniform(30, 90))  # Random angle between 30 and 90 degrees
+            self.turn(turn_angle)
+            self.forward()
+        elif direction == 'right':
+            turn_angle = -np.deg2rad(np.random.uniform(30, 90))
+            self.turn(turn_angle)
+            self.forward()
+
+
+    def select_curiosity_action(self):
+        """Selects an action based on novelty scores with added stochasticity."""
+        self.update_visitation_map()
+        self.decay_visitation_counts()
+
+        directions, novelty_scores = self.compute_novelty_scores()
+        novelty_scores = np.array(novelty_scores)
+        # Add noise to novelty scores to prevent deterministic behavior
+        noise = np.random.normal(0, 0.1, size=novelty_scores.shape)
+        novelty_scores += noise
+        # Apply softmax to get probabilities
+        exp_scores = np.exp(novelty_scores)
+        probabilities = exp_scores / np.sum(exp_scores)
+
+        chosen_direction = np.random.choice(directions, p=probabilities)
+        return chosen_direction
+
+
 
     ########################################### EXPLOIT ###########################################
 
@@ -956,6 +1229,9 @@ class Driver(Supervisor):
             with open("hmap_h.pkl", "wb") as output:
                 pickle.dump(self.hmap_h[: self.step_count], output)
                 files_saved.append("hmap_h.pkl")
+            if self.explore_mthd in [ExploreMethod.CURIOSITY, ExploreMethod.HYBRID]:
+                with open("visitation_map.pkl", "wb") as output:
+                    pickle.dump(self.visitation_map, output)
 
         root = tk.Tk()
         root.withdraw()  # Hide the main window
@@ -980,6 +1256,7 @@ class Driver(Supervisor):
             "hmap_z.pkl",
             "hmap_g.pkl",
             "hmap_h.pkl",
+            "visitation_map.pkl",
         ]
 
         for file in files_to_remove:

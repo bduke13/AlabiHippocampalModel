@@ -7,4 +7,7 @@ centralWidgetVisible: 1
 orthographicViewHeight: 1
 textFiles: 0 "controllers/bek_controller/bek_controller.py"
 consoles: Console:All:All
-renderingDevicePerspectives: Create:range-finder;0;2.48472;0;0.347424
+renderingDevicePerspectives: Create:display;1;1;0;0
+renderingDevicePerspectives: Create:lefteye;1;1;0;0
+renderingDevicePerspectives: Create:range-finder;1;32;0;0
+renderingDevicePerspectives: Create:righteye;0;1;0;0
