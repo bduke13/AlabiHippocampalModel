@@ -3,8 +3,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pickle
 from tensorflow.keras.models import load_model
-import os
 import webbrowser
+import io
+import base64
+import os
 
 # Load the encoder model and embeddings
 encoder = load_model("encoder_model.keras")
@@ -17,9 +19,19 @@ with open("hmap_x.pkl", "rb") as f:
 with open("hmap_y.pkl", "rb") as f:
     hmap_y = np.array(pickle.load(f))
 
-# Create output directory
-output_dir = "embedding_activation_plots/"
-os.makedirs(output_dir, exist_ok=True)
+# Identify dimensions with non-zero activations
+non_zero_dims = []
+zero_dims = []
+for emb_idx in range(embeddings.shape[1]):
+    emb_activations = embeddings[:, emb_idx]
+    if np.allclose(emb_activations, 0, atol=1e-10):
+        zero_dims.append(emb_idx)
+    else:
+        non_zero_dims.append(emb_idx)
+
+print(f"Total embedding dimensions: {embeddings.shape[1]}")
+print(f"Dimensions with non-zero activations: {len(non_zero_dims)}")
+print(f"Dimensions with zero activations: {len(zero_dims)}")
 
 
 def plot_embedding_group(
@@ -28,20 +40,22 @@ def plot_embedding_group(
     y,
     activations,
     group_index,
-    output_dir="embedding_activation_plots/",
-    save_plot=True,
-    show_plot=False,
 ):
-    # Ensure x, y and activations have the same length
+    """Plot a group of up to 5 embedding dimensions and return as base64 image."""
+    # Ensure x, y, and activations have the same length
     min_len = min(len(x), len(y), len(activations))
     x = x[:min_len]
     y = y[:min_len]
     activations = activations[:min_len]
-    """Plot a group of 5 embedding dimensions using hexbin."""
-    fig, axes = plt.subplots(1, 5, figsize=(25, 5))
+
+    num_plots = len(embedding_indices)
+    fig, axes = plt.subplots(1, num_plots, figsize=(5 * num_plots, 5))
     fig.suptitle(f"Embedding Dimensions Group {group_index}", fontsize=16)
 
-    for idx, (ax, emb_idx) in enumerate(zip(axes, embedding_indices)):
+    if num_plots == 1:
+        axes = [axes]
+
+    for ax, emb_idx in zip(axes, embedding_indices):
         # Get activations for this embedding dimension
         emb_activations = activations[:, emb_idx]
 
@@ -62,21 +76,18 @@ def plot_embedding_group(
 
     plt.tight_layout()
 
-    if save_plot:
-        os.makedirs(output_dir, exist_ok=True)
-        file_path = os.path.join(output_dir, f"embedding_group_{group_index}.jpg")
-        plt.savefig(file_path, bbox_inches="tight", dpi=300)
-        print(f"Saved plot for embedding group {group_index} to {file_path}")
-
-    if show_plot:
-        plt.show()
-
+    # Save figure to a BytesIO buffer
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", bbox_inches="tight", dpi=300)
     plt.close(fig)
+    buf.seek(0)
+    image_base64 = base64.b64encode(buf.read()).decode("utf-8")
+    return image_base64
 
 
-def generate_html_report(num_embeddings, output_dir):
+def generate_html_report(image_base64_list, zero_dims):
     """Generate an HTML report of all embedding visualizations."""
-    html_path = os.path.join(output_dir, "embeddings_report.html")
+    html_path = "embeddings_report.html"
 
     with open(html_path, "w") as f:
         f.write(
@@ -95,50 +106,52 @@ def generate_html_report(num_embeddings, output_dir):
         """
         )
 
-        num_groups = (num_embeddings + 4) // 5  # Round up division by 5
+        num_groups = len(image_base64_list)
         for i in range(num_groups):
+            image_base64 = image_base64_list[i]
             f.write(
                 f"""
             <div class="group-viz">
                 <h3>Group {i}</h3>
-                <img src="embedding_group_{i}.jpg" style="max-width: 100%;">
+                <img src="data:image/png;base64,{image_base64}" style="max-width: 100%;">
             </div>
             """
             )
+
+        if zero_dims:
+            f.write("<h2>Embedding Dimensions with Zero Activations</h2>")
+            f.write(f"<p>{sorted(zero_dims)}</p>")
 
         f.write("</body></html>")
 
     return html_path
 
 
-# Generate plots in groups of 5
-num_embeddings = embeddings.shape[1]
-for i in range(0, num_embeddings, 5):
-    group = list(range(i, min(i + 5, num_embeddings)))
-    # Pad the group with the last index if it's not complete
-    while len(group) < 5:
-        group.append(group[-1])
-
-    group_index = i // 5
-    plot_embedding_group(
+# Generate plots for non-zero dimensions, grouped by 5
+image_base64_list = []
+for group_index, i in enumerate(range(0, len(non_zero_dims), 5)):
+    group = non_zero_dims[i : i + 5]
+    image_base64 = plot_embedding_group(
         group,
         hmap_x,
         hmap_y,
         embeddings,
         group_index,
-        output_dir=output_dir,
-        save_plot=True,
-        show_plot=False,
     )
+    image_base64_list.append(image_base64)
 
 # Generate and open HTML report
 try:
-    html_path = generate_html_report(num_embeddings, output_dir)
-    webbrowser.open(f"file://{os.path.abspath(html_path)}")
-    print(f"Generated plots for {num_embeddings} embedding dimensions")
-    print(f"HTML report generated at: {html_path}")
+    html_path = generate_html_report(image_base64_list, zero_dims)
+    # Get absolute path and convert to proper URL format
+    abs_path = os.path.abspath(html_path)
+    file_url = f'file://{abs_path.replace(os.sep, "/")}'
+
+    print(f"Generated plots for {len(non_zero_dims)} embedding dimensions")
+    print(f"HTML report generated at: {abs_path}")
+    print(f"Opening report in browser: {file_url}")
+
+    webbrowser.open(file_url)
 except Exception as e:
     print(f"Error generating HTML report: {str(e)}")
-
-print(f"Generated plots for {num_embeddings} embedding dimensions")
-print(f"HTML report generated at: {html_path}")
+print("\a")
