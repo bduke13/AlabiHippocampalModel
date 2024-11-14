@@ -1,7 +1,8 @@
 # %%
 import numpy as np
 import matplotlib.pyplot as plt
-from tensorflow.keras.models import load_model
+from tensorflow import keras
+from keras.models import load_model
 import seaborn as sns
 
 # Load the encoder model
@@ -75,6 +76,7 @@ plt.title("PCA Analysis of Embeddings")
 plt.grid(True)
 plt.show()
 
+# %%
 # Print how many components are needed for different variance thresholds
 thresholds = [0.8, 0.9, 0.95, 0.99]
 for threshold in thresholds:
@@ -83,3 +85,74 @@ for threshold in thresholds:
     print(
         f"Number of components needed for {threshold*100:.0f}% variance: {n_components}"
     )
+
+# %%
+# Analyze similarity patterns between embedding dimensions
+plt.figure(figsize=(15, 10))
+
+# 1. Correlation matrix between embedding dimensions
+plt.subplot(121)
+correlation_matrix = np.corrcoef(embeddings.T)
+sns.heatmap(
+    correlation_matrix, cmap="RdBu_r", center=0, xticklabels=False, yticklabels=False
+)
+plt.title("Correlation Matrix Between\nEmbedding Dimensions")
+plt.xlabel("Dimension Index")
+plt.ylabel("Dimension Index")
+
+# 2. Distribution of correlation coefficients
+plt.subplot(122)
+# Get upper triangle of correlation matrix (excluding diagonal)
+upper_tri = correlation_matrix[np.triu_indices_from(correlation_matrix, k=1)]
+plt.hist(upper_tri, bins=50, density=True)
+plt.title("Distribution of Pairwise\nDimension Correlations")
+plt.xlabel("Correlation Coefficient")
+plt.ylabel("Density")
+
+plt.tight_layout()
+plt.show()
+
+# Print summary statistics of correlations
+print("\nCorrelation Statistics:")
+print(f"Mean correlation: {np.mean(upper_tri):.4f}")
+print(f"Std of correlations: {np.std(upper_tri):.4f}")
+print(f"Min correlation: {np.min(upper_tri):.4f}")
+print(f"Max correlation: {np.max(upper_tri):.4f}")
+
+# %%
+# Calculate and visualize cosine similarities between embeddings
+from sklearn.metrics.pairwise import cosine_similarity
+
+# Calculate cosine similarity for a random subset of embeddings
+sample_size = min(1000, embeddings.shape[0])
+random_indices = np.random.choice(embeddings.shape[0], sample_size, replace=False)
+sample_embeddings = embeddings[random_indices]
+cosine_sim = cosine_similarity(sample_embeddings)
+
+plt.figure(figsize=(15, 5))
+
+# 1. Heatmap of cosine similarities
+plt.subplot(121)
+sns.heatmap(cosine_sim, cmap="viridis", xticklabels=False, yticklabels=False)
+plt.title("Cosine Similarity Heatmap\n(Random Sample)")
+plt.xlabel("Sample Index")
+plt.ylabel("Sample Index")
+
+# 2. Distribution of cosine similarities
+plt.subplot(122)
+# Get upper triangle (excluding diagonal)
+upper_tri_cos = cosine_sim[np.triu_indices_from(cosine_sim, k=1)]
+plt.hist(upper_tri_cos, bins=50, density=True)
+plt.title("Distribution of Pairwise\nCosine Similarities")
+plt.xlabel("Cosine Similarity")
+plt.ylabel("Density")
+
+plt.tight_layout()
+plt.show()
+
+# Print summary statistics of cosine similarities
+print("\nCosine Similarity Statistics:")
+print(f"Mean similarity: {np.mean(upper_tri_cos):.4f}")
+print(f"Std of similarities: {np.std(upper_tri_cos):.4f}")
+print(f"Min similarity: {np.min(upper_tri_cos):.4f}")
+print(f"Max similarity: {np.max(upper_tri_cos):.4f}")

@@ -8,7 +8,8 @@ os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"  # Suppress NUMA warnings
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow import keras
+from keras.callbacks import EarlyStopping
 import tensorflow as tf
 from sklearn.model_selection import train_test_split
 
@@ -47,45 +48,36 @@ early_stopping = EarlyStopping(
 )
 
 
-def data_generator(data, batch_size):
-    num_samples = len(data)
-    while True:  # Loop indefinitely so the generator never terminates
-        for offset in range(0, num_samples, batch_size):
-            batch_data = data[offset : offset + batch_size]
-            yield batch_data, batch_data  # For autoencoders, input = output
-
-
-BATCH_SIZE_1 = 8
-BATCH_SIZE_2 = 1
-EPOCHS_1 = 5
-EPOCHS_2 = 5
-train_gen = data_generator(X_train, batch_size=BATCH_SIZE_1)
-val_gen = data_generator(X_val, batch_size=BATCH_SIZE_1)
+# %%
+# Single training phase with direct data input
+BATCH_SIZE = 64
+EPOCHS = 20
 
 history = autoencoder.fit(
-    train_gen,
-    steps_per_epoch=len(X_train),
-    validation_data=val_gen,
-    validation_steps=len(X_val),
-    epochs=EPOCHS_1,
+    X_train,
+    X_train,  # Input and target are the same for autoencoders
+    batch_size=BATCH_SIZE,
+    epochs=EPOCHS,
+    validation_data=(X_val, X_val),
     callbacks=[early_stopping],
+    shuffle=True,
 )
-
 
 # %%
-# Create the generator
-train_gen = data_generator(X_train, batch_size=BATCH_SIZE_2)
-val_gen = data_generator(X_val, batch_size=BATCH_SIZE_2)
+# Plot training history
+plt.figure(figsize=(10, 6))
+plt.plot(history.history["loss"], label="Training Loss")
+plt.plot(history.history["val_loss"], label="Validation Loss")
+plt.title("Model Loss During Training")
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.legend()
+plt.grid(True)
+plt.show()
 
-# Train the model using the generator
-history = autoencoder.fit(
-    train_gen,
-    steps_per_epoch=len(X_train),
-    validation_data=val_gen,
-    validation_steps=len(X_val),
-    epochs=EPOCHS_2,
-    callbacks=[early_stopping],
-)
+# Print final loss values
+print(f"\nFinal training loss: {history.history['loss'][-1]:.4f}")
+print(f"Final validation loss: {history.history['val_loss'][-1]:.4f}")
 
 # %%
 # Save the encoder and decoder separately
@@ -147,7 +139,6 @@ plt.show()
 embeddings = encoder.predict(resized_images)
 print(f"Embedding shape: {embeddings.shape}")
 
-# %%
 # Calculate basic statistics
 mean_activations = np.mean(embeddings, axis=0)
 std_activations = np.std(embeddings, axis=0)

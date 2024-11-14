@@ -2,12 +2,14 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import pickle
-from tensorflow.keras.models import load_model
+from tensorflow import keras
+from keras.models import load_model
 import webbrowser
 import io
 import base64
 import os
 
+# %%
 # Load the encoder model and embeddings
 encoder = load_model("encoder_model.keras")
 resized_images = np.load("preprocessed_images.npy")
