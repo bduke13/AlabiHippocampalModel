@@ -1,1 +1,32 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+
+# Custom Python script
+main.py
+
+# Ignore hmap and pkl files
+*.hmap_*.pkl
+*.pkl
+
+# Ignore Jupyter notebook in bek_controller
 controllers/bek_controller/network_plots.ipynb
+
+# Ignore images in any output directory
+*outputs/*.jpg
+
+# Ignore any recorded output numpy buffers
+*recorded*.npy
+
+# Ignore .wbproj files
+*.wbproj
