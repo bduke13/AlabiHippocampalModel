@@ -377,7 +377,6 @@ class Driver(Supervisor):
         Returns:
             None
         """
-        self.prev_pcn_state = self.place_cell_trace
         self.place_cell_trace *= 0
 
         for step in range(self.tau_w):
@@ -386,7 +385,7 @@ class Driver(Supervisor):
             # Update the reward cell activations
             self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations)
 
-            # Determine the actual reward (you may need to define how to calculate this)
+            # Determine the actual reward
             actual_reward = self.get_actual_reward()
 
             # Perform TD update
@@ -395,9 +394,7 @@ class Driver(Supervisor):
             )
 
             if np.any(self.collided):
-                random_angle = np.random.uniform(
-                    -np.pi, np.pi
-                )  # Random angle between -180 and 180 degrees (in radians)
+                random_angle = np.random.uniform(-np.pi, np.pi)
                 self.turn(random_angle)
                 break
 
@@ -419,7 +416,8 @@ class Driver(Supervisor):
             or self.mode == RobotMode.LEARN_HEBB
             or self.mode == RobotMode.EXPLOIT
         ):
-            self.place_cell_trace /= step  # 'w' should be greater than 0
+            # Avoid division by zero if step is 0
+            self.place_cell_trace /= (step + 1)
 
         self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
 
@@ -450,10 +448,8 @@ class Driver(Supervisor):
 
         # Proceed only if enough steps have been taken
         if self.step_count > self.tau_w:
-            # Initialize variables
-            action_angle, max_reward, num_steps = 0, 0, 1
+            num_steps = 1
             pot_rew = np.empty(self.n_hd)
-            pot_e = np.empty(self.n_hd)
 
             # Update reward cell network based on current place cell activations
             self.rcn.update_reward_cell_activations(
@@ -467,15 +463,14 @@ class Driver(Supervisor):
                 self.explore()
                 return
 
-            # Calculate potential reward and energy for each direction
+            # Calculate potential reward for each direction
             for d in range(self.n_hd):
                 # Simulate future place cell activations in direction 'd'
                 pcn_activations = self.pcn.preplay(d, num_steps=num_steps)
                 # Update reward cell activations based on the simulated activations
                 self.rcn.update_reward_cell_activations(pcn_activations)
 
-                # Store potential energy and reward
-                pot_e[d] = tf.norm(pcn_activations, ord=1).numpy()
+                # Store potential reward
                 pot_rew[d] = tf.reduce_max(
                     np.nan_to_num(self.rcn.reward_cell_activations)
                 )
@@ -498,7 +493,6 @@ class Driver(Supervisor):
 
             # Handle collision by turning and updating the reward cell network
             if np.any(self.collided):
-                # Generate a random angle between -180 and 180 degrees (in radians)
                 random_angle = np.random.uniform(-np.pi, np.pi)
                 self.turn(random_angle)
                 self.stop()
@@ -534,6 +528,7 @@ class Driver(Supervisor):
             # Normalize the accumulated place cell state over the time window
             self.place_cell_trace /= self.tau_w
 
+
     def get_actual_reward(self):
         """Determines the actual reward for the agent at the current state.
 
@@ -545,7 +540,14 @@ class Driver(Supervisor):
             [curr_pos[0] - self.goal_location[0], curr_pos[2] - self.goal_location[1]]
         )
 
-        if distance_to_goal <= self.goal_r["exploit"]:
+        # Determine the correct goal radius based on the current mode
+        if self.mode == RobotMode.EXPLOIT:
+            goal_radius = self.goal_r["exploit"]
+        else:  # Default to "explore" goal radius for all other modes
+            goal_radius = self.goal_r["explore"]
+
+        # Check if the robot is within the goal radius
+        if distance_to_goal <= goal_radius:
             return 1.0  # Reward for reaching the goal
         else:
             return 0.0  # No reward otherwise
@@ -688,7 +690,7 @@ class Driver(Supervisor):
         self.collided.scatter_nd_update([[1]], [int(self.right_bumper.getValue())])
 
         # Get environmental complexity
-        self.complexity = self.compute_environmental_complexity(self.boundaries, self.current_heading_deg)
+        self.complexity = self.compute_visual_density(self.boundaries, self.current_heading_deg)
 
         # 10. Proceed to the next timestep in the robot's control loop.
         self.step(self.timestep)
@@ -812,17 +814,9 @@ class Driver(Supervisor):
 
     ########################################### ENVIRONMENTAL COMPLEXITY ###########################################
     
-    def compute_environmental_complexity(self, lidar_data, heading_angle=None):
-        """
-        Args:
-            lidar_data: Array of recent LiDAR distance measurements.
-            heading_angle: Optional heading angle in degrees for directional weighting.
-
-        Returns:
-            complexity: A scalar value between 0 and 1 representing environmental complexity.
-        """
-        # Define a threshold distance for 'near' obstacles
-        threshold_distance = 0.5  # meters, adjust as needed based on your robot and environment
+    def compute_visual_density(self, lidar_data, heading_angle):
+        # Threshold distance for 'near' obstacles
+        threshold_distance = 0.5
 
         # Count the number of readings below the threshold
         near_obstacle_count = np.sum(lidar_data < threshold_distance)
@@ -830,20 +824,16 @@ class Driver(Supervisor):
         # Proportion of readings that are near obstacles
         proportion_near_obstacles = near_obstacle_count / len(lidar_data)
 
-        # Apply an exponential function to get the complexity
-        k = 5.0  # Adjust k for the steepness of the gradient
-        complexity = 1 - np.exp(-k * proportion_near_obstacles)
+        k = 2.5  # Adjust k for the steepness of the gradient
+        vis_density = 1 - np.exp(-k * proportion_near_obstacles)
 
-        # Optionally apply directional weighting based on heading angle
-        if heading_angle is not None:
-            heading_angle_rad = np.deg2rad(heading_angle)
-            # Adjust the weighting factor as needed
-            directional_weight = 1 + 0.5 * np.cos(heading_angle_rad)
-            complexity *= directional_weight
+        heading_angle_rad = np.deg2rad(heading_angle)
+        directional_weight = 1 + 0.5 * np.cos(heading_angle_rad)
+        vis_density *= directional_weight
 
-        # Ensure complexity is between 0 and 1
-        complexity = np.clip(complexity, 0, 1)
-        return complexity
+        # Clamp between 0 and 1
+        vis_density = np.clip(vis_density, 0, 1)
+        return vis_density
 
     ########################################### HELPER METHODS ###########################################
 
