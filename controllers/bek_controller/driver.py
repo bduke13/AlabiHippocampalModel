@@ -170,8 +170,6 @@ class Driver(Supervisor):
         self.compass.enable(self.timestep)
         self.range_finder = self.getDevice("range-finder")
         self.range_finder.enable(self.timestep)
-        self.vertical_range_finder = self.getDevice("vertical-range-finder")
-        self.vertical_range_finder.enable(self.timestep)
         self.left_bumper = self.getDevice("bumper_left")
         self.left_bumper.enable(self.timestep)
         self.right_bumper = self.getDevice("bumper_right")
@@ -205,9 +203,6 @@ class Driver(Supervisor):
 
         # Initialize boundaries
         self.boundary_data = tf.Variable(tf.zeros((720, 1)))
-        self.vertical_boundary_data = tf.Variable(
-            tf.zeros((720, 360))
-        )  # For vertical range data
 
         self.directional_reward_estimates = tf.zeros(self.n_hd)
         self.step(self.timestep)
@@ -643,14 +638,9 @@ class Driver(Supervisor):
             collided: Collision status from bumpers
         """
 
-        # 1. Capture distance data from both range finders
-        # Horizontal LiDAR - Shape: (720,)
+        # 1. Capture distance data from the range finder (LiDAR), which provides 720 points around the robot.
+        # Shape: (720,)
         self.boundaries = self.range_finder.getRangeImage()
-
-        # Vertical LiDAR - Shape: (720, 360)
-        vertical_data = self.vertical_range_finder.getRangeImage()
-        if vertical_data is not None:
-            self.vertical_boundaries = np.array(vertical_data).reshape(720, 360)
 
         # 2. Get the robot's current heading in degrees using the compass and convert it to an integer.
         # Shape: scalar (int)
