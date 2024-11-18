@@ -85,7 +85,10 @@ class BoundaryVectorCellLayer:
         Returns:
             Activations of the BVC neurons, including vertical projections.
         """
-        PI = tf.constant(np.pi)
+        # Convert inputs to tensors
+        distances = tf.convert_to_tensor(distances, dtype=tf.float32)
+        angles = tf.convert_to_tensor(angles, dtype=tf.float32)
+        vertical_scan = tf.convert_to_tensor(vertical_scan, dtype=tf.float32)
 
         # Initialize list to store activations for each vertical angle
         all_activations = []
@@ -100,45 +103,34 @@ class BoundaryVectorCellLayer:
             start_idx = i * (self.num_bvc // len(self.vertical_angles))
             end_idx = (i + 1) * (self.num_bvc // len(self.vertical_angles))
 
-            # Compute Gaussian function for distance tuning
+            # Get input distances and angles for this set of cells
+            input_distances = tf.gather(
+                vert_distances, self.input_indices[:, start_idx:end_idx]
+            )
+            input_angles = tf.gather(angles, self.input_indices[:, start_idx:end_idx])
+
+            # Calculate distance tuning
             distance_gaussian = tf.exp(
-                -(
-                    (
-                        vert_distances[self.input_indices[:, start_idx:end_idx]]
-                        - self.d_i[:, start_idx:end_idx]
-                    )
-                    ** 2
-                )
-                / (2 * self.sigma_d**2)
-            ) / tf.sqrt(2 * PI * self.sigma_d**2)
+                -(tf.square(input_distances - self.d_i[:, start_idx:end_idx]))
+                / (2 * tf.square(self.sigma_d))
+            )
 
-            # Compute Gaussian function for horizontal angular tuning
+            # Calculate horizontal angle tuning
+            angle_diff = input_angles - self.phi_i[:, start_idx:end_idx]
             horiz_gaussian = tf.exp(
-                -(
-                    (
-                        angles[self.input_indices[:, start_idx:end_idx]]
-                        - self.phi_i[:, start_idx:end_idx]
-                    )
-                    ** 2
-                )
-                / (2 * self.sigma_ang**2)
-            ) / tf.sqrt(2 * PI * self.sigma_ang**2)
+                -(tf.square(angle_diff)) / (2 * tf.square(self.sigma_ang))
+            )
 
-            # Compute Gaussian function for vertical angular tuning
+            # Calculate vertical angle tuning
+            v_angle_rad = tf.constant(np.deg2rad(v_angle), dtype=tf.float32)
+            vert_diff = v_angle_rad - self.theta_i[:, start_idx:end_idx]
             vert_gaussian = tf.exp(
-                -(
-                    (
-                        tf.constant(v_angle, dtype=tf.float32)
-                        - self.theta_i[:, start_idx:end_idx]
-                    )
-                    ** 2
-                )
-                / (2 * self.sigma_ang**2)
-            ) / tf.sqrt(2 * PI * self.sigma_ang**2)
+                -(tf.square(vert_diff)) / (2 * tf.square(self.sigma_ang))
+            )
 
             # Combine all tuning factors
             activation = tf.reduce_sum(
-                (distance_gaussian * horiz_gaussian * vert_gaussian), 0
+                distance_gaussian * horiz_gaussian * vert_gaussian, axis=0
             )
             all_activations.append(activation)
 
