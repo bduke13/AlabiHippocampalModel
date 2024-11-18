@@ -377,7 +377,6 @@ class Driver(Supervisor):
         Returns:
             None
         """
-        self.place_cell_trace *= 0
 
         for step in range(self.tau_w):
             self.sense()
@@ -398,26 +397,10 @@ class Driver(Supervisor):
                 self.turn(random_angle)
                 break
 
-            if (
-                self.mode == RobotMode.DMTP
-                or self.mode == RobotMode.LEARN_HEBB
-                or self.mode == RobotMode.EXPLOIT
-            ):
-                self.place_cell_trace += self.pcn.place_cell_activations
-                self.check_goal_reached()
-
             self.compute_pcn_activations()
             self.update_hmaps()
             self.forward()
             self.check_goal_reached()
-
-        if (
-            self.mode == RobotMode.DMTP
-            or self.mode == RobotMode.LEARN_HEBB
-            or self.mode == RobotMode.EXPLOIT
-        ):
-            # Avoid division by zero if step is 0
-            self.place_cell_trace /= (step + 1)
 
         self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
 
@@ -436,8 +419,6 @@ class Driver(Supervisor):
         Returns:
             None
         """
-        # Reset the current place cell state
-        self.place_cell_trace *= 0
 
         # Stop movement and update sensor readings
         self.stop()
@@ -508,14 +489,12 @@ class Driver(Supervisor):
                 ) % (2 * np.pi)
                 self.turn(angle_to_turn)
 
-            # Move forward for a set duration while updating the place cell state
+            # Move forward for a set duration
             for s in range(self.tau_w):
                 self.sense()
                 self.compute_pcn_activations()
                 self.update_hmaps()
                 self.forward()
-                # Accumulate place cell activations
-                self.place_cell_trace += self.pcn.place_cell_activations
                 self.check_goal_reached()
 
                 # Update reward cell activations and perform TD update
@@ -524,10 +503,6 @@ class Driver(Supervisor):
                 self.rcn.td_update(
                     self.pcn.place_cell_activations, next_reward=actual_reward
                 )
-
-            # Normalize the accumulated place cell state over the time window
-            self.place_cell_trace /= self.tau_w
-
 
     def get_actual_reward(self):
         """Determines the actual reward for the agent at the current state.
