@@ -39,12 +39,7 @@ class BoundaryVectorCellLayer:
         self.vertical_angles = np.array(vertical_angles, dtype=np.float32)
         self.horiz_angles = horiz_angles
         # Store layer indices
-        self.layer_indices = layer_indices or [
-            0,
-            119,
-            239,
-            359,
-        ]  # Default indices if None
+        self.layer_indices = layer_indices or [x for x in range(360 / 2, 360, 1)]
 
         # Compute the number of preferred distances per head direction
         N_dist = len(np.arange(0, max_dist, sigma_d / 2))
@@ -159,8 +154,8 @@ class BoundaryVectorCellLayer:
         """Plot the BVC activation in 3D showing vertical projections.
 
         Args:
-            distances: 2D array (720, 360) of vertical scan data in polar coordinates.
-            horiz_angles: 2D array (720, 360) of horizontal angles (azimuth).
+            distances: 2D array of vertical scan data in polar coordinates.
+            horiz_angles: 2D array of horizontal angles (azimuth).
             return_plot: If True, returns the plot object instead of showing it.
 
         Returns:
@@ -270,7 +265,7 @@ class BoundaryVectorCellLayer:
 if __name__ == "__main__":
     # Generate synthetic data for testing
     n_horiz: int = 720  # horizontal resolution
-    n_vert: int = 360  # vertical resolution
+    n_vert: int = 30  # vertical resolution
     max_r: float = 10
     min_r: float = 5
 

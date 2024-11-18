@@ -39,7 +39,7 @@ DEF agent Create {
   supervisor TRUE
   bodySlot [
     Solid {
-      translation 0 0.04 -0.08
+      translation 0 0.09 -0.08
       children [
         Display {
           width 100
@@ -47,17 +47,10 @@ DEF agent Create {
         }
         Compass {
         }
-        DEF range-finder RangeFinder {
-          fieldOfView 6.28
-          width 720
-          height 1
-          spherical TRUE
-          maxRange 12
-        }
         DEF vertical-range-finder RangeFinder {
           rotation 1 0 0 0  # Horizontal orientation (0 degrees)
           fieldOfView 6.28  # 360 degrees horizontal
-          verticalFieldOfView 0.785398  # 45 degrees vertical FOV
+          verticalFieldOfView 1.0472  # 60 degrees vertical FOV
           width 720  # horizontal resolution
           height 360  # vertical resolution to get good sampling of the vertical space
           spherical TRUE

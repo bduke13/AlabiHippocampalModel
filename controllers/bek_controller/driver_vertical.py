@@ -87,7 +87,6 @@ class Driver(Supervisor):
         robot (Robot): Main robot controller instance.
         keyboard (Keyboard): Keyboard input device.
         compass (Compass): Compass sensor device.
-        range_finder (RangeFinder): LiDAR sensor device.
         left_bumper (TouchSensor): Left collision sensor.
         right_bumper (TouchSensor): Right collision sensor.
         rotation_field (Field): Robot rotation field.
@@ -168,8 +167,6 @@ class Driver(Supervisor):
         self.keyboard.enable(self.timestep)
         self.compass = self.getDevice("compass")
         self.compass.enable(self.timestep)
-        self.range_finder = self.getDevice("range-finder")
-        self.range_finder.enable(self.timestep)
         self.vertical_range_finder = self.getDevice("vertical-range-finder")
         self.vertical_range_finder.enable(self.timestep)
         self.left_bumper = self.getDevice("bumper_left")
@@ -275,7 +272,15 @@ class Driver(Supervisor):
                 n_hd=n_hd,
                 sigma_ang=90,
                 sigma_d=0.5,
-                layer_indices=[0, 119, 239, 359],  # for a 360-point vertical resolution
+                layer_indices=[
+                    0,
+                    4,
+                    9,
+                    14,
+                    19,
+                    24,
+                    29,
+                ],
             )
 
             self.pcn = PlaceCellLayer(
@@ -573,12 +578,6 @@ class Driver(Supervisor):
         current_heading_deg = int(self.get_bearing_in_degrees(self.compass.getValues()))
         self.sensor_data["headings"].append(current_heading_deg)
 
-        # Get LiDAR readings
-        lidar_readings = self.range_finder.getRangeImage()
-        self.sensor_data["lidar"].append(
-            lidar_readings.copy()
-        )  # Copy to avoid referencing issues
-
     def save_sensor_data(self):
         """
         Saves the recorded sensor data to files for later use.
@@ -648,13 +647,16 @@ class Driver(Supervisor):
         """
 
         # 1. Capture distance data from both range finders and calculate angles
-        # Horizontal LiDAR - Shape: (720,)
-        self.boundaries = self.range_finder.getRangeImage()
 
         # Vertical LiDAR - Shape: (720, 360)
         vertical_data = self.vertical_range_finder.getRangeImage()
         if vertical_data is not None:
             self.vertical_boundaries = np.array(vertical_data).reshape(720, 360)
+
+            # Save the first scan for testing
+            if not hasattr(self, "first_scan_saved"):
+                np.save("first_vertical_scan.npy", self.vertical_boundaries)
+                self.first_scan_saved = True
 
         # 2. Get the robot's current heading in degrees using the compass and convert it to an integer.
         # Shape: scalar (int)
@@ -662,9 +664,12 @@ class Driver(Supervisor):
             self.get_bearing_in_degrees(self.compass.getValues())
         )
 
-        # 3. Roll the LiDAR data based on the current heading to align the 'front' with index 0.
-        # Shape: (720,) - LiDAR data remains 720 points, but shifted according to the robot's current heading.
-        self.boundaries = np.roll(self.boundaries, 2 * self.current_heading_deg)
+        # 3. Roll the vertical LiDAR data based on the current heading to align the 'front' with index 0.
+        # Shape: (720, 360) - Roll each vertical slice according to the robot's current heading
+        if hasattr(self, "vertical_boundaries"):
+            self.vertical_boundaries = np.roll(
+                self.vertical_boundaries, 2 * self.current_heading_deg, axis=0
+            )
 
         # 4. Convert the current heading from degrees to radians.
         # Shape: scalar (float) - Current heading of the robot in radians.
