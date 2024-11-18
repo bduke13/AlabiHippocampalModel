@@ -100,11 +100,17 @@ class BoundaryVectorCellLayer:
             start_idx = i * (self.num_bvc // len(self.vertical_angles))
             end_idx = (i + 1) * (self.num_bvc // len(self.vertical_angles))
 
+            # Project distances based on vertical angle
+            v_angle_rad = np.deg2rad(v_angle)
+            projected_distances = vert_distances / np.cos(
+                v_angle_rad
+            )  # Adjust for vertical projection
+
             # Compute Gaussian function for distance tuning
             distance_gaussian = tf.exp(
                 -(
                     (
-                        vert_distances[self.input_indices[:, start_idx:end_idx]]
+                        projected_distances[self.input_indices[:, start_idx:end_idx]]
                         - self.d_i[:, start_idx:end_idx]
                     )
                     ** 2
@@ -124,7 +130,7 @@ class BoundaryVectorCellLayer:
                 / (2 * self.sigma_ang**2)
             ) / tf.sqrt(2 * PI * self.sigma_ang**2)
 
-            # Compute Gaussian function for vertical angular tuning
+            # Compute Gaussian function for vertical angular tuning with increased sensitivity
             vert_gaussian = tf.exp(
                 -(
                     (
@@ -133,7 +139,7 @@ class BoundaryVectorCellLayer:
                     )
                     ** 2
                 )
-                / (2 * self.sigma_ang**2)
+                / (2 * (self.sigma_ang * 0.5) ** 2)  # Increased vertical sensitivity
             ) / tf.sqrt(2 * PI * self.sigma_ang**2)
 
             # Combine all tuning factors
