@@ -24,6 +24,7 @@ class PlaceCellLayer:
         n_hd: int = 8,
         enable_ojas: bool = False,
         enable_stdp: bool = False,
+        use_3d: bool = False,
     ):
         """Initialize the Place Cell Layer.
 
@@ -42,9 +43,21 @@ class PlaceCellLayer:
 
         # Initialize the Boundary Vector Cell (BVC) layer
         self.bvc_layer = bvc_layer
+        self.use_3d_bvc = use_3d
 
         # Number of BVCs (Boundary Vector Cells)
-        self.num_bvc = self.bvc_layer.num_bvc
+        if hasattr(self.bvc_layer, "vertical_angles"):
+            if not self.use_3d_bvc:
+                # In 2D mode, only use BVCs from horizontal plane (first vertical angle)
+                self.num_bvc = self.bvc_layer.num_bvc // len(
+                    self.bvc_layer.vertical_angles
+                )
+            else:
+                # In 3D mode, use all BVCs
+                self.num_bvc = self.bvc_layer.num_bvc
+        else:
+            # Original 2D BVC layer
+            self.num_bvc = self.bvc_layer.num_bvc
 
         # Input weight matrix connecting place cells to BVCs
         # Initialized with a 20% probability of connection
@@ -113,23 +126,51 @@ class PlaceCellLayer:
         # Enables/disables updating weights in the tripartite synapses to track adjacencies between cells
         self.enable_stdp = enable_stdp
 
+        # Enabes/disables use of 3D BVC inputs
+        self.use_3d_bvc = use_3d
+
     def get_place_cell_activations(
-        self, input_data, hd_activations, collided: bool = False
+        self, input_data, hd_activations, vertical_scan=None, collided: bool = False
     ):
         """Compute place cell activations from BVC and head direction inputs.
 
         Args:
             input_data: Tuple of (distances, angles) as input to BVC layer.
             hd_activations: Head direction cell activations.
+            vertical_scan: Optional 2D array of vertical scan data for 3D mode.
             collided: Whether agent has collided with obstacle.
         """
         # Store the previous place cell activations
         self.prev_place_cell_activations = tf.identity(self.place_cell_activations)
 
-        # Compute BVC activations based on the input distances and angles
-        self.bvc_activations = self.bvc_layer.get_bvc_activation(
-            input_data[0], input_data[1]
-        )
+        # Compute BVC activations based on input mode (2D or 3D)
+        if hasattr(self.bvc_layer, "vertical_angles"):
+            if self.use_3d_bvc and vertical_scan is not None:
+                # 3D mode with vertical scan
+                self.bvc_activations = self.bvc_layer.get_bvc_activation(
+                    input_data[0], input_data[1], vertical_scan
+                )
+            else:
+                # 2D mode - only use horizontal plane
+                horizontal_scan = np.zeros(
+                    (len(input_data[0]), len(self.bvc_layer.vertical_angles))
+                )
+                horizontal_scan[:, 0] = input_data[
+                    0
+                ]  # Set only horizontal plane distances
+                self.bvc_activations = self.bvc_layer.get_bvc_activation(
+                    input_data[0], input_data[1], horizontal_scan
+                )
+                # Only use BVCs from horizontal plane (first chunk)
+                bvcs_per_angle = self.bvc_layer.num_bvc // len(
+                    self.bvc_layer.vertical_angles
+                )
+                self.bvc_activations = self.bvc_activations[:bvcs_per_angle]
+        else:
+            # Original 2D BVC layer
+            self.bvc_activations = self.bvc_layer.get_bvc_activation(
+                input_data[0], input_data[1]
+            )
 
         # Compute the input to place cells by taking the dot product of the input weights and BVC activations
         # Afferent excitation term: ∑_j W_ij^{pb} v_j^b (Equation 3.2a)

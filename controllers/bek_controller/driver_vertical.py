@@ -12,9 +12,9 @@ from tkinter import N, messagebox
 from typing import Optional, List
 from controller import Supervisor, Robot
 from enum import Enum, auto
-from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
+from layers.boundary_vector_cell_layer_vertical import BoundaryVectorCellLayer
 from layers.head_direction_layer import HeadDirectionLayer
-from layers.place_cell_layer import PlaceCellLayer
+from layers.place_cell_layer_vertical import PlaceCellLayer
 from layers.reward_cell_layer import RewardCellLayer
 
 tf.random.set_seed(5)
@@ -275,10 +275,16 @@ class Driver(Supervisor):
                 n_hd=n_hd,
                 sigma_ang=90,
                 sigma_d=0.5,
+                vertical_angles=[0, 15, 30, 45],  # degrees up from horizontal
+                layer_indices=[0, 119, 239, 359],  # for a 360-point vertical resolution
             )
 
             self.pcn = PlaceCellLayer(
-                bvc_layer=bvc, num_pc=num_place_cells, timestep=timestep, n_hd=n_hd
+                bvc_layer=bvc,
+                num_pc=num_place_cells,
+                timestep=timestep,
+                n_hd=n_hd,
+                use_3d=True,
             )
             print("Initialized new Place Cell Network.")
 
