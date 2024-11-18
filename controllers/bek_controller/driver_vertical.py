@@ -275,7 +275,6 @@ class Driver(Supervisor):
                 n_hd=n_hd,
                 sigma_ang=90,
                 sigma_d=0.5,
-                vertical_angles=[0, 15, 30, 45],  # degrees up from horizontal
                 layer_indices=[0, 119, 239, 359],  # for a 360-point vertical resolution
             )
 
@@ -284,7 +283,6 @@ class Driver(Supervisor):
                 num_pc=num_place_cells,
                 timestep=timestep,
                 n_hd=n_hd,
-                use_3d=True,
             )
             print("Initialized new Place Cell Network.")
 
@@ -649,7 +647,7 @@ class Driver(Supervisor):
             collided: Collision status from bumpers
         """
 
-        # 1. Capture distance data from both range finders
+        # 1. Capture distance data from both range finders and calculate angles
         # Horizontal LiDAR - Shape: (720,)
         self.boundaries = self.range_finder.getRangeImage()
 
@@ -717,9 +715,9 @@ class Driver(Supervisor):
         """
         Compute the activations of place cells and handle the environment interactions.
         """
-        # Compute the place cell network activations
+        # Compute the place cell network activations using only the vertical scan data
         self.pcn.get_place_cell_activations(
-            input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)],
+            input_data=self.vertical_boundaries,
             hd_activations=self.hd_activations,
             collided=np.any(self.collided),
         )

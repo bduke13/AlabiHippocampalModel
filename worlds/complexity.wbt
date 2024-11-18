@@ -55,7 +55,7 @@ DEF agent Create {
           maxRange 12
         }
         DEF vertical-range-finder RangeFinder {
-          rotation 1 0 0 -0.785398  # Rotated 45 degrees around X axis
+          rotation 1 0 0 0  # Horizontal orientation (0 degrees)
           fieldOfView 6.28  # 360 degrees horizontal
           verticalFieldOfView 0.785398  # 45 degrees vertical FOV
           width 720  # horizontal resolution

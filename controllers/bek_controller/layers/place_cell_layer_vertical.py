@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
 from numpy.random import default_rng
-from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
+from layers.boundary_vector_cell_layer_vertical import BoundaryVectorCellLayer
 
 tf.random.set_seed(5)
 
@@ -24,7 +24,6 @@ class PlaceCellLayer:
         n_hd: int = 8,
         enable_ojas: bool = False,
         enable_stdp: bool = False,
-        use_3d: bool = False,
     ):
         """Initialize the Place Cell Layer.
 
@@ -43,21 +42,14 @@ class PlaceCellLayer:
 
         # Initialize the Boundary Vector Cell (BVC) layer
         self.bvc_layer = bvc_layer
-        self.use_3d_bvc = use_3d
 
-        # Number of BVCs (Boundary Vector Cells)
-        if hasattr(self.bvc_layer, "vertical_angles"):
-            if not self.use_3d_bvc:
-                # In 2D mode, only use BVCs from horizontal plane (first vertical angle)
-                self.num_bvc = self.bvc_layer.num_bvc // len(
-                    self.bvc_layer.vertical_angles
-                )
-            else:
-                # In 3D mode, use all BVCs
-                self.num_bvc = self.bvc_layer.num_bvc
-        else:
-            # Original 2D BVC layer
-            self.num_bvc = self.bvc_layer.num_bvc
+        # Print BVC layer configuration
+        print(f"\nInitializing Place Cell Layer:")
+        print(f"Vertical angles: {self.bvc_layer.vertical_angles}")
+        print(f"Number of BVCs: {self.bvc_layer.num_bvc}")
+
+        # Number of BVCs (using full 3D BVC layer)
+        self.num_bvc = self.bvc_layer.num_bvc
 
         # Input weight matrix connecting place cells to BVCs
         # Initialized with a 20% probability of connection
@@ -126,11 +118,8 @@ class PlaceCellLayer:
         # Enables/disables updating weights in the tripartite synapses to track adjacencies between cells
         self.enable_stdp = enable_stdp
 
-        # Enabes/disables use of 3D BVC inputs
-        self.use_3d_bvc = use_3d
-
     def get_place_cell_activations(
-        self, input_data, hd_activations, vertical_scan=None, collided: bool = False
+        self, input_data, hd_activations, collided: bool = False
     ):
         """Compute place cell activations from BVC and head direction inputs.
 
@@ -143,34 +132,11 @@ class PlaceCellLayer:
         # Store the previous place cell activations
         self.prev_place_cell_activations = tf.identity(self.place_cell_activations)
 
-        # Compute BVC activations based on input mode (2D or 3D)
-        if hasattr(self.bvc_layer, "vertical_angles"):
-            if self.use_3d_bvc and vertical_scan is not None:
-                # 3D mode with vertical scan
-                self.bvc_activations = self.bvc_layer.get_bvc_activation(
-                    input_data[0], input_data[1], vertical_scan
-                )
-            else:
-                # 2D mode - only use horizontal plane
-                horizontal_scan = np.zeros(
-                    (len(input_data[0]), len(self.bvc_layer.vertical_angles))
-                )
-                horizontal_scan[:, 0] = input_data[
-                    0
-                ]  # Set only horizontal plane distances
-                self.bvc_activations = self.bvc_layer.get_bvc_activation(
-                    input_data[0], input_data[1], horizontal_scan
-                )
-                # Only use BVCs from horizontal plane (first chunk)
-                bvcs_per_angle = self.bvc_layer.num_bvc // len(
-                    self.bvc_layer.vertical_angles
-                )
-                self.bvc_activations = self.bvc_activations[:bvcs_per_angle]
-        else:
-            # Original 2D BVC layer
-            self.bvc_activations = self.bvc_layer.get_bvc_activation(
-                input_data[0], input_data[1]
-            )
+        # Get BVC activations using 3D data
+        #        self, distances: np.ndarray, horiz_angles: np.ndarray, vert_angles: np.ndarray
+        self.bvc_activations = self.bvc_layer.get_bvc_activation(
+            distances=input_data,
+        )
 
         # Compute the input to place cells by taking the dot product of the input weights and BVC activations
         # Afferent excitation term: ∑_j W_ij^{pb} v_j^b (Equation 3.2a)
