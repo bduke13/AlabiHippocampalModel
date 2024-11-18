@@ -100,17 +100,11 @@ class BoundaryVectorCellLayer:
             start_idx = i * (self.num_bvc // len(self.vertical_angles))
             end_idx = (i + 1) * (self.num_bvc // len(self.vertical_angles))
 
-            # Project distances based on vertical angle
-            v_angle_rad = np.deg2rad(v_angle)
-            projected_distances = vert_distances / np.cos(
-                v_angle_rad
-            )  # Adjust for vertical projection
-
             # Compute Gaussian function for distance tuning
             distance_gaussian = tf.exp(
                 -(
                     (
-                        projected_distances[self.input_indices[:, start_idx:end_idx]]
+                        vert_distances[self.input_indices[:, start_idx:end_idx]]
                         - self.d_i[:, start_idx:end_idx]
                     )
                     ** 2
@@ -130,7 +124,7 @@ class BoundaryVectorCellLayer:
                 / (2 * self.sigma_ang**2)
             ) / tf.sqrt(2 * PI * self.sigma_ang**2)
 
-            # Compute Gaussian function for vertical angular tuning with increased sensitivity
+            # Compute Gaussian function for vertical angular tuning
             vert_gaussian = tf.exp(
                 -(
                     (
@@ -139,7 +133,7 @@ class BoundaryVectorCellLayer:
                     )
                     ** 2
                 )
-                / (2 * (self.sigma_ang * 0.5) ** 2)  # Increased vertical sensitivity
+                / (2 * self.sigma_ang**2)
             ) / tf.sqrt(2 * PI * self.sigma_ang**2)
 
             # Combine all tuning factors
@@ -286,17 +280,33 @@ if __name__ == "__main__":
     # Create a meshgrid for both angles
     H, V = np.meshgrid(horiz_angles, vert_angles, indexing="ij")
 
-    # Generate synthetic 3D environment data (720x360)
-    # Create a scene with some "walls" and "ceiling" features
+    # Generate synthetic hemisphere data (720x360)
+    # Create a uniform hemisphere at distance max_r
     vertical_scan = np.ones((n_horiz, n_vert)) * max_r
 
-    # Add a "wall" feature
-    wall_mask = np.abs(np.sin(H)) < 0.2
-    vertical_scan[wall_mask] = min_r
+    # Add a "room" by creating a hemisphere of points
+    # We'll make a hemisphere with radius max_r and some objects inside
 
-    # Add a "ceiling" feature that appears at higher vertical angles
-    ceiling_mask = V > np.pi / 6  # Objects above 30 degrees
-    vertical_scan[ceiling_mask] *= 0.7  # Ceiling is closer
+    # Create a hemisphere shell at min_r (inner wall)
+    for i in range(n_horiz):
+        for j in range(n_vert):
+            # Convert to 3D coordinates
+            phi = horiz_angles[i]  # azimuth
+            theta = vert_angles[j]  # elevation
+
+            # Add some variation to make it interesting
+            # Create a bumpy surface with some sine waves
+            r = min_r + 0.5 * np.sin(4 * phi) * np.cos(2 * theta)
+
+            # Add some columns
+            if np.abs(np.sin(4 * phi)) > 0.95:
+                r = min_r - 1.0
+
+            # Add a central pillar
+            if np.sqrt((np.cos(phi)) ** 2 + (np.sin(phi)) ** 2) < 0.1:
+                r = min_r - 2.0
+
+            vertical_scan[i, j] = r
 
     # Get the horizontal scan (at 0 degrees elevation)
     distances = vertical_scan[:, 0]
