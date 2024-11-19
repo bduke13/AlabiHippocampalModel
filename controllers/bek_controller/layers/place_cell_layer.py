@@ -113,23 +113,23 @@ class PlaceCellLayer:
         # Enables/disables updating weights in the tripartite synapses to track adjacencies between cells
         self.enable_stdp = enable_stdp
 
-    def get_place_cell_activations(
-        self, input_data, hd_activations, collided: bool = False
-    ):
+    def get_place_cell_activations(self, input_data, hd_activations, collided):
         """Compute place cell activations from BVC and head direction inputs.
 
         Args:
-            input_data: Tuple of (distances, angles) as input to BVC layer.
+            input_data: Tuple of (distances, azimuth_angles, elevation_angles) as input to BVC layer.
             hd_activations: Head direction cell activations.
-            collided: Whether agent has collided with obstacle.
+            collided: Whether agent has collided with an obstacle.
         """
+        distances, azimuth_angles, elevation_angles = input_data
+
+        # Get BVC activations from the updated BVC layer
+        self.bvc_activations = self.bvc_layer.get_bvc_activation(
+            distances, azimuth_angles, elevation_angles
+        )
+
         # Store the previous place cell activations
         self.prev_place_cell_activations = tf.identity(self.place_cell_activations)
-
-        # Compute BVC activations based on the input distances and angles
-        self.bvc_activations = self.bvc_layer.get_bvc_activation(
-            input_data[0], input_data[1]
-        )
 
         # Compute the input to place cells by taking the dot product of the input weights and BVC activations
         # Afferent excitation term: ∑_j W_ij^{pb} v_j^b (Equation 3.2a)
@@ -162,7 +162,6 @@ class PlaceCellLayer:
         # Update the eligibility trace and weights
         if self.enable_stdp and np.any(self.place_cell_activations) and not collided:
             # Update the eligibility trace for place cells and head direction cells
-            # Eligibility traces are used for temporal difference learning and sequence encoding
             if self.place_cell_trace is None:
                 self.place_cell_trace = tf.zeros_like(self.place_cell_activations)
             self.place_cell_trace += (
@@ -178,7 +177,6 @@ class PlaceCellLayer:
             )
 
             # Update recurrent weights for place cell interactions modulated by head direction
-            # This implements sequence learning and is similar to STDP
             self.w_rec_tripartite += tf.cast(
                 np.nan_to_num(hd_activations)[:, np.newaxis, np.newaxis], tf.float32
             ) * (
@@ -195,7 +193,6 @@ class PlaceCellLayer:
             )
 
         # Update the input weights based on the current activations and BVC activations
-        # This is the competitive learning rule from Equation (3.3)
         if self.enable_ojas and np.any(self.place_cell_activations):
             # Compute the weight update according to Oja's rule (Equation 3.3)
             weight_update = self.tau * (
