@@ -651,12 +651,11 @@ class Driver(Supervisor):
         # Vertical LiDAR - Shape: (720, 360)
         vertical_data = self.vertical_range_finder.getRangeImage()
         if vertical_data is not None:
-            self.vertical_boundaries = np.array(vertical_data).reshape(720, 360)
+            self.vertical_boundaries = np.array(vertical_data).reshape(360, 720)
 
-            # Save the first scan for testing
-            if not hasattr(self, "first_scan_saved"):
-                np.save("first_vertical_scan.npy", self.vertical_boundaries)
-                self.first_scan_saved = True
+            # Save every vertical scan
+            # np.save("first_vertical_scan.npy", self.vertical_boundaries)
+            # print("image saved")
 
         # 2. Get the robot's current heading in degrees using the compass and convert it to an integer.
         # Shape: scalar (int)
@@ -720,11 +719,11 @@ class Driver(Supervisor):
         """
         Compute the activations of place cells and handle the environment interactions.
         """
-        # Compute the place cell network activations using only the vertical scan data
+        Compute the place cell network activations using only the vertical scan data
         self.pcn.get_place_cell_activations(
-            input_data=self.vertical_boundaries,
-            hd_activations=self.hd_activations,
-            collided=np.any(self.collided),
+           input_data=self.vertical_boundaries,
+           hd_activations=self.hd_activations,
+           collided=np.any(self.collided),
         )
 
         # Advance the timestep and update position
