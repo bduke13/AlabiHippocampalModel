@@ -55,6 +55,18 @@ DEF agent Create {
           spherical TRUE
           maxRange 10
         }
+        DEF vertical-range-finder RangeFinder {
+          translation 0 0.1 0  # Raised by 0.1 meters
+          rotation 1 0 0 0  # Horizontal orientation (0 degrees)
+          fieldOfView 6.28  # 360 degrees horizontal
+          verticalFieldOfView 1.0472  # 60 degrees vertical FOV
+          width 720  # horizontal resolution
+          height 360  # vertical resolution to get good sampling of the vertical space
+          spherical TRUE
+          maxRange 10
+          name "vertical-range-finder"  # Added name field to match controller
+        }
+
         Camera {
           translation -0.002 0.02 0
           rotation 0 1 0 1.57

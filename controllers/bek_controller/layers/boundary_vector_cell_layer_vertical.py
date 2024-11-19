@@ -14,11 +14,13 @@ class BoundaryVectorCellLayer:
         sigma_ang: float = 90,
         sigma_d: float = 0.5,
         sigma_vert: float = None,  # if None, uses sigma_ang
-        vertical_angles: list[float] = [0, 15, 30, 45],  # degrees up from horizontal
+        vertical_angles: list[float] = [
+            180
+        ],  # [0, 15, 30, 45],  # degrees up from horizontal
         horiz_angles: np.array = np.linspace(
             0, 2 * np.pi, 720, endpoint=False, dtype=np.float32
         ),
-        layer_indices: list[int] = None,  # indices to sample from vertical scan
+        layer_indices: list[int] = [180],  # indices to sample from vertical scan
     ) -> None:
         """Initialize the boundary vector cell (BVC) layer.
 
@@ -39,7 +41,8 @@ class BoundaryVectorCellLayer:
         self.vertical_angles = np.array(vertical_angles, dtype=np.float32)
         self.horiz_angles = horiz_angles
         # Store layer indices
-        self.layer_indices = layer_indices or [x for x in range(360 / 2, 360, 1)]
+        self.layer_indices = layer_indices
+        # [x for x in range(360 / 2, 360, 1)]
 
         # Compute the number of preferred distances per head direction
         N_dist = len(np.arange(0, max_dist, sigma_d / 2))
@@ -263,51 +266,26 @@ class BoundaryVectorCellLayer:
 
 
 if __name__ == "__main__":
-    # Generate synthetic data for testing
-    n_horiz: int = 720  # horizontal resolution
-    n_vert: int = 30  # vertical resolution
-    max_r: float = 10
-    min_r: float = 5
+    # Load the real data
+    vertical_boundaries = np.load("first_vertical_scan.npy")
 
-    # Create angle arrays with explicit float32 dtype
-    horiz_angles_1d = np.linspace(
-        0, 2 * np.pi, n_horiz, endpoint=False, dtype=np.float32
-    )
-    vert_angles_1d = np.linspace(0, np.pi / 4, n_vert, endpoint=True, dtype=np.float32)
+    # Reshape the data from (259200,) to (360, 720)
+    reshaped_data = vertical_boundaries.reshape(360, 720)
 
-    # Create meshgrids for both angles (720, 360)
-    horiz_angles, vert_angles = np.meshgrid(
-        horiz_angles_1d, vert_angles_1d, indexing="ij"
-    )
+    # Transpose the data to match expected format (720, 360)
+    distances = reshaped_data.T
 
-    # Generate synthetic hemisphere data (720x360)
-    # Create a uniform hemisphere at distance max_r
-    distances = np.ones((n_horiz, n_vert)) * max_r
-
-    # Add a "room" by creating a hemisphere of points
-    # We'll make a hemisphere with radius max_r and some objects inside
-
-    # Create base distances with bumpy surface
-    phi = horiz_angles  # azimuth (720, 360)
-    theta = vert_angles  # elevation (720, 360)
-    distances = min_r + 0.5 * np.sin(4 * phi) * np.cos(2 * theta)
-
-    # Add columns where sin(4*phi) is large (using any() to handle 2D array)
-    column_mask = np.abs(np.sin(4 * phi)) > 0.95
-    distances[np.any(column_mask, axis=1)] = min_r - 1.0
-
-    # Add central pillar
-    pillar_mask = np.sqrt(np.cos(phi) ** 2 + np.sin(phi) ** 2) < 0.1
-    distances[np.any(pillar_mask, axis=1)] = min_r - 2.0
-
-    # Initialize BVC layer with vertical projections
-    # Using specific vertical angles and corresponding indices
-    vertical_angles = [0, 15, 30, 45]  # degrees
-    # Calculate indices for these angles in the 360-point vertical resolution
-    layer_indices = [int(angle * (n_vert - 1) / 45) for angle in vertical_angles]
+    # Initialize BVC layer with horizontal scan (0 degrees at 180th row)
+    vertical_angles = [0, 15, 30, 45]  # horizontal scan
+    layer_indices = [
+        180,
+        180 - 15,
+        180 - 30,
+        180 - 45,
+    ]  # 180th row represents horizontal scan
 
     bvc_layer = BoundaryVectorCellLayer(
-        max_dist=12,
+        max_dist=30,  # Adjust based on your data's range
         input_dim=720,
         n_hd=8,
         sigma_ang=90,
@@ -316,5 +294,5 @@ if __name__ == "__main__":
         layer_indices=layer_indices,
     )
 
-    # Plot BVC activation with the vertical scan data
+    # Plot BVC activation with the real scan data
     bvc_layer.plot_activation(distances)
