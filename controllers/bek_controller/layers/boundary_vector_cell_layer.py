@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Tuple, Union
 import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
@@ -8,75 +8,91 @@ class BoundaryVectorCellLayer:
     def __init__(
         self,
         max_dist: float,
-        input_dim: int,
+        input_shape: Tuple[int, int],  # (height, width)
         n_hd: int,
+        n_elevations: int,
         sigma_ang: float,
+        sigma_elev: float,
         sigma_d: float,
     ) -> None:
         """Initialize the boundary vector cell (BVC) layer.
 
-        This layer models neurons that respond to obstacles at specific distances and angles. It creates
-        8 head directions with 48 neurons for each head direction based on the default parameters,
-        resulting in 384 total neurons.
-
         Args:
-            max_dist: Max distance that the BVCs respond to. Units depend on the context of the environment.
-            input_dim: Size of input vector to the BVC layer (e.g., 720 for RPLidar).
-            n_hd: Number of head direction cells, each representing a preferred angular direction for the BVCs.
-            sigma_ang: Standard deviation (tuning width) for the Gaussian function modeling angular tuning of BVCs (in degrees).
-            sigma_d: Standard deviation (tuning width) for the Gaussian function modeling distance tuning of BVCs.
+            max_dist: Max distance that the BVCs respond to.
+            input_shape: Tuple (height, width) representing the input data dimensions.
+            n_hd: Number of head direction cells (azimuth divisions).
+            n_elevations: Number of elevation divisions for BVCs.
+            sigma_ang: Standard deviation for angular tuning (in degrees).
+            sigma_elev: Standard deviation for elevation angle tuning (in degrees).
+            sigma_d: Standard deviation for distance tuning.
         """
-        # Compute the number of preferred distances per head direction
-        N_dist = len(np.arange(0, max_dist, sigma_d / 2))
+        height, width = input_shape
 
-        # Preferred distances for each BVC; determines how sensitive each BVC is to specific distances.
-        self.d_i = np.tile(np.arange(0, max_dist, sigma_d / 2), n_hd)[np.newaxis, :]
+        # Preferred distances
+        preferred_distances = np.arange(0, max_dist, sigma_d / 2)
+        N_dist = len(preferred_distances)
 
-        # Total number of BVC neurons = 8 head directions * 48 preferred distances per head direction.
+        # Preferred azimuth angles (head directions)
+        preferred_azimuths = np.linspace(0, 2 * np.pi, n_hd, endpoint=False)
+
+        # Preferred elevation angles
+        preferred_elevations = np.linspace(0, np.deg2rad(30), n_elevations)
+
+        # Create a grid of preferred distances, azimuths, and elevations
+        d_i_grid, phi_i_grid, theta_i_grid = np.meshgrid(
+            preferred_distances, preferred_azimuths, preferred_elevations, indexing='ij'
+        )
+
+        # Flatten the grids to create arrays of preferred distances and angles
+        self.d_i = d_i_grid.flatten()[np.newaxis, :]
+        self.phi_i = phi_i_grid.flatten()[np.newaxis, :]
+        self.theta_i = theta_i_grid.flatten()[np.newaxis, :]
+
+        # Total number of BVC neurons
         self.num_bvc = self.d_i.size
 
-        # Indices to map input LiDAR angles to BVC neurons
-        self.input_indices = np.repeat(
-            np.linspace(0, input_dim, n_hd, endpoint=False, dtype=int),
-            N_dist,
-        )[np.newaxis, :]
-
-        # Preferred angles for each BVC, spaced around 360 degrees.
-        self.phi_i = np.linspace(0, 2 * np.pi, input_dim)[self.input_indices]
-
-        # Angular standard deviation for the Gaussian function (converted to radians).
+        # Convert standard deviations to radians
         self.sigma_ang = tf.constant(np.deg2rad(sigma_ang), dtype=tf.float32)
-
-        # Distance standard deviation for the Gaussian function.
+        self.sigma_elev = tf.constant(np.deg2rad(sigma_elev), dtype=tf.float32)
         self.sigma_d = tf.constant(sigma_d, dtype=tf.float32)
 
     def get_bvc_activation(
-        self, distances: np.ndarray, angles: np.ndarray
+        self, distances: np.ndarray, azimuth_angles: np.ndarray, elevation_angles: np.ndarray
     ) -> tf.Tensor:
         """Calculate the activation of BVCs based on input distances and angles.
 
         Args:
-            distances: Array of distance readings, representing obstacles' distances from the sensor.
-            angles: Array of angles corresponding to the distance readings.
+            distances: 2D array of distance readings, shape (height, width).
+            azimuth_angles: 2D array of azimuth angles, shape (height, width).
+            elevation_angles: 2D array of elevation angles, shape (height, width).
 
         Returns:
-            Activations of the BVC neurons, computed as the product of Gaussian functions for
-            distance and angle tuning.
+            Activations of the BVC neurons, computed as the sum over all pixels.
         """
-        PI = tf.constant(np.pi)
+        # Flatten the input arrays and cast to tf.float32
+        distances_flat = tf.convert_to_tensor(distances.flatten(), dtype=tf.float32)  # Shape: (num_pixels,)
+        azimuth_flat = tf.convert_to_tensor(azimuth_angles.flatten(), dtype=tf.float32)  # Shape: (num_pixels,)
+        elevation_flat = tf.convert_to_tensor(elevation_angles.flatten(), dtype=tf.float32)  # Shape: (num_pixels,)
 
-        # Compute Gaussian function for distance tuning
-        distance_gaussian = tf.exp(
-            -((distances[self.input_indices] - self.d_i) ** 2) / (2 * self.sigma_d**2)
-        ) / tf.sqrt(2 * PI * self.sigma_d**2)
+        # Compute differences between input and preferred distances and angles
+        distance_diff = distances_flat[:, tf.newaxis] - tf.cast(self.d_i, tf.float32)  # Shape: (num_pixels, num_bvc)
+        azimuth_diff = tf.math.mod(
+            azimuth_flat[:, tf.newaxis] - tf.cast(self.phi_i, tf.float32) + np.pi, 2 * np.pi
+        ) - np.pi
+        elevation_diff = elevation_flat[:, tf.newaxis] - tf.cast(self.theta_i, tf.float32)
 
-        # Compute Gaussian function for angular tuning
-        angular_gaussian = tf.exp(
-            -((angles[self.input_indices] - self.phi_i) ** 2) / (2 * self.sigma_ang**2)
-        ) / tf.sqrt(2 * PI * self.sigma_ang**2)
+        # Compute Gaussian activations
+        distance_gaussian = tf.exp(- (distance_diff ** 2) / (2 * self.sigma_d ** 2))
+        azimuth_gaussian = tf.exp(- (azimuth_diff ** 2) / (2 * self.sigma_ang ** 2))
+        elevation_gaussian = tf.exp(- (elevation_diff ** 2) / (2 * self.sigma_elev ** 2))
 
-        # Return the product of distance and angular Gaussian functions for BVC activation
-        return tf.reduce_sum((distance_gaussian * angular_gaussian), 0)
+        # Compute activation for each BVC neuron
+        activation = tf.reduce_sum(
+            distance_gaussian * azimuth_gaussian * elevation_gaussian, axis=0
+        )  # Shape: (num_bvc,)
+
+        return activation
+
 
     def plot_activation(
         self,
