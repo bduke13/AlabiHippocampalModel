@@ -14,9 +14,8 @@ class BoundaryVectorCellLayer:
         sigma_ang: float = 90,
         sigma_d: float = 0.5,
         sigma_vert: float = None,  # if None, uses sigma_ang
-        vertical_angles: list[float] = [
-            180
-        ],  # [0, 15, 30, 45],  # degrees up from horizontal
+        vertical_angles: list[float] = [0],
+        # [0, 15, 30, 45],  # degrees up from horizontal
         horiz_angles: np.array = np.linspace(
             0, 2 * np.pi, 720, endpoint=False, dtype=np.float32
         ),
@@ -92,7 +91,8 @@ class BoundaryVectorCellLayer:
         """Calculate the activation of BVCs based on input distances.
 
         Args:
-            distances: 2D array of shape (720, 360) containing vertical scan data in polar coordinates.
+            distances: 2D array of shape (360, 720) containing vertical scan data in polar coordinates,
+                      where rows are vertical angles and columns are horizontal angles.
 
         Returns:
             Activations of the BVC neurons, including vertical projections.
@@ -107,7 +107,7 @@ class BoundaryVectorCellLayer:
         for i, v_angle in enumerate(self.vertical_angles):
             # Get the corresponding layer from vertical scan
             layer_idx = self.layer_indices[i]
-            vert_distances = distances[:, layer_idx]
+            vert_distances = distances[layer_idx, :]
 
             # Calculate start and end indices for this vertical angle's neurons
             start_idx = i * (self.num_bvc // len(self.vertical_angles))
@@ -213,7 +213,7 @@ class BoundaryVectorCellLayer:
         # Plot the raw scan data as small points
         for v_idx, layer_idx in enumerate(self.layer_indices):
             v_angle_rad = np.deg2rad(self.vertical_angles[v_idx])
-            scan_distances = distances[:, layer_idx]
+            scan_distances = distances[layer_idx, :]  # Changed from [:, layer_idx]
 
             # Convert to cartesian coordinates
             x_scan = scan_distances * np.cos(self.horiz_angles) * np.cos(v_angle_rad)
@@ -272,8 +272,7 @@ if __name__ == "__main__":
     # Reshape the data from (259200,) to (360, 720)
     reshaped_data = vertical_boundaries.reshape(360, 720)
 
-    # Transpose the data to match expected format (720, 360)
-    distances = reshaped_data.T
+    distances = reshaped_data
 
     # Initialize BVC layer with horizontal scan (0 degrees at 180th row)
     vertical_angles = [0, 15, 30, 45]  # horizontal scan
@@ -285,7 +284,7 @@ if __name__ == "__main__":
     ]  # 180th row represents horizontal scan
 
     bvc_layer = BoundaryVectorCellLayer(
-        max_dist=30,  # Adjust based on your data's range
+        max_dist=10,  # Adjust based on your data's range
         input_dim=720,
         n_hd=8,
         sigma_ang=90,

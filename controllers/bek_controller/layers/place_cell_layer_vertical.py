@@ -124,9 +124,8 @@ class PlaceCellLayer:
         """Compute place cell activations from BVC and head direction inputs.
 
         Args:
-            input_data: Tuple of (distances, angles) as input to BVC layer.
+            input_data: formatted distances in 2D array
             hd_activations: Head direction cell activations.
-            vertical_scan: Optional 2D array of vertical scan data for 3D mode.
             collided: Whether agent has collided with obstacle.
         """
         # Store the previous place cell activations

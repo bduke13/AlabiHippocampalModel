@@ -719,11 +719,10 @@ class Driver(Supervisor):
         """
         Compute the activations of place cells and handle the environment interactions.
         """
-        Compute the place cell network activations using only the vertical scan data
         self.pcn.get_place_cell_activations(
-           input_data=self.vertical_boundaries,
-           hd_activations=self.hd_activations,
-           collided=np.any(self.collided),
+            input_data=self.vertical_boundaries,
+            hd_activations=self.hd_activations,
+            collided=np.any(self.collided),
         )
 
         # Advance the timestep and update position
