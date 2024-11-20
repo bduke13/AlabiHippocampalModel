@@ -160,7 +160,7 @@ if __name__ == "__main__":
 
     # Select top 100 cells based on total activation
     total_activations = np.sum(hmap_z, axis=0)
-    cell_indices = np.argsort(total_activations)[-100:]
+    cell_indices = np.argsort(total_activations)[-200:]
 
     # Generate and save plots in groups of 5
     for i in range(0, len(cell_indices), 5):

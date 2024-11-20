@@ -69,9 +69,17 @@ values = np.array(values)
 fig = plt.figure(figsize=(15, 15))
 ax = fig.add_subplot(111, projection="3d")
 
-# Create scatter plot with smaller point size and increased transparency
+# Only plot points below 4m with original colormap
+mask_below = z_coords <= 2  # Remember z is inverted (-1 * z_coords)
+
 scatter = ax.scatter(
-    x_coords, y_coords, z_coords, c=values, cmap="viridis", alpha=0.1, s=1
+    x_coords[mask_below],
+    y_coords[mask_below],
+    z_coords[mask_below],
+    c=values[mask_below],
+    cmap="viridis",
+    alpha=0.3,
+    s=1,
 )
 plt.colorbar(scatter, label="Value")
 
