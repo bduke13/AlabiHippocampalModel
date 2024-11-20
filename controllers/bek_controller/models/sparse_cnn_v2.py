@@ -1,8 +1,9 @@
 import tensorflow as tf
-from tensorflow.keras import layers, Model
+from tensorflow import keras
+from keras import layers, Model
 
 
-def create_models(input_shape):
+def create_models(input_shape, use_sparse_loss=True):
     # Encoder
     input_layer = layers.Input(shape=input_shape)
     x = layers.Conv2D(16, (4, 4), strides=2, activation="relu", padding="same")(
@@ -54,27 +55,34 @@ def create_models(input_shape):
     decoded = decoder(encoded)
     autoencoder = Model(inputs=autoencoder_input, outputs=decoded, name="autoencoder")
 
-    # Loss function incorporating the sparsity regularization
-    def sparse_loss(y_true, y_pred):
-        reconstruction_loss = tf.reduce_mean(tf.square(y_true - y_pred))
-        encoded_output = encoder(y_true)
-        z_gram = tf.matmul(
-            tf.transpose(encoded_output), encoded_output
-        )  # Gramian matrix
-        identity_matrix = tf.eye(tf.shape(z_gram)[0])  # Identity matrix
-        orthonormal_loss = tf.reduce_mean(tf.square(z_gram - identity_matrix))
-        lambda_reg = 0.001  # Hyperparameter controlling sparsity
-        total_loss = reconstruction_loss + lambda_reg * orthonormal_loss
-        return total_loss
+    if use_sparse_loss:
+        # Loss function incorporating the sparsity regularization
+        def loss_function(y_true, y_pred):
+            reconstruction_loss = tf.reduce_mean(tf.square(y_true - y_pred))
+            encoded_output = encoder(y_true)
+            z_gram = tf.matmul(
+                tf.transpose(encoded_output), encoded_output
+            )  # Gramian matrix
+            identity_matrix = tf.eye(tf.shape(z_gram)[0])  # Identity matrix
+            orthonormal_loss = tf.reduce_mean(tf.square(z_gram - identity_matrix))
+            lambda_reg = 0.001  # Hyperparameter controlling sparsity
+            total_loss = reconstruction_loss + lambda_reg * orthonormal_loss
+            return total_loss
 
-    autoencoder.compile(optimizer="adam", loss=sparse_loss)
+    else:
+        # Simple MSE loss without sparsity
+        def loss_function(y_true, y_pred):
+            return tf.reduce_mean(tf.square(y_true - y_pred))
+
+    autoencoder.compile(optimizer="adam", loss=loss_function)
     return encoder, decoder, autoencoder
 
 
 if __name__ == "__main__":
     # Create and compile the models
     input_shape = (96, 96, 3)
-    encoder, decoder, autoencoder = create_models(input_shape)
+    # Create models with sparse loss enabled
+    encoder, decoder, autoencoder = create_models(input_shape, use_sparse_loss=True)
 
     # Print model summaries
     print("\nEncoder Summary:")

@@ -12,6 +12,7 @@ from tensorflow import keras
 from keras.callbacks import EarlyStopping
 import tensorflow as tf
 from sklearn.model_selection import train_test_split
+from models.sparse_cnn_v2 import create_models
 
 # Load the preprocessed images
 resized_images = np.load("preprocessed_images.npy")
@@ -34,26 +35,22 @@ for idx, i in enumerate(random_indices):  # Show 5 random images
 # Split the data into training and validation sets
 X_train, X_val = train_test_split(resized_images, test_size=0.1, random_state=42)
 
-
-# %%
-
-from models.sparse_cnn_v2 import create_models
-
-encoder, decoder, autoencoder = create_models(input_shape=(96, 96, 3))
-autoencoder.compile(optimizer="adam", loss="mse")
-
-# Train the autoencoder
 early_stopping = EarlyStopping(
     monitor="val_loss", patience=5, restore_best_weights=True
 )
 
-
-# %%
-# Single training phase with direct data input
 BATCH_SIZE = 64
 EPOCHS = 20
 
-history = autoencoder.fit(
+# %%
+
+# Train non-sparse model
+print("\nTraining Non-Sparse Model...")
+encoder_std, decoder_std, autoencoder_std = create_models(
+    input_shape=(96, 96, 3), use_sparse_loss=False
+)
+autoencoder_std.compile(optimizer="adam", loss="mse")
+history = autoencoder_std.fit(
     X_train,
     X_train,  # Input and target are the same for autoencoders
     batch_size=BATCH_SIZE,
@@ -63,7 +60,6 @@ history = autoencoder.fit(
     shuffle=True,
 )
 
-# %%
 # Plot training history
 plt.figure(figsize=(10, 6))
 plt.plot(history.history["loss"], label="Training Loss")
@@ -74,20 +70,61 @@ plt.ylabel("Loss")
 plt.legend()
 plt.grid(True)
 plt.show()
+# Print final loss values
+print(f"\nFinal training loss: {history.history['loss'][-1]:.4f}")
+print(f"Final validation loss: {history.history['val_loss'][-1]:.4f}")
 
+
+# %%
+# Train sparse model
+print("\nTraining Sparse Model...")
+encoder_sparse, decoder_sparse, autoencoder_sparse = create_models(
+    input_shape=(96, 96, 3), use_sparse_loss=True
+)
+autoencoder_sparse.compile(optimizer="adam", loss="mse")
+history = autoencoder_sparse.fit(
+    X_train,
+    X_train,  # Input and target are the same for autoencoders
+    batch_size=BATCH_SIZE,
+    epochs=EPOCHS,
+    validation_data=(X_val, X_val),
+    callbacks=[early_stopping],
+    shuffle=True,
+)
+
+# Plot training history
+plt.figure(figsize=(10, 6))
+plt.plot(history.history["loss"], label="Training Loss")
+plt.plot(history.history["val_loss"], label="Validation Loss")
+plt.title("Model Loss During Training")
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.legend()
+plt.grid(True)
+plt.show()
 # Print final loss values
 print(f"\nFinal training loss: {history.history['loss'][-1]:.4f}")
 print(f"Final validation loss: {history.history['val_loss'][-1]:.4f}")
 
 # %%
 # Save the encoder and decoder separately
-encoder.save("encoder_model.keras")
-decoder.save("decoder_model.keras")
+encoder_std.save("encoder_model_std.keras")
+decoder_std.save("decoder_model_std.keras")
+
+encoder_sparse.save("encoder_model_sparse.keras")
+decoder_sparse.save("decoder_model_sparse.keras")
+
 
 # %%
 # Load the encoder and decoder models separately
-encoder = tf.keras.models.load_model("encoder_model.keras")
-decoder = tf.keras.models.load_model("decoder_model.keras")
+encoder = tf.keras.models.load_model("encoder_model_std.keras")
+decoder = tf.keras.models.load_model("decoder_model_std.keras")
+
+# %%
+# Load the encoder and decoder models separately
+encoder = tf.keras.models.load_model("encoder_model_sparse.keras")
+decoder = tf.keras.models.load_model("decoder_model_sparse.keras")
+
 
 # %%
 # Get random indices for visualization

@@ -23,7 +23,7 @@ class PlaceCellLayer:
 
     def __init__(
         self,
-        encoder_path: str = "encoder_model.keras",
+        encoder_path: str = "encoder_model_sparse.keras",
         num_pc: int = 200,
         timestep: int = 32 * 3,
         n_hd: int = 8,

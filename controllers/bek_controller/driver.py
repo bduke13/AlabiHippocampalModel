@@ -18,7 +18,10 @@ from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
 from layers.head_direction_layer import HeadDirectionLayer
 from layers.place_cell_layer_vision import PlaceCellLayer
 from layers.reward_cell_layer import RewardCellLayer
+import matplotlib.pyplot as plt
 
+# Enable interactive mode
+plt.ion()
 tf.random.set_seed(5)
 np.set_printoptions(precision=2)
 PI = tf.constant(np.pi)
@@ -149,6 +152,10 @@ class Driver(Supervisor):
         self.n_hd = 8
         self.timestep = 32 * 3
         self.tau_w = 10  # time constant for the window function
+
+        # Initialize the plot
+        self.fig, self.ax = plt.subplots(figsize=(8, 6))
+        self.plot_initialized = False
 
         # Robot parameters
         self.max_speed = 16
@@ -289,7 +296,7 @@ class Driver(Supervisor):
             # )
 
             self.pcn = PlaceCellLayer(
-                encoder_path="encoder_model.keras",
+                encoder_path="encoder_model_sparse.keras",
                 num_pc=num_place_cells,
                 timestep=timestep,
                 n_hd=n_hd,
@@ -373,6 +380,8 @@ class Driver(Supervisor):
             else:
                 print("Unknown state. Exiting...")
                 break
+
+            self.update_plot()
 
     ########################################### EXPLORE ###########################################
 
@@ -732,7 +741,45 @@ class Driver(Supervisor):
             bearing = bearing + 360.0
         return bearing
 
-    ########################################### COMPUTE ###########################################
+    def update_plot(self):
+        if not self.plot_initialized:
+            # Initial plot setup
+            (self.line,) = self.ax.plot([], [], "b-", label="Path")  # Robot path
+            self.pos_scatter = self.ax.scatter(
+                [], [], c="blue", marker="o", s=50, label="Robot"
+            )
+            self.goal_scatter = self.ax.scatter(
+                self.goal_location[0],
+                self.goal_location[1],
+                c="red",
+                marker="*",
+                s=100,
+                label="Goal",
+            )
+            self.ax.set_xlabel("X Position")
+            self.ax.set_ylabel("Y Position")
+            self.ax.set_title("Robot Path")
+            self.ax.legend()
+            self.ax.grid(True)
+            self.plot_initialized = True
+
+        # Update the robot's path
+        self.line.set_data(
+            self.hmap_x[: self.step_count], self.hmap_y[: self.step_count]
+        )
+
+        # Update the robot's current position
+        curr_pos = self.robot.getField("translation").getSFVec3f()
+        self.pos_scatter.set_offsets([curr_pos[0], curr_pos[2]])
+
+        # Adjust the plot limits if necessary
+        self.ax.relim()
+        self.ax.autoscale_view()
+
+        plt.draw()
+        plt.pause(0.001)  # Pause to allow the plot to update
+
+    ####################################### COMPUTE ###########################################
 
     def compute(self):
         """
