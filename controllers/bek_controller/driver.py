@@ -168,8 +168,9 @@ class Driver(Supervisor):
         self.keyboard.enable(self.timestep)
         self.compass = self.getDevice("compass")
         self.compass.enable(self.timestep)
-        self.range_finder = self.getDevice("range-finder")
-        self.range_finder.enable(self.timestep)
+        self.lidar = self.getDevice("velodyne")
+        self.lidar.enable(self.timestep)
+        self.lidar.enablePointCloud()
         self.left_bumper = self.getDevice("bumper_left")
         self.left_bumper.enable(self.timestep)
         self.right_bumper = self.getDevice("bumper_right")
@@ -565,7 +566,7 @@ class Driver(Supervisor):
         self.sensor_data["headings"].append(current_heading_deg)
 
         # Get LiDAR readings
-        lidar_readings = self.range_finder.getRangeImage()
+        lidar_readings = self.lidar.getRangeImage()
         self.sensor_data["lidar"].append(
             lidar_readings.copy()
         )  # Copy to avoid referencing issues
@@ -640,7 +641,7 @@ class Driver(Supervisor):
 
         # 1. Capture distance data from the range finder (LiDAR), which provides 720 points around the robot.
         # Shape: (720,)
-        self.boundaries = self.range_finder.getRangeImage()
+        self.boundaries = self.lidar.getPointCloud()
 
         # 2. Get the robot's current heading in degrees using the compass and convert it to an integer.
         # Shape: scalar (int)
