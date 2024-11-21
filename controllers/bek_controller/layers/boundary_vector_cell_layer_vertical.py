@@ -16,22 +16,11 @@ class BoundaryVectorCellLayer:
         sigma_d: float,
         sigma_vert: float = None,
     ) -> None:
-        """Initialize the boundary vector cell (BVC) layer.
-
-        This layer models neurons that respond to obstacles at specific distances and angles, including vertical sensitivity.
-
-        Args:
-            max_dist: Max distance that the BVCs respond to.
-            n_hd: Number of head direction cells (number of preferred horizontal angles).
-            sigma_ang: Standard deviation for horizontal angular tuning (in degrees).
-            sigma_d: Standard deviation for distance tuning.
-            sigma_vert: Standard deviation for vertical angular tuning (in degrees). If None, set to sigma_ang / 2.
-        """
         if sigma_vert is None:
             sigma_vert = sigma_ang / 4
 
         # Preferred distances
-        self.d_i = np.linspace(0, max_dist, num=50)  # Adjust number as needed
+        self.d_i = np.linspace(0, max_dist, num=50)  # (M,)
         N_dist = len(self.d_i)
 
         # Preferred horizontal angles
@@ -44,16 +33,28 @@ class BoundaryVectorCellLayer:
         # Total number of BVC neurons
         self.num_bvc = len(self.d_i)
 
-        # Convert sigmas to radians
+        # Convert parameters to tensors and expand dimensions
+        self.d_i = tf.constant(self.d_i, dtype=tf.float32)[tf.newaxis, :]  # (1, M)
+        self.phi_i = tf.constant(self.phi_i, dtype=tf.float32)[tf.newaxis, :]  # (1, M)
+        self.phi_i_vert = tf.constant(self.phi_i_vert, dtype=tf.float32)[
+            tf.newaxis, :
+        ]  # (1, M)
+
+        # Convert sigmas to radians and precompute constants
         self.sigma_ang = tf.constant(np.deg2rad(sigma_ang), dtype=tf.float32)
         self.sigma_d = tf.constant(sigma_d, dtype=tf.float32)
         self.sigma_vert = tf.constant(np.deg2rad(sigma_vert), dtype=tf.float32)
 
-    def get_bvc_activation(self, points: np.ndarray) -> tf.Tensor:
+        self.two_sigma_d_squared = 2 * self.sigma_d**2
+        self.two_sigma_ang_squared = 2 * self.sigma_ang**2
+        self.two_sigma_vert_squared = 2 * self.sigma_vert**2
+
+    @tf.function
+    def get_bvc_activation(self, points: tf.Tensor) -> tf.Tensor:
         """Calculate the activation of BVCs based on input points.
 
         Args:
-            points: np.ndarray of shape (N, 6), containing:
+            points: tf.Tensor of shape (N, 6), containing:
                 [:, 0]: x coordinates
                 [:, 1]: y coordinates
                 [:, 2]: z coordinates
@@ -64,55 +65,43 @@ class BoundaryVectorCellLayer:
         Returns:
             Activations of the BVC neurons.
         """
+
         # Extract distances, horizontal angles, and vertical angles from points
-        distances = points[:, 5]  # distance values
-        angles = points[:, 4]  # longitude angles
-        vertical_angles = points[:, 3]  # latitude angles
+        distances = points[:, 5]  # (N,)
+        angles = points[:, 4]  # (N,)
+        vertical_angles = points[:, 3]  # (N,)
 
-        # Convert input arrays to tensors
-        distances = tf.convert_to_tensor(distances, dtype=tf.float32)
-        angles = tf.convert_to_tensor(angles, dtype=tf.float32)
-        vertical_angles = tf.convert_to_tensor(vertical_angles, dtype=tf.float32)
-
-        # Reshape input arrays to (N, 1)
-        distances = tf.reshape(distances, (-1, 1))  # shape (N, 1)
-        angles = tf.reshape(angles, (-1, 1))  # shape (N, 1)
-        vertical_angles = tf.reshape(vertical_angles, (-1, 1))  # shape (N, 1)
-
-        # Expand BVC parameters to (1, M)
-        d_i = tf.constant(self.d_i, dtype=tf.float32)[tf.newaxis, :]  # shape (1, M)
-        phi_i = tf.constant(self.phi_i, dtype=tf.float32)[tf.newaxis, :]  # shape (1, M)
-        phi_i_vert = tf.constant(self.phi_i_vert, dtype=tf.float32)[
-            tf.newaxis, :
-        ]  # shape (1, M)
+        # Expand dimensions to (N, 1) for broadcasting
+        distances = tf.expand_dims(distances, axis=1)  # (N, 1)
+        angles = tf.expand_dims(angles, axis=1)  # (N, 1)
+        vertical_angles = tf.expand_dims(vertical_angles, axis=1)  # (N, 1)
 
         # Compute differences
-        delta_d = distances - d_i  # shape (N, M)
-        delta_ang = angles - phi_i  # shape (N, M)
-        delta_vert = vertical_angles - phi_i_vert  # shape (N, M)
+        delta_d = distances - self.d_i  # (N, M)
+        delta_ang = tf.atan2(
+            tf.sin(angles - self.phi_i), tf.cos(angles - self.phi_i)
+        )  # (N, M)
+        delta_vert = tf.atan2(
+            tf.sin(vertical_angles - self.phi_i_vert),
+            tf.cos(vertical_angles - self.phi_i_vert),
+        )  # (N, M)
 
-        PI = tf.constant(np.pi, dtype=tf.float32)
-
-        # Compute Gaussians
-        distance_gaussian = tf.exp(
-            -((delta_d) ** 2) / (2 * self.sigma_d**2)
-        ) / tf.sqrt(2 * PI * self.sigma_d**2)
+        # Compute Gaussians without normalization constants
+        distance_gaussian = tf.exp(-(delta_d**2) / self.two_sigma_d_squared)  # (N, M)
         angular_gaussian = tf.exp(
-            -((delta_ang) ** 2) / (2 * self.sigma_ang**2)
-        ) / tf.sqrt(2 * PI * self.sigma_ang**2)
+            -(delta_ang**2) / self.two_sigma_ang_squared
+        )  # (N, M)
         vertical_gaussian = tf.exp(
-            -((delta_vert) ** 2) / (2 * self.sigma_vert**2)
-        ) / tf.sqrt(2 * PI * self.sigma_vert**2)
+            -(delta_vert**2) / self.two_sigma_vert_squared
+        )  # (N, M)
 
         # Compute the product
-        gaussians = (
-            distance_gaussian * angular_gaussian * vertical_gaussian
-        )  # shape (N, M)
+        gaussians = distance_gaussian * angular_gaussian * vertical_gaussian  # (N, M)
 
-        # Sum over input points
-        activation = tf.reduce_sum(gaussians, axis=0)  # shape (M,)
+        # Sum over input points to get activations for each BVC neuron
+        activation = tf.reduce_sum(gaussians, axis=0)  # (M,)
 
-        return activation  # shape (M,)
+        return activation  # (M,)
 
     def plot_activation(
         self,
