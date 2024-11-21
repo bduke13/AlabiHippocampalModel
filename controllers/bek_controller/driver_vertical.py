@@ -16,6 +16,7 @@ from layers.boundary_vector_cell_layer_vertical import BoundaryVectorCellLayer
 from layers.head_direction_layer import HeadDirectionLayer
 from layers.place_cell_layer_vertical import PlaceCellLayer
 from layers.reward_cell_layer import RewardCellLayer
+from vis_3d_scan import get_scan_points, plot_3d_environment_with_reference_line
 
 tf.random.set_seed(5)
 np.set_printoptions(precision=2)
@@ -209,6 +210,16 @@ class Driver(Supervisor):
         self.directional_reward_estimates = tf.zeros(self.n_hd)
         self.step(self.timestep)
         self.step_count += 1
+
+        # Add warm-up period of 100 simulation steps
+        print("Starting warm-up period...")
+        for _ in range(100):
+            self.sense()
+            self.step(self.timestep)
+        print("Warm-up period complete.")
+
+        self.sense()
+        self.compute()
 
         # Initialize goal
         self.goal_location = [-1, 1]
@@ -652,6 +663,10 @@ class Driver(Supervisor):
         vertical_data = self.vertical_range_finder.getRangeImage()
         if vertical_data is not None:
             self.vertical_boundaries = np.array(vertical_data).reshape(360, 720)
+
+            points = get_scan_points(scan_data=self.vertical_boundaries)
+            plot_3d_environment_with_reference_line(points)
+            print("hihihi")
 
             # Save every vertical scan
             # np.save("first_vertical_scan.npy", self.vertical_boundaries)
