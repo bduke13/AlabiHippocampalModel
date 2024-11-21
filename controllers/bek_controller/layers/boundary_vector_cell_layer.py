@@ -12,6 +12,7 @@ class BoundaryVectorCellLayer:
         n_hd: int,
         sigma_ang: float,
         sigma_d: float,
+        enable_multiscale: bool = False,
     ) -> None:
         """Initialize the boundary vector cell (BVC) layer.
 
@@ -44,38 +45,43 @@ class BoundaryVectorCellLayer:
         # Preferred angles for each BVC
         self.phi_i = np.linspace(0, 2 * np.pi, input_dim)[self.input_indices]
 
-        # Angular standard deviation (converted to radians)
-        self.sigma_ang = tf.constant(np.deg2rad(sigma_ang), dtype=tf.float32)
+        self.enable_multiscale = enable_multiscale
+        if self.enable_multiscale:
+            # Initialize tuning for small-scale and large-scale BVCs
+            self.small_sigma_d = tf.constant(0.5, dtype=tf.float32)
+            self.small_sigma_ang = tf.constant(np.deg2rad(90), dtype=tf.float32)
+            self.large_sigma_d = tf.constant(1.0, dtype=tf.float32)
+            self.large_sigma_ang = tf.constant(np.deg2rad(120), dtype=tf.float32)
+        else:
+            # Use single-scale tuning
+            self.sigma_d = tf.constant(sigma_d, dtype=tf.float32)
+            self.sigma_ang = tf.constant(np.deg2rad(sigma_ang), dtype=tf.float32)
 
-        # Distance standard deviation
-        self.sigma_d = tf.constant(sigma_d, dtype=tf.float32)
-
-    def get_bvc_activation(
-        self, distances: np.ndarray, angles: np.ndarray
-    ) -> tf.Tensor:
-        """Calculate the activation of BVCs based on input distances and angles.
-
-        Args:
-            distances: Array of distance readings, representing obstacles' distances from the sensor.
-            angles: Array of angles corresponding to the distance readings.
-
-        Returns:
-            Activations of the BVC neurons, computed as the product of Gaussian functions for
-            distance and angle tuning.
-        """
+    def get_bvc_activation(self, distances, angles, scale=None):
+        """Calculate the activation of BVCs, optionally using scale-specific tuning."""
         PI = tf.constant(np.pi)
+        
+        if self.enable_multiscale and scale == "small":
+            sigma_d = self.small_sigma_d
+            sigma_ang = self.small_sigma_ang
+        elif self.enable_multiscale and scale == "large":
+            sigma_d = self.large_sigma_d
+            sigma_ang = self.large_sigma_ang
+        else:  # Default single-scale
+            sigma_d = self.sigma_d
+            sigma_ang = self.sigma_ang
 
-        # Compute Gaussian function for distance tuning
+        # Compute distance tuning
         distance_gaussian = tf.exp(
-            -((distances[self.input_indices] - self.d_i) ** 2) / (2 * self.sigma_d**2)
-        ) / tf.sqrt(2 * PI * self.sigma_d**2)
+            -((distances[self.input_indices] - self.d_i) ** 2) / (2 * sigma_d**2)
+        ) / tf.sqrt(2 * PI * sigma_d**2)
 
-        # Compute Gaussian function for angular tuning
+        # Compute angular tuning
         angular_gaussian = tf.exp(
-            -((angles[self.input_indices] - self.phi_i) ** 2) / (2 * self.sigma_ang**2)
-        ) / tf.sqrt(2 * PI * self.sigma_ang**2)
+            -((angles[self.input_indices] - self.phi_i) ** 2) / (2 * sigma_ang**2)
+        ) / tf.sqrt(2 * PI * sigma_ang**2)
 
-        # Return the product of distance and angular Gaussian functions for BVC activation
+        # Compute BVC activations
         return tf.reduce_sum((distance_gaussian * angular_gaussian), 0)
 
     def plot_activation(
