@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
 from numpy.random import default_rng
-from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
+from layers.boundary_vector_cell_layer_vertical import BoundaryVectorCellLayer
 
 tf.random.set_seed(5)
 
@@ -127,9 +127,7 @@ class PlaceCellLayer:
         self.prev_place_cell_activations = tf.identity(self.place_cell_activations)
 
         # Compute BVC activations based on the input distances and angles
-        self.bvc_activations = self.bvc_layer.get_bvc_activation(
-            input_data[0], input_data[1]
-        )
+        self.bvc_activations = self.bvc_layer.get_bvc_activation(input_data)
 
         # Compute the input to place cells by taking the dot product of the input weights and BVC activations
         # Afferent excitation term: ∑_j W_ij^{pb} v_j^b (Equation 3.2a)

@@ -14,7 +14,7 @@ from controller import Supervisor, Robot
 from enum import Enum, auto
 from layers.boundary_vector_cell_layer_vertical import BoundaryVectorCellLayer
 from layers.head_direction_layer import HeadDirectionLayer
-from layers.place_cell_layer_vertical import PlaceCellLayer
+from layers.place_cell_layer import PlaceCellLayer
 from layers.reward_cell_layer import RewardCellLayer
 from vis_3d_scan import get_scan_points, plot_3d_environment_with_reference_line
 
@@ -213,13 +213,9 @@ class Driver(Supervisor):
 
         # Add warm-up period of 100 simulation steps
         print("Starting warm-up period...")
-        for _ in range(100):
-            self.sense()
+        for _ in range(10):
             self.step(self.timestep)
         print("Warm-up period complete.")
-
-        self.sense()
-        self.compute()
 
         # Initialize goal
         self.goal_location = [-1, 1]
@@ -279,19 +275,9 @@ class Driver(Supervisor):
         except:
             bvc = BoundaryVectorCellLayer(
                 max_dist=10,
-                input_dim=720,
                 n_hd=n_hd,
                 sigma_ang=90,
                 sigma_d=0.5,
-                layer_indices=[
-                    0,
-                    4,
-                    9,
-                    14,
-                    19,
-                    24,
-                    29,
-                ],
             )
 
             self.pcn = PlaceCellLayer(
@@ -659,18 +645,10 @@ class Driver(Supervisor):
 
         # 1. Capture distance data from both range finders and calculate angles
 
-        # Vertical LiDAR - Shape: (720, 360)
+        # Vertical LiDAR - Shape: (360, 720)
         vertical_data = self.vertical_range_finder.getRangeImage()
         if vertical_data is not None:
             self.vertical_boundaries = np.array(vertical_data).reshape(360, 720)
-
-            points = get_scan_points(scan_data=self.vertical_boundaries)
-            plot_3d_environment_with_reference_line(points)
-            print("hihihi")
-
-            # Save every vertical scan
-            # np.save("first_vertical_scan.npy", self.vertical_boundaries)
-            # print("image saved")
 
         # 2. Get the robot's current heading in degrees using the compass and convert it to an integer.
         # Shape: scalar (int)
@@ -682,7 +660,10 @@ class Driver(Supervisor):
         # Shape: (720, 360) - Roll each vertical slice according to the robot's current heading
         if hasattr(self, "vertical_boundaries"):
             self.vertical_boundaries = np.roll(
-                self.vertical_boundaries, 2 * self.current_heading_deg, axis=0
+                self.vertical_boundaries, 2 * self.current_heading_deg, axis=1
+            )
+            self.vertical_boundaries = get_scan_points(
+                scan_data=self.vertical_boundaries,
             )
 
         # 4. Convert the current heading from degrees to radians.
@@ -743,6 +724,7 @@ class Driver(Supervisor):
         # Advance the timestep and update position
         self.step(self.timestep)
         curr_pos = self.robot.getField("translation").getSFVec3f()
+        self.pcn.bvc_layer.plot_activation(self.vertical_boundaries)
 
         # Update place cell and sensor maps
         if self.step_count < self.num_steps:
