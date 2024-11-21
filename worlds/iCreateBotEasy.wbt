@@ -63,7 +63,7 @@ DEF agent Create {
           width 720  # horizontal resolution
           height 360  # vertical resolution to get good sampling of the vertical space
           spherical TRUE
-          maxRange 10
+          maxRange 20
           name "vertical-range-finder"  # Added name field to match controller
         }
 
