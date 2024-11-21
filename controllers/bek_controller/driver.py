@@ -159,9 +159,18 @@ class Driver(Supervisor):
 
         self.hmap_x = np.zeros(self.num_steps)  # x-coordinates
         self.hmap_y = np.zeros(self.num_steps)  # y-coordinates
-        self.hmap_z = np.zeros(
-            (self.num_steps, self.num_scales, self.num_place_cells)
-        )  # place cell activations
+
+        if enable_multiscale:
+            num_small_pc = int(self.num_place_cells * 0.75)  # Ratio can change
+            num_large_pc = self.num_place_cells - num_small_pc
+        else:
+            num_small_pc = self.num_place_cells
+            num_large_pc = 0
+
+        # Initialize hmaps for each scale
+        self.hmap_z_small = np.zeros((self.num_steps, num_small_pc))
+        self.hmap_z_large = np.zeros((self.num_steps, num_large_pc)) if num_large_pc > 0 else None
+        
         self.hmap_h = np.zeros(
             (self.num_steps, self.n_hd)
         )  # head direction cell activations
@@ -697,7 +706,6 @@ class Driver(Supervisor):
             input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)],
             hd_activations=self.hd_activations,
             vis_density=self.vis_density,
-            collided=np.any(self.collided),
         )
 
         # Advance the timestep and update position
@@ -713,17 +721,29 @@ class Driver(Supervisor):
             self.hmap_x[self.step_count] = curr_pos[0]
             self.hmap_y[self.step_count] = curr_pos[2]
 
-            # Populate activations for each scale
-            for scale_idx, scale_name in enumerate(["small", "large"]):  # Adjust scale names if needed
-                self.hmap_z[self.step_count, scale_idx] = self.pcn.get_activations_by_scale(scale=scale_name).numpy()
+            # Update activations for each scale
+            if self.pcn.enable_multiscale:
+                # Small-scale activations
+                self.hmap_z_small[self.step_count] = self.pcn.get_activations_by_scale(scale="small").numpy()
 
+                # Large-scale activations (if applicable)
+                if self.hmap_z_large is not None:
+                    self.hmap_z_large[self.step_count] = self.pcn.get_activations_by_scale(scale="large").numpy()
+            else:
+                # Single-scale activations
+                self.hmap_z_small[self.step_count] = self.pcn.place_cell_activations.numpy()
+
+            # Update head direction cell activations
             self.hmap_h[self.step_count] = self.hd_activations
+
+            # Update goal-related activations
             self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn.bvc_activations)
-            self.hmap_vis_density[self.step_count] = self.vis_density  # Record complexity
+
+            # Record visual density (environmental complexity)
+            self.hmap_vis_density[self.step_count] = self.vis_density
 
         # Increment timestep
         self.step_count += 1
-
 
     ########################################### CHECK GOAL REACHED ###########################################
 
@@ -952,6 +972,7 @@ class Driver(Supervisor):
         """
 
         files_saved = []
+
         # Save the Place Cell Network (PCN)
         if include_pcn:
             with open("pcn.pkl", "wb") as output:
@@ -969,29 +990,44 @@ class Driver(Supervisor):
             with open("hmap_x.pkl", "wb") as output:
                 pickle.dump(self.hmap_x[: self.step_count], output)
                 files_saved.append("hmap_x.pkl")
+
             with open("hmap_y.pkl", "wb") as output:
                 pickle.dump(self.hmap_y[: self.step_count], output)
                 files_saved.append("hmap_y.pkl")
-            with open("hmap_z.pkl", "wb") as output:
-                pickle.dump(self.hmap_z[: self.step_count], output)
-                files_saved.append("hmap_z.pkl")
+
+            # Save activations for small and large scales
+            with open("hmap_z_small.pkl", "wb") as output:
+                pickle.dump(self.hmap_z_small[: self.step_count], output)
+                files_saved.append("hmap_z_small.pkl")
+
+            if self.hmap_z_large is not None:  # Save only if multiscale is enabled
+                with open("hmap_z_large.pkl", "wb") as output:
+                    pickle.dump(self.hmap_z_large[: self.step_count], output)
+                    files_saved.append("hmap_z_large.pkl")
+
             with open("hmap_g.pkl", "wb") as output:
                 pickle.dump(self.hmap_g[: self.step_count], output)
                 files_saved.append("hmap_g.pkl")
+
             with open("hmap_h.pkl", "wb") as output:
                 pickle.dump(self.hmap_h[: self.step_count], output)
                 files_saved.append("hmap_h.pkl")
+
             with open("hmap_vis_density.pkl", "wb") as output:
                 pickle.dump(self.hmap_vis_density[: self.step_count], output)
                 files_saved.append("hmap_vis_density.pkl")
 
+        # User confirmation dialog
         root = tk.Tk()
         root.withdraw()  # Hide the main window
-        root.attributes("-topmost", True)  # Always keep the window on top
+        root.attributes("-topmost", True)  # Keep the dialog on top
         root.update()
         messagebox.showinfo("Information", "Press OK to save data")
-        root.destroy()  # Destroy the main window
+        root.destroy()
+
+        # Pause the simulation
         self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
+
         print(f"Files Saved: {files_saved}")
         print("Saving Done!")
 
@@ -1005,11 +1041,16 @@ class Driver(Supervisor):
             "rcn.pkl",
             "hmap_x.pkl",
             "hmap_y.pkl",
-            "hmap_z.pkl",
             "hmap_g.pkl",
             "hmap_h.pkl",
             "hmap_vis_density.pkl",
         ]
+
+        # Add scale-specific files dynamically
+        if self.num_scales > 1:  # Multiscale enabled
+            files_to_remove.extend(["hmap_z_small.pkl", "hmap_z_large.pkl"])
+        else:  # Single-scale
+            files_to_remove.append("hmap_z.pkl")
 
         for file in files_to_remove:
             try:

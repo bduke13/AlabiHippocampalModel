@@ -10,10 +10,11 @@ class PlaceCellLayer:
     """Model a layer of place cells receiving input from Boundary Vector Cells.
 
     Place cells develop spatially localized receptive fields (place fields) through
-    competitive learning and synaptic plasticity.
+    competitive learning and synaptic plasticity. This version supports multiscale
+    place cells that form based on environmental complexity (vis_density).
 
-    This implementation is based on the model described in Chapter 3 of the
-    dissertation, specifically Equations (3.2a), (3.2b), and (3.3).
+    Small-scale place cells are more active in areas with higher visual density,
+    while large-scale place cells are more active in areas with lower visual density.
     """
 
     def __init__(
@@ -24,7 +25,7 @@ class PlaceCellLayer:
         n_hd: int = 8,
         enable_ojas: bool = False,
         enable_stdp: bool = False,
-        enable_multiscale: bool = False,
+        enable_multiscale: bool = True,
     ):
         """Initialize the Place Cell Layer.
 
@@ -35,7 +36,7 @@ class PlaceCellLayer:
             n_hd: Number of head direction cells.
             enable_ojas: Enable weight updates via competition.
             enable_stdp: Enable tripartite synapse weight updates via Spike-Timing-Dependent Plasticity.
-            enable_multiscale: Enable multiscale processing for place cells.
+            enable_multiscale: Enable multiscale functionality.
         """
         rng = default_rng()
 
@@ -70,20 +71,22 @@ class PlaceCellLayer:
             )
 
             # Indices for small-scale and large-scale place cells
-            self.small_scale_indices = tf.where(self.place_cell_scales == 'small')[:, 0]
-            self.large_scale_indices = tf.where(self.place_cell_scales == 'large')[:, 0]
+            small_scale_indices = tf.where(self.place_cell_scales == 'small')[:, 0]
+            large_scale_indices = tf.where(self.place_cell_scales == 'large')[:, 0]
 
-            self.small_scale_indices = tf.cast(self.small_scale_indices[:, 0], tf.int32)
-            self.large_scale_indices = tf.cast(self.large_scale_indices[:, 0], tf.int32)
+            self.small_scale_indices = tf.cast(small_scale_indices, tf.int32)
+            self.large_scale_indices = tf.cast(large_scale_indices, tf.int32)
 
             # Initialize weights for small-scale place cells
             w_in_small = tf.Variable(
-                rng.binomial(n=1, p=0.1, size=(num_small_pc, self.num_bvc)), dtype=tf.float32
+                rng.binomial(n=1, p=0.2, size=(num_small_pc, self.num_bvc)),
+                dtype=tf.float32
             )
 
             # Initialize weights for large-scale place cells
             w_in_large = tf.Variable(
-                rng.binomial(n=1, p=0.3, size=(num_large_pc, self.num_bvc)), dtype=tf.float32
+                rng.binomial(n=1, p=0.2, size=(num_large_pc, self.num_bvc)),
+                dtype=tf.float32
             )
 
             # Combine the weights into the main input weight matrix
@@ -94,9 +97,9 @@ class PlaceCellLayer:
             # Initialized with a 20% probability of connection
             # Shape: (num_pc, num_bvc)
             self.w_in = tf.Variable(
-                rng.binomial(n=1, p=0.2, size=(num_pc, self.num_bvc)), dtype=tf.float32
+                rng.binomial(n=1, p=0.2, size=(num_pc, self.num_bvc)),
+                dtype=tf.float32
             )
-
         ##########################################
 
         # Recurrent weight matrix for head direction and place cell interactions
@@ -152,46 +155,49 @@ class PlaceCellLayer:
     def get_place_cell_activations(
         self, input_data, hd_activations, vis_density, collided: bool = False
     ):
-        """Compute place cell activations from BVC and head direction inputs.
-
-        Args:
-            input_data: Tuple of (distances, angles) as input to BVC layer.
-            hd_activations: Head direction cell activations.
-            complexity: Environmental complexity between 0 and 1.
-            collided: Whether agent has collided with obstacle.
-        """
         # Store the previous place cell activations
         self.prev_place_cell_activations = tf.identity(self.place_cell_activations)
 
-        # Compute BVC activations separately for small- and large-scale place cells
+        # Compute BVC activations based on the input distances and angles
+        self.bvc_activations = self.bvc_layer.get_bvc_activation(
+            input_data[0], input_data[1]
+        )
+
         if self.enable_multiscale:
-            # Compute activations for small-scale place cells
-            small_bvc_activations = self.bvc_layer.get_bvc_activation(
-                input_data[0], input_data[1], scale="small"
-            )
+            # Separate weights for small and large scales
+            w_in_small = tf.gather(self.w_in, self.small_scale_indices)
+            w_in_large = tf.gather(self.w_in, self.large_scale_indices)
 
-            # Compute activations for large-scale place cells
-            large_bvc_activations = self.bvc_layer.get_bvc_activation(
-                input_data[0], input_data[1], scale="large"
+            # Compute afferent excitation for small-scale place cells
+            afferent_excitation_small = tf.matmul(
+                w_in_small, tf.expand_dims(self.bvc_activations, -1)
             )
+            afferent_excitation_small = tf.reshape(afferent_excitation_small, [-1])
 
-            # Combine activations based on the scale of each place cell
-            self.bvc_activations = tf.concat(
-                [
-                    small_bvc_activations[self.small_scale_indices],
-                    large_bvc_activations[self.large_scale_indices],
-                ],
-                axis=0,
+            # Compute afferent excitation for large-scale place cells
+            afferent_excitation_large = tf.matmul(
+                w_in_large, tf.expand_dims(self.bvc_activations, -1)
             )
+            afferent_excitation_large = tf.reshape(afferent_excitation_large, [-1])
+
+            # Initialize afferent_excitation tensor
+            afferent_excitation = tf.TensorArray(dtype=tf.float32, size=self.num_pc)
+
+            # Scatter the computed excitations back into the full tensor
+            afferent_excitation = afferent_excitation.scatter(
+                self.small_scale_indices, afferent_excitation_small
+            )
+            afferent_excitation = afferent_excitation.scatter(
+                self.large_scale_indices, afferent_excitation_large
+            )
+            afferent_excitation = afferent_excitation.stack()
         else:
-            # Default single-scale BVC activations
-            self.bvc_activations = self.bvc_layer.get_bvc_activation(
-                input_data[0], input_data[1]
+            # Compute the input to place cells by taking the dot product of the input weights and BVC activations
+            # Afferent excitation term: ∑_j W_ij^{pb} v_j^b (Equation 3.2a)
+            afferent_excitation = tf.matmul(
+                self.w_in, tf.expand_dims(self.bvc_activations, -1)
             )
-
-        # Compute the input to place cells by taking the dot product of the input weights and BVC activations
-        # Afferent excitation term: ∑_j W_ij^{pb} v_j^b (Equation 3.2a)
-        afferent_excitation = tf.tensordot(self.w_in, self.bvc_activations, axes=1)
+            afferent_excitation = tf.reshape(afferent_excitation, [-1])
 
         # Compute the total BVC activity for afferent inhibition
         # Afferent inhibition term: Γ^{pb} ∑_j v_j^b (Equation 3.2a)
@@ -199,9 +205,36 @@ class PlaceCellLayer:
 
         # Compute the total place cell activity for recurrent inhibition
         # Recurrent inhibition term: Γ^{pp} ∑_j v_j^p (Equation 3.2a)
-        recurrent_inhibition = self.gamma_pp * tf.reduce_sum(
-            tf.cast(self.place_cell_activations, tf.float32)
-        )
+        if self.enable_multiscale:
+            # Recurrent inhibition for small-scale place cells
+            recurrent_inhibition_small = self.gamma_pp * tf.reduce_sum(
+                tf.gather(self.place_cell_activations, self.small_scale_indices)
+            )
+
+            # Recurrent inhibition for large-scale place cells
+            recurrent_inhibition_large = self.gamma_pp * tf.reduce_sum(
+                tf.gather(self.place_cell_activations, self.large_scale_indices)
+            )
+
+            # Create a tensor for recurrent inhibition matching the size of place_cell_activations
+            recurrent_inhibition = tf.zeros_like(self.place_cell_activations)
+
+            # Scatter the inhibition values back into the full tensor
+            recurrent_inhibition = tf.tensor_scatter_nd_update(
+                recurrent_inhibition,
+                tf.reshape(self.small_scale_indices, [-1, 1]),
+                tf.fill([tf.size(self.small_scale_indices)], recurrent_inhibition_small)
+            )
+            recurrent_inhibition = tf.tensor_scatter_nd_update(
+                recurrent_inhibition,
+                tf.reshape(self.large_scale_indices, [-1, 1]),
+                tf.fill([tf.size(self.large_scale_indices)], recurrent_inhibition_large)
+            )
+        else:
+            # Original recurrent inhibition for single scale
+            recurrent_inhibition = self.gamma_pp * tf.reduce_sum(
+                tf.cast(self.place_cell_activations, tf.float32)
+            )
 
         # Update the activation variable `activation_update` with the new input, applying the membrane potential dynamics
         # Equation (3.2a): τ_p (ds_i^p/dt) = -s_i^p + afferent_excitation - afferent_inhibition - recurrent_inhibition
@@ -217,13 +250,13 @@ class PlaceCellLayer:
         # Here, ψ is implicitly set to 1
         self.place_cell_activations = tf.tanh(tf.nn.relu(self.activation_update))
 
-        # Apply modulation based on complexity and place cell scale if multiscale is enabled
+        # Modulate activations based on visual density and scale
         if self.enable_multiscale:
             # Compute modulation factors for each place cell
             modulation_factors = tf.where(
                 self.place_cell_scales == 'small',
                 vis_density,
-                1 - vis_density
+                1.0 - vis_density
             )
             modulation_factors = tf.cast(modulation_factors, tf.float32)
 
@@ -231,7 +264,7 @@ class PlaceCellLayer:
             self.place_cell_activations *= modulation_factors
 
         # Update the eligibility trace and weights
-        if self.enable_ojas and tf.reduce_any(self.place_cell_activations > 0):
+        if self.enable_stdp and tf.reduce_any(self.place_cell_activations > 0) and not collided:
             # Update the eligibility trace for place cells and head direction cells
             # Eligibility traces are used for temporal difference learning and sequence encoding
             if self.place_cell_trace is None:
@@ -264,37 +297,63 @@ class PlaceCellLayer:
         # Update the input weights based on the current activations and BVC activations
         # This is the competitive learning rule from Equation (3.3)
         if self.enable_ojas and tf.reduce_any(self.place_cell_activations > 0):
-            if self.enable_multiscale:
-                # Separate modulation factors for small and large scales
-                small_scale_modulation = vis_density  # Small scales favored in complex areas
-                large_scale_modulation = 1 - vis_density  # Large scales favored in simple areas
-
-                # Assign learning rates based on scales
-                learning_rates = tf.where(
-                    self.place_cell_scales == "small",
-                    small_scale_modulation,
-                    large_scale_modulation
-                )
-                learning_rates = tf.cast(learning_rates, tf.float32)
-            else:
-                learning_rates = tf.ones_like(self.place_cell_activations)
-
             # Compute the weight update according to Oja's rule (Equation 3.3)
-            weight_update = self.tau * (
-                self.place_cell_activations[:, tf.newaxis]
-                * (
-                    self.bvc_activations[tf.newaxis, :]
-                    - (1 / self.alpha_pb)
-                    * self.place_cell_activations[:, tf.newaxis]
-                    * self.w_in
+            if self.enable_multiscale:
+                # Separate activations and weights
+                activations_small = tf.gather(self.place_cell_activations, self.small_scale_indices)
+                activations_large = tf.gather(self.place_cell_activations, self.large_scale_indices)
+
+                w_in_small = tf.gather(self.w_in, self.small_scale_indices)
+                w_in_large = tf.gather(self.w_in, self.large_scale_indices)
+
+                # Modulate learning rates based on vis_density
+                lr_small = vis_density
+                lr_large = 1.0 - vis_density
+
+                # Update weights for small-scale place cells
+                weight_update_small = self.tau * lr_small * (
+                    activations_small[:, tf.newaxis]
+                    * (
+                        self.bvc_activations[tf.newaxis, :]
+                        - (1 / self.alpha_pb)
+                        * activations_small[:, tf.newaxis]
+                        * w_in_small
+                    )
                 )
-            )
 
-            # Apply scale-specific learning rates
-            weight_update *= learning_rates[:, tf.newaxis]
+                # Update weights for large-scale place cells
+                weight_update_large = self.tau * lr_large * (
+                    activations_large[:, tf.newaxis]
+                    * (
+                        self.bvc_activations[tf.newaxis, :]
+                        - (1 / self.alpha_pb)
+                        * activations_large[:, tf.newaxis]
+                        * w_in_large
+                    )
+                )
 
-            # Update the input weights from BVCs to place cells
-            self.w_in.assign_add(weight_update)
+                # Update the weights back into self.w_in
+                self.w_in = tf.tensor_scatter_nd_update(
+                    self.w_in,
+                    tf.reshape(self.small_scale_indices, [-1, 1]),
+                    w_in_small + weight_update_small
+                )
+                self.w_in = tf.tensor_scatter_nd_update(
+                    self.w_in,
+                    tf.reshape(self.large_scale_indices, [-1, 1]),
+                    w_in_large + weight_update_large
+                )
+            else:
+                weight_update = self.tau * (
+                    self.place_cell_activations[:, tf.newaxis]
+                    * (
+                        self.bvc_activations[tf.newaxis, :]
+                        - (1 / self.alpha_pb)
+                        * self.place_cell_activations[:, tf.newaxis]
+                        * self.w_in
+                    )
+                )
+                self.w_in.assign_add(weight_update)
 
     def reset_activations(self):
         """Reset place cell activations and related variables to zero."""
@@ -302,14 +361,14 @@ class PlaceCellLayer:
         self.activation_update.assign(tf.zeros_like(self.activation_update))
         self.place_cell_trace = None
 
-    def preplay(self, direction, num_steps=1, complexity=None):
-        """
-        Simulate preplay of place cell activations using recurrent weights.
+    def preplay(self, direction, num_steps=1):
+        """Simulate preplay of place cell activations using recurrent weights.
+
+        Used to predict future states without actual movement.
 
         Args:
             direction: Index of head direction for exploiting recurrent weights.
             num_steps: Number of exploitation steps to simulate looking ahead.
-            complexity: Environmental complexity value (default is 0.5).
 
         Returns:
             Updated place cell activations after exploitation.
@@ -323,25 +382,20 @@ class PlaceCellLayer:
             previous_activations = tf.identity(place_cell_activations)
 
             # Compute new activations based on recurrent weights and previous activations
-            weighted_sum = tf.tensordot(
-                self.w_rec_tripartite[direction], previous_activations, axes=1
-            )
-            # Apply activation function
-            place_cell_activations = tf.tanh(tf.nn.relu(weighted_sum - previous_activations))
-
-            # Apply modulation based on complexity and place cell scale if multiscale is enabled
-            if self.enable_multiscale:
-                modulation_factors = tf.where(
-                    self.place_cell_scales == 'small',
-                    complexity,
-                    1 - complexity
+            place_cell_activations = tf.tanh(
+                tf.nn.relu(
+                    tf.tensordot(
+                        tf.cast(self.w_rec_tripartite[direction], tf.float32),
+                        previous_activations,
+                        axes=1,
+                    )
+                    - previous_activations
                 )
-                modulation_factors = tf.cast(modulation_factors, tf.float32)
-                place_cell_activations *= modulation_factors
+            )
 
         # Return the updated place cell activations
         return place_cell_activations
-    
+
     def get_activations_by_scale(self, scale: str):
         """Retrieve place cell activations for a specific scale.
 
