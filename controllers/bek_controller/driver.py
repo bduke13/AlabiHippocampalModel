@@ -141,8 +141,10 @@ class Driver(Supervisor):
         self.n_hd = 8
         self.timestep = 32 * 3
         self.tau_w = 10  # time constant for the window function
-
-        self.bump_history = np.zeros(5, dtype=np.int32)
+        if enable_multiscale:
+            self.num_scales = 2  # Currently 'small' and 'large'; adjust as necessary
+        else:
+            self.num_scales = 1
 
         # Robot parameters
         self.max_speed = 16
@@ -158,13 +160,13 @@ class Driver(Supervisor):
         self.hmap_x = np.zeros(self.num_steps)  # x-coordinates
         self.hmap_y = np.zeros(self.num_steps)  # y-coordinates
         self.hmap_z = np.zeros(
-            (self.num_steps, self.num_place_cells)
+            (self.num_steps, self.num_scales, self.num_place_cells)
         )  # place cell activations
         self.hmap_h = np.zeros(
             (self.num_steps, self.n_hd)
         )  # head direction cell activations
         self.hmap_g = np.zeros(self.num_steps)  # goal estimates
-        self.hmap_complexity = np.zeros(self.num_steps)  # environmental complexity
+        self.hmap_vis_density = np.zeros(self.num_steps)  # visual density
 
         # Initialize hardware components and sensors
         self.robot = self.getFromDef("agent")  # Placeholder for robot instance
@@ -665,7 +667,7 @@ class Driver(Supervisor):
         self.collided.scatter_nd_update([[1]], [int(self.right_bumper.getValue())])
 
         # Get environmental complexity
-        self.complexity = self.compute_visual_density(self.boundaries, self.current_heading_deg)
+        self.vis_density = self.compute_visual_density(self.boundaries, self.current_heading_deg)
 
         # 10. Proceed to the next timestep in the robot's control loop.
         self.step(self.timestep)
@@ -694,7 +696,7 @@ class Driver(Supervisor):
         self.pcn.get_place_cell_activations(
             input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)],
             hd_activations=self.hd_activations,
-            complexity=self.complexity,
+            vis_density=self.vis_density,
             collided=np.any(self.collided),
         )
 
@@ -710,13 +712,18 @@ class Driver(Supervisor):
         if self.step_count < self.num_steps:
             self.hmap_x[self.step_count] = curr_pos[0]
             self.hmap_y[self.step_count] = curr_pos[2]
-            self.hmap_z[self.step_count] = self.pcn.place_cell_activations
+
+            # Populate activations for each scale
+            for scale_idx, scale_name in enumerate(["small", "large"]):  # Adjust scale names if needed
+                self.hmap_z[self.step_count, scale_idx] = self.pcn.get_activations_by_scale(scale=scale_name).numpy()
+
             self.hmap_h[self.step_count] = self.hd_activations
             self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn.bvc_activations)
-            self.hmap_complexity[self.step_count] = self.complexity  # Record complexity
+            self.hmap_vis_density[self.step_count] = self.vis_density  # Record complexity
 
         # Increment timestep
         self.step_count += 1
+
 
     ########################################### CHECK GOAL REACHED ###########################################
 
@@ -974,9 +981,9 @@ class Driver(Supervisor):
             with open("hmap_h.pkl", "wb") as output:
                 pickle.dump(self.hmap_h[: self.step_count], output)
                 files_saved.append("hmap_h.pkl")
-            with open("hmap_complexity.pkl", "wb") as output:
-                pickle.dump(self.hmap_complexity[: self.step_count], output)
-                files_saved.append("hmap_complexity.pkl")
+            with open("hmap_vis_density.pkl", "wb") as output:
+                pickle.dump(self.hmap_vis_density[: self.step_count], output)
+                files_saved.append("hmap_vis_density.pkl")
 
         root = tk.Tk()
         root.withdraw()  # Hide the main window
@@ -1001,6 +1008,7 @@ class Driver(Supervisor):
             "hmap_z.pkl",
             "hmap_g.pkl",
             "hmap_h.pkl",
+            "hmap_vis_density.pkl",
         ]
 
         for file in files_to_remove:
