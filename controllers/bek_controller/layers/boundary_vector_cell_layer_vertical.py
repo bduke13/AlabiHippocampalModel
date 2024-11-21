@@ -1,4 +1,5 @@
 # %%
+# Import statements remain the same
 from typing import Union
 import numpy as np
 import matplotlib.pyplot as plt
@@ -12,13 +13,24 @@ class BoundaryVectorCellLayer:
         self,
         max_dist: float,
         n_hd: int,
-        sigma_ang: float,
-        sigma_d: float,
-        sigma_vert: float = None,
+        preferred_vertical_angles: list,
+        sigma_d_list: list,
+        sigma_ang_list: list,
+        sigma_vert_list: list,
+        scaling_factors: list,  # New parameter for scaling factors
     ) -> None:
-        if sigma_vert is None:
-            sigma_vert = sigma_ang / 4
+        """
+        Initialize the BoundaryVectorCellLayer with per-layer sigma values.
 
+        Args:
+            max_dist: Maximum distance for BVCs.
+            n_hd: Number of preferred horizontal angles.
+            preferred_vertical_angles: List of preferred vertical angles in radians.
+            sigma_d_list: List of sigma_d values for each vertical layer.
+            sigma_ang_list: List of sigma_ang values for each vertical layer.
+            sigma_vert_list: List of sigma_vert values for each vertical layer.
+            scaling_factors: List of scaling factors for each vertical layer.
+        """
         # Preferred distances
         self.d_i = np.linspace(0, max_dist, num=50)  # (M,)
         N_dist = len(self.d_i)
@@ -27,29 +39,65 @@ class BoundaryVectorCellLayer:
         self.phi_i = np.repeat(np.linspace(0, 2 * np.pi, n_hd, endpoint=False), N_dist)
         self.d_i = np.tile(self.d_i, n_hd)
 
-        # Preferred vertical angles (zero for horizontal plane)
-        self.phi_i_vert = np.zeros_like(self.phi_i)
+        # Preferred vertical angles are expected to be in radians
+        preferred_vertical_angles_rad = preferred_vertical_angles  # Already in radians
+
+        # Generate BVC neurons for each vertical angle
+        self.phi_i_vert = []
+        self.d_i_all = []
+        self.phi_i_all = []
+        self.sigma_d_all = []
+        self.sigma_ang_all = []
+        self.sigma_vert_all = []
+        self.scaling_factors_all = []
+
+        for idx, vert_angle in enumerate(preferred_vertical_angles_rad):
+            phi_i_vert_layer = [vert_angle] * len(self.phi_i)
+            self.phi_i_vert.extend(phi_i_vert_layer)
+            self.d_i_all.extend(self.d_i)
+            self.phi_i_all.extend(self.phi_i)
+
+            # Assign sigma_d, sigma_ang, sigma_vert for this layer
+            sigma_d_layer = [sigma_d_list[idx]] * len(self.phi_i)
+            sigma_ang_layer = [sigma_ang_list[idx]] * len(self.phi_i)
+            sigma_vert_layer = [sigma_vert_list[idx]] * len(self.phi_i)
+            self.sigma_d_all.extend(sigma_d_layer)
+            self.sigma_ang_all.extend(sigma_ang_layer)
+            self.sigma_vert_all.extend(sigma_vert_layer)
+
+            # Assign scaling factors for this layer
+            scaling_factor_layer = [scaling_factors[idx]] * len(self.phi_i)
+            self.scaling_factors_all.extend(scaling_factor_layer)
+
+        # Update BVC parameters
+        self.d_i = np.array(self.d_i_all)
+        self.phi_i = np.array(self.phi_i_all)
+        self.phi_i_vert = np.array(self.phi_i_vert)
+        self.sigma_d_array = np.array(self.sigma_d_all)
+        self.sigma_ang_array = np.array(self.sigma_ang_all)
+        self.sigma_vert_array = np.array(self.sigma_vert_all)
+        self.scaling_factors_array = np.array(self.scaling_factors_all)
 
         # Total number of BVC neurons
         self.num_bvc = len(self.d_i)
 
-        # Convert parameters to tensors and expand dimensions
-        self.d_i = tf.constant(self.d_i, dtype=tf.float32)[tf.newaxis, :]  # (1, M)
-        self.phi_i = tf.constant(self.phi_i, dtype=tf.float32)[tf.newaxis, :]  # (1, M)
-        self.phi_i_vert = tf.constant(self.phi_i_vert, dtype=tf.float32)[
-            tf.newaxis, :
-        ]  # (1, M)
+        # Convert parameters to tensors WITHOUT expanding dimensions
+        self.d_i = tf.constant(self.d_i, dtype=tf.float32)  # (M,)
+        self.phi_i = tf.constant(self.phi_i, dtype=tf.float32)  # (M,)
+        self.phi_i_vert = tf.constant(self.phi_i_vert, dtype=tf.float32)  # (M,)
+        self.sigma_d = tf.constant(self.sigma_d_array, dtype=tf.float32)  # (M,)
+        self.sigma_ang = tf.constant(self.sigma_ang_array, dtype=tf.float32)  # (M,)
+        self.sigma_vert = tf.constant(self.sigma_vert_array, dtype=tf.float32)  # (M,)
+        self.scaling_factors = tf.constant(
+            self.scaling_factors_array, dtype=tf.float32
+        )  # (M,)
 
-        # Convert sigmas to radians and precompute constants
-        self.sigma_ang = tf.constant(np.deg2rad(sigma_ang), dtype=tf.float32)
-        self.sigma_d = tf.constant(sigma_d, dtype=tf.float32)
-        self.sigma_vert = tf.constant(np.deg2rad(sigma_vert), dtype=tf.float32)
+        # Precompute denominators
+        self.two_sigma_d_squared = 2 * self.sigma_d**2  # (M,)
+        self.two_sigma_ang_squared = 2 * self.sigma_ang**2  # (M,)
+        self.two_sigma_vert_squared = 2 * self.sigma_vert**2  # (M,)
 
-        self.two_sigma_d_squared = 2 * self.sigma_d**2
-        self.two_sigma_ang_squared = 2 * self.sigma_ang**2
-        self.two_sigma_vert_squared = 2 * self.sigma_vert**2
-
-    @tf.function
+    @tf.function(input_signature=[tf.TensorSpec([None, 6], tf.float32)])
     def get_bvc_activation(self, points: tf.Tensor) -> tf.Tensor:
         """Calculate the activation of BVCs based on input points.
 
@@ -65,6 +113,8 @@ class BoundaryVectorCellLayer:
         Returns:
             Activations of the BVC neurons.
         """
+        # Ensure points are float32
+        points = tf.cast(points, tf.float32)
 
         # Extract distances, horizontal angles, and vertical angles from points
         distances = points[:, 5]  # (N,)
@@ -101,6 +151,18 @@ class BoundaryVectorCellLayer:
         # Sum over input points to get activations for each BVC neuron
         activation = tf.reduce_sum(gaussians, axis=0)  # (M,)
 
+        # Apply scaling factors
+        activation = activation * self.scaling_factors  # (M,)
+
+        # Apply non-linear activation function
+        activation = tf.pow(activation, 2)
+
+        # Apply thresholding
+        threshold = tf.constant(0.01, dtype=tf.float32)  # Adjust threshold as needed
+        activation = tf.where(
+            activation < threshold, tf.zeros_like(activation), activation
+        )
+
         return activation  # (M,)
 
     def plot_activation(
@@ -113,19 +175,29 @@ class BoundaryVectorCellLayer:
             tf.convert_to_tensor(points, dtype=tf.float32)
         ).numpy()
 
+        print("activations.shape:", activations.shape)  # For debugging
         # Compute BVC positions
-        x_i = self.d_i * np.cos(self.phi_i)
-        y_i = self.d_i * np.sin(self.phi_i)
-        z_i = self.d_i * np.sin(
-            self.phi_i_vert
-        )  # Will be zero since phi_i_vert is zero
+        d_i = self.d_i.numpy().flatten()
+        phi_i = self.phi_i.numpy().flatten()
+        phi_i_vert = self.phi_i_vert.numpy().flatten()
+        print("d_i.shape:", d_i.shape)  # For debugging
+        print("phi_i.shape:", phi_i.shape)  # For debugging
+        print("phi_i_vert.shape:", phi_i_vert.shape)  # For debugging
+
+        x_i = d_i * np.cos(phi_i) * np.cos(phi_i_vert)
+        y_i = d_i * np.sin(phi_i) * np.cos(phi_i_vert)
+        z_i = d_i * np.sin(phi_i_vert)
 
         # For non-active BVCs, set a small epsilon activation
-        epsilon = 1e-3
+        epsilon = 1e-2
         activations = np.maximum(activations, epsilon)
 
         # Normalize activations for plotting
         activations_normalized = activations / np.max(activations)
+
+        print(
+            "activations_normalized.shape:", activations_normalized.shape
+        )  # For debugging
 
         # Create the 3D plot
         fig = plt.figure(figsize=(12, 8))
@@ -146,20 +218,36 @@ class BoundaryVectorCellLayer:
             label="Environment",
         )
 
-        # Plot the BVC activations
-        sizes = activations_normalized * 100  # Adjust scaling factor as needed
-        colors = plt.cm.viridis(activations_normalized)
+        # Unique vertical angles for plotting
+        unique_vert_angles = np.unique(phi_i_vert)
+        colors_list = [
+            "red",
+            "green",
+            "orange",
+            "purple",
+            "cyan",
+        ]  # Extend colors as needed
 
-        ax.scatter(
-            x_i,
-            y_i,
-            z_i,
-            s=sizes,
-            c=colors,
-            alpha=0.8,
-            edgecolor="black",
-            label="BVC Activations",
-        )
+        for idx, vert_angle in enumerate(unique_vert_angles):
+            mask = phi_i_vert == vert_angle
+            x_i_layer = x_i[mask]
+            y_i_layer = y_i[mask]
+            z_i_layer = z_i[mask]
+            activations_layer = activations_normalized[mask]
+            sizes = activations_layer * 100  # Adjust scaling factor as needed
+
+            # Use different colors for different layers
+            color = colors_list[idx % len(colors_list)]
+            ax.scatter(
+                x_i_layer,
+                y_i_layer,
+                z_i_layer,
+                s=sizes,
+                c=color,
+                alpha=0.8,
+                edgecolor="black",
+                label=f"BVCs at {vert_angle:.2f} rad",
+            )
 
         # Plot the scanner position at (0, 0, 0)
         ax.scatter(
@@ -173,7 +261,10 @@ class BoundaryVectorCellLayer:
             zorder=5,
         )
 
-        ax.legend()
+        # To avoid duplicate labels in the legend
+        handles, labels = ax.get_legend_handles_labels()
+        unique = dict(zip(labels, handles))
+        ax.legend(unique.values(), unique.keys())
 
         # Set labels
         ax.set_xlabel("X (meters)")
@@ -210,8 +301,23 @@ if __name__ == "__main__":
     # Use the updated function
     points = get_scan_points(reshaped_data)
 
-    # Initialize BVC layer
+    # Define preferred vertical angles and corresponding sigma values
+    preferred_vertical_angles = [0, 0.2]  # Angles in radians (~0° and ~11.5°)
+    sigma_d_list = [0.2, 0.2]  # Keep sigmas small
+    sigma_ang_list = [0.025, 0.025]  # Keep sigmas small
+    sigma_vert_list = [0.025, 0.025]  # Keep sigmas small
+
+    # Define scaling factors for each layer
+    scaling_factors = [1.0, 1.0]  # Boost the higher layer by a factor of 3
+
+    # Initialize BVC layer with per-layer sigma values and scaling factors
     bvc_layer = BoundaryVectorCellLayer(
-        max_dist=12, n_hd=8, sigma_ang=1, sigma_d=0.2, sigma_vert=0.1
+        max_dist=12,
+        n_hd=8,
+        preferred_vertical_angles=preferred_vertical_angles,
+        sigma_d_list=sigma_d_list,
+        sigma_ang_list=sigma_ang_list,
+        sigma_vert_list=sigma_vert_list,
+        scaling_factors=scaling_factors,
     )
     bvc_layer.plot_activation(points)

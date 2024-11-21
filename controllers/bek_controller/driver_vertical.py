@@ -273,11 +273,20 @@ class Driver(Supervisor):
                 self.pcn.reset_activations()
                 print("Loaded existing Place Cell Network.")
         except:
+            # Define preferred vertical angles and corresponding sigma values
+            preferred_vertical_angles = [0]  # Angles in radians (~0° and ~11.5°)
+            sigma_d_list = [0.2]  # sigma_d for each layer
+            sigma_ang_list = [0.025]  # sigma_ang for each layer
+            sigma_vert_list = [0.025]  # sigma_vert for each layer
+
+            # Initialize BVC layer with per-layer sigma values
             bvc = BoundaryVectorCellLayer(
-                max_dist=10,
-                n_hd=n_hd,
-                sigma_ang=90,
-                sigma_d=0.5,
+                max_dist=12,
+                n_hd=8,
+                preferred_vertical_angles=preferred_vertical_angles,
+                sigma_d_list=sigma_d_list,
+                sigma_ang_list=sigma_ang_list,
+                sigma_vert_list=sigma_vert_list,
             )
 
             self.pcn = PlaceCellLayer(
@@ -715,6 +724,9 @@ class Driver(Supervisor):
         """
         Compute the activations of place cells and handle the environment interactions.
         """
+        # Ensure points are float32
+        self.vertical_boundaries = tf.cast(self.vertical_boundaries, tf.float32)
+
         self.pcn.get_place_cell_activations(
             input_data=self.vertical_boundaries,
             hd_activations=self.hd_activations,
@@ -724,7 +736,7 @@ class Driver(Supervisor):
         # Advance the timestep and update position
         self.step(self.timestep)
         curr_pos = self.robot.getField("translation").getSFVec3f()
-        self.pcn.bvc_layer.plot_activation(self.vertical_boundaries)
+        # self.pcn.bvc_layer.plot_activation(self.vertical_boundaries)
 
         # Update place cell and sensor maps
         if self.step_count < self.num_steps:

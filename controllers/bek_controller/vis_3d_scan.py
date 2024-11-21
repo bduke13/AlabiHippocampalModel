@@ -23,7 +23,7 @@ def get_scan_points(scan_data: np.ndarray, z_cutoff: float = 2.0) -> np.ndarray:
     """
     # Create angles for longitude and latitude
     lon_angles = np.linspace(0, 2 * np.pi, 720)
-    lat_angles = np.linspace(-np.pi / 2, np.pi / 2, 360)
+    lat_angles = np.linspace(np.pi / 2, -np.pi / 2, 360)
 
     # Only process points above 20 degrees south of horizontal
     # 180 is horizontal, +45 gives us the cutoff index
@@ -38,7 +38,7 @@ def get_scan_points(scan_data: np.ndarray, z_cutoff: float = 2.0) -> np.ndarray:
     r_values = filtered_data
     x = r_values * np.cos(lat_mesh) * np.cos(lon_mesh)
     y = r_values * np.cos(lat_mesh) * np.sin(lon_mesh)
-    z = -1 * r_values * np.sin(lat_mesh)
+    z = r_values * np.sin(lat_mesh)
 
     # Flatten arrays
     x_flat = x.flatten()
