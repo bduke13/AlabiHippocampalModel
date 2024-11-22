@@ -14,7 +14,7 @@ from controller import Supervisor, Robot
 from enum import Enum, auto
 from layers.boundary_vector_cell_layer_vertical import BoundaryVectorCellLayer
 from layers.head_direction_layer import HeadDirectionLayer
-from layers.place_cell_layer import PlaceCellLayer
+from layers.place_cell_layer_vertical import PlaceCellLayer
 from layers.reward_cell_layer import RewardCellLayer
 from vis_3d_scan import get_scan_points, plot_3d_environment_with_reference_line
 
@@ -655,7 +655,6 @@ class Driver(Supervisor):
 
         # 1. Capture distance data from both range finders and calculate angles
 
-        # Vertical LiDAR - Shape: (360, 720)
         vertical_data = self.vertical_range_finder.getRangeImage()
         if vertical_data is not None:
             self.vertical_boundaries = np.array(vertical_data).reshape(90, 180)

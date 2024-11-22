@@ -43,12 +43,7 @@ class PlaceCellLayer:
         # Initialize the Boundary Vector Cell (BVC) layer
         self.bvc_layer = bvc_layer
 
-        # Print BVC layer configuration
-        print(f"\nInitializing Place Cell Layer:")
-        print(f"Vertical angles: {self.bvc_layer.vertical_angles}")
-        print(f"Number of BVCs: {self.bvc_layer.num_bvc}")
-
-        # Number of BVCs (using full 3D BVC layer)
+        # Number of BVCs (Boundary Vector Cells)
         self.num_bvc = self.bvc_layer.num_bvc
 
         # Input weight matrix connecting place cells to BVCs
@@ -74,13 +69,13 @@ class PlaceCellLayer:
         self.bvc_activations = tf.zeros(self.num_bvc, dtype=tf.float32)
 
         # Coefficient to modify effect of place cell recurrent inhibition (Γ_pp in Equation 3.2a)
-        self.gamma_pp = 0.5
+        self.gamma_pp = 0.3
 
         # Coefficient to modify effect of boundary vector cell afferent inhibition (Γ_pb in Equation 3.2a)
         self.gamma_pb = 0.3
 
         # Time constant for the membrane potential dynamics of place cells (τ_p in Equation 3.2a)
-        self.tau_p = 0.5
+        self.tau_p = 0.2
 
         # Normalization factor for synaptic weight updates (α_pb in Equation 3.3)
         self.alpha_pb = np.sqrt(0.5)
@@ -124,18 +119,15 @@ class PlaceCellLayer:
         """Compute place cell activations from BVC and head direction inputs.
 
         Args:
-            input_data: formatted distances in 2D array
+            input_data: Tuple of (distances, angles) as input to BVC layer.
             hd_activations: Head direction cell activations.
             collided: Whether agent has collided with obstacle.
         """
         # Store the previous place cell activations
         self.prev_place_cell_activations = tf.identity(self.place_cell_activations)
 
-        # Get BVC activations using 3D data
-        #        self, distances: np.ndarray, horiz_angles: np.ndarray, vert_angles: np.ndarray
-        self.bvc_activations = self.bvc_layer.get_bvc_activation(
-            distances=input_data,
-        )
+        # Compute BVC activations based on the input distances and angles
+        self.bvc_activations = self.bvc_layer.get_bvc_activation(input_data)
 
         # Compute the input to place cells by taking the dot product of the input weights and BVC activations
         # Afferent excitation term: ∑_j W_ij^{pb} v_j^b (Equation 3.2a)

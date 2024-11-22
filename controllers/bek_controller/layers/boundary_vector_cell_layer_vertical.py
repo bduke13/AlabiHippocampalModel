@@ -5,6 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
 import tensorflow as tf
+from layers import boundary_vector_cell_layer
 from vis_3d_scan import get_scan_points, convert_to_3D
 
 
@@ -168,26 +169,45 @@ class BoundaryVectorCellLayer:
         activation = activation / tf.cast(tf.shape(points)[0], tf.float32)
         return activation  # (M,)
 
-    def plot_activation_histogram(self, points: tf.Tensor) -> None:
-        """Plot a histogram of BVC activations.
+    def plot_activation_distribution(
+        self,
+        distances: np.ndarray,
+        return_plot: bool = False,
+    ) -> Union[None, plt.Figure]:
+        """Plot the distribution of BVC activations as a histogram.
 
         Args:
-            points: tf.Tensor of shape (N, 3), containing:
-                [:, 0]: latitude angles in radians
-                [:, 1]: longitude angles in radians
-                [:, 2]: distance values
-        """
-        # Get BVC activations
-        activations = self.get_bvc_activation(points).numpy()
+            distances: Input distances to the BVC layer (e.g., from a LiDAR).
+            return_plot: If True, returns the plot object instead of showing it.
 
-        # Create the histogram
-        plt.figure(figsize=(10, 6))
-        plt.hist(activations, bins=50, color="skyblue", edgecolor="black")
-        plt.title("Distribution of BVC Activations")
-        plt.xlabel("Activation Value")
-        plt.ylabel("Count")
-        plt.grid(True, alpha=0.3)
-        plt.show()
+        Returns:
+            The matplotlib Figure object if return_plot is True, otherwise None.
+        """
+        # Get BVC activations based on distances and angles
+        activations = self.get_bvc_activation(distances).numpy()
+
+        # Create histogram plot
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+
+        # Plot histogram
+        ax1.hist(activations, bins=50, color="skyblue", edgecolor="black")
+        ax1.set_title("Distribution of BVC Activations")
+        ax1.set_xlabel("Activation Value")
+        ax1.set_ylabel("Count")
+
+        # Plot sorted activations to see the distribution curve
+        sorted_activations = np.sort(activations)
+        ax2.plot(sorted_activations, "b-", linewidth=2)
+        ax2.set_title("Sorted BVC Activations")
+        ax2.set_xlabel("Neuron Index (sorted by activation)")
+        ax2.set_ylabel("Activation Value")
+
+        plt.tight_layout()
+
+        if return_plot:
+            return fig
+        else:
+            plt.show()
 
     def plot_activation(
         self,
@@ -348,4 +368,4 @@ if __name__ == "__main__":
 
     # Plot the BVC activations
     bvc_layer.plot_activation(points)
-    bvc_layer.plot_activation_histogram(points)
+    bvc_layer.plot_activation_distribution(points)
