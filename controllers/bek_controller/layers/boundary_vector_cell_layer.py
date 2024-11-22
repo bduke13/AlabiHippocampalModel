@@ -1,4 +1,3 @@
-# %%
 from typing import Union
 import numpy as np
 import matplotlib.pyplot as plt
@@ -32,6 +31,8 @@ class BoundaryVectorCellLayer:
 
         # Preferred distances for each BVC; determines how sensitive each BVC is to specific distances.
         self.d_i = np.tile(np.arange(0, max_dist, sigma_d / 2), n_hd)[np.newaxis, :]
+
+        self.n_hd = n_hd
 
         # Total number of BVC neurons = 8 head directions * 48 preferred distances per head direction.
         self.num_bvc = self.d_i.size
@@ -78,48 +79,6 @@ class BoundaryVectorCellLayer:
 
         # Return the product of distance and angular Gaussian functions for BVC activation
         return tf.reduce_sum((distance_gaussian * angular_gaussian), 0)
-
-    def plot_activation_distribution(
-        self,
-        distances: np.ndarray,
-        angles: np.ndarray,
-        return_plot: bool = False,
-    ) -> Union[None, plt.Figure]:
-        """Plot the distribution of BVC activations as a histogram.
-
-        Args:
-            distances: Input distances to the BVC layer (e.g., from a LiDAR).
-            angles: Input angles corresponding to the distance measurements.
-            return_plot: If True, returns the plot object instead of showing it.
-
-        Returns:
-            The matplotlib Figure object if return_plot is True, otherwise None.
-        """
-        # Get BVC activations based on distances and angles
-        activations = self.get_bvc_activation(distances, angles).numpy()
-
-        # Create histogram plot
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
-
-        # Plot histogram
-        ax1.hist(activations, bins=50, color="skyblue", edgecolor="black")
-        ax1.set_title("Distribution of BVC Activations")
-        ax1.set_xlabel("Activation Value")
-        ax1.set_ylabel("Count")
-
-        # Plot sorted activations to see the distribution curve
-        sorted_activations = np.sort(activations)
-        ax2.plot(sorted_activations, "b-", linewidth=2)
-        ax2.set_title("Sorted BVC Activations")
-        ax2.set_xlabel("Neuron Index (sorted by activation)")
-        ax2.set_ylabel("Activation Value")
-
-        plt.tight_layout()
-
-        if return_plot:
-            return fig
-        else:
-            plt.show()
 
     def plot_activation(
         self,
@@ -209,6 +168,3 @@ if __name__ == "__main__":
 
     # Plot BVC activation with the star-shaped boundary
     bvc_layer_with_activation.plot_activation(distances, angles)
-
-    # Plot the distribution of activations
-    bvc_layer_with_activation.plot_activation_distribution(distances, angles)
