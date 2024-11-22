@@ -1,6 +1,6 @@
 """my_controller_iCreate controller."""
 
-from driver import Driver, RobotMode
+from driver_vertical import Driver, RobotMode
 
 bot = Driver()
 # 1. LEARN_OJAS
@@ -11,7 +11,7 @@ bot = Driver()
 bot.initialization(
     mode=RobotMode.LEARN_OJAS,
     randomize_start_loc=True,
-    run_time_hours=1,
+    run_time_hours=2,
     start_loc=[4, -4],
 )
 bot.run()

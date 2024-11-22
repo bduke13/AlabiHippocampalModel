@@ -13,11 +13,11 @@ class BoundaryVectorCellLayer:
         self,
         max_dist: float,
         n_hd: int,
-        preferred_vertical_angles: list,
-        sigma_d_list: list,
-        sigma_ang_list: list,
-        sigma_vert_list: list,
-        scaling_factors: list,  # New parameter for scaling factors
+        preferred_vertical_angles: list = [0],
+        sigma_d_list: list = [0.3],
+        sigma_ang_list: list = [0.025],
+        sigma_vert_list: list = [0.025],
+        scaling_factors: list = [1.0],
     ) -> None:
         """
         Initialize the BoundaryVectorCellLayer with per-layer sigma values.
@@ -136,16 +136,21 @@ class BoundaryVectorCellLayer:
             tf.cos(vertical_angles - self.phi_i_vert),
         )  # (N, M)
 
-        # Compute Gaussians without normalization constants
-        distance_gaussian = tf.exp(-(delta_d**2) / self.two_sigma_d_squared)  # (N, M)
-        angular_gaussian = tf.exp(
-            -(delta_ang**2) / self.two_sigma_ang_squared
+        # Compute Gaussians with normalization constants
+        PI = tf.constant(np.pi)
+        distance_gaussian = tf.exp(-(delta_d**2) / (2 * self.sigma_d**2)) / tf.sqrt(
+            2 * PI * self.sigma_d**2
+        )  # (N, M)
+        angular_gaussian = tf.exp(-(delta_ang**2) / (2 * self.sigma_ang**2)) / tf.sqrt(
+            2 * PI * self.sigma_ang**2
         )  # (N, M)
         vertical_gaussian = tf.exp(
-            -(delta_vert**2) / self.two_sigma_vert_squared
+            -(delta_vert**2) / (2 * self.sigma_vert**2)
+        ) / tf.sqrt(
+            2 * PI * self.sigma_vert**2
         )  # (N, M)
 
-        # Compute the product
+        # Compute the product of Gaussians
         gaussians = distance_gaussian * angular_gaussian * vertical_gaussian  # (N, M)
 
         # Sum over input points to get activations for each BVC neuron
@@ -154,16 +159,37 @@ class BoundaryVectorCellLayer:
         # Apply scaling factors
         activation = activation * self.scaling_factors  # (M,)
 
-        # Apply non-linear activation function
-        activation = tf.pow(activation, 2)
+        # Remove squaring step
+        # activation = tf.pow(activation, 2)
 
-        # Apply thresholding
-        threshold = tf.constant(0.01, dtype=tf.float32)  # Adjust threshold as needed
+        # Apply thresholding (adjust if necessary)
+        threshold = tf.constant(0.0001, dtype=tf.float32)  # Adjust threshold as needed
         activation = tf.where(
             activation < threshold, tf.zeros_like(activation), activation
         )
 
+        activation = activation / tf.cast(tf.shape(points)[0], tf.float32)
         return activation  # (M,)
+
+    def plot_activation_histogram(self, points: np.ndarray) -> None:
+        """Plot a histogram of BVC activations.
+
+        Args:
+            points: Input points of shape (N, 6)
+        """
+        # Get BVC activations
+        activations = self.get_bvc_activation(
+            tf.convert_to_tensor(points, dtype=tf.float32)
+        ).numpy()
+
+        # Create the histogram
+        plt.figure(figsize=(10, 6))
+        plt.hist(activations, bins=50, color="skyblue", edgecolor="black")
+        plt.title("Distribution of BVC Activations")
+        plt.xlabel("Activation Value")
+        plt.ylabel("Count")
+        plt.grid(True, alpha=0.3)
+        plt.show()
 
     def plot_activation(
         self,
@@ -321,3 +347,4 @@ if __name__ == "__main__":
         scaling_factors=scaling_factors,
     )
     bvc_layer.plot_activation(points)
+    bvc_layer.plot_activation_histogram(points)

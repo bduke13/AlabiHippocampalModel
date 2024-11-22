@@ -274,10 +274,10 @@ class Driver(Supervisor):
                 print("Loaded existing Place Cell Network.")
         except:
             # Define preferred vertical angles and corresponding sigma values
-            preferred_vertical_angles = [0]  # Angles in radians (~0° and ~11.5°)
-            sigma_d_list = [0.2]  # sigma_d for each layer
-            sigma_ang_list = [0.025]  # sigma_ang for each layer
-            sigma_vert_list = [0.025]  # sigma_vert for each layer
+            preferred_vertical_angles = [0, 0.2]  # Angles in radians (~0° and ~11.5°)
+            sigma_d_list = [0.2, 0.2]  # sigma_d for each layer
+            sigma_ang_list = [0.025, 0.025]  # sigma_ang for each layer
+            sigma_vert_list = [0.025, 0.025]  # sigma_vert for each layer
 
             # Initialize BVC layer with per-layer sigma values
             bvc = BoundaryVectorCellLayer(
@@ -287,6 +287,7 @@ class Driver(Supervisor):
                 sigma_d_list=sigma_d_list,
                 sigma_ang_list=sigma_ang_list,
                 sigma_vert_list=sigma_vert_list,
+                scaling_factors=[1.0, 1.0],
             )
 
             self.pcn = PlaceCellLayer(
