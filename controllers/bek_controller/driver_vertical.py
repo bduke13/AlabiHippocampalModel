@@ -658,7 +658,7 @@ class Driver(Supervisor):
         # Vertical LiDAR - Shape: (360, 720)
         vertical_data = self.vertical_range_finder.getRangeImage()
         if vertical_data is not None:
-            self.vertical_boundaries = np.array(vertical_data).reshape(360, 720)
+            self.vertical_boundaries = np.array(vertical_data).reshape(90, 180)
 
         # 2. Get the robot's current heading in degrees using the compass and convert it to an integer.
         # Shape: scalar (int)
@@ -670,7 +670,7 @@ class Driver(Supervisor):
         # Shape: (720, 360) - Roll each vertical slice according to the robot's current heading
         if hasattr(self, "vertical_boundaries"):
             self.vertical_boundaries = np.roll(
-                self.vertical_boundaries, 2 * self.current_heading_deg, axis=1
+                self.vertical_boundaries, int(self.current_heading_deg / 2), axis=1
             )
             self.vertical_boundaries = get_scan_points(
                 scan_data=self.vertical_boundaries,

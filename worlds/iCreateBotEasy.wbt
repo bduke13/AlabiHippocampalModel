@@ -60,35 +60,13 @@ DEF agent Create {
           rotation 1 0 0 0  # Horizontal orientation (0 degrees)
           fieldOfView 6.28  # 360 degrees horizontal
           verticalFieldOfView 1.0472  # 60 degrees vertical FOV
-          width 720  # horizontal resolution
-          height 360  # vertical resolution to get good sampling of the vertical space
+          width 180  # horizontal resolution
+          height 90  # vertical resolution to get good sampling of the vertical space
           spherical TRUE
           maxRange 20
           name "vertical-range-finder"  # Added name field to match controller
         }
 
-        Camera {
-          translation -0.002 0.02 0
-          rotation 0 1 0 1.57
-          name "lefteye"
-          fieldOfView 3.14
-          width 720
-          height 360
-          spherical TRUE
-          recognition Recognition {
-          }
-        }
-        Camera {
-          translation 0.002 0.02 0
-          rotation 0 1 0 -1.57
-          name "righteye"
-          fieldOfView 3.14
-          width 720
-          height 360
-          spherical TRUE
-          recognition Recognition {
-          }
-        }
         Shape {
           appearance PBRAppearance {
           }

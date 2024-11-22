@@ -32,7 +32,7 @@ class BoundaryVectorCellLayer:
             scaling_factors: List of scaling factors for each vertical layer.
         """
         # Preferred distances
-        self.d_i = np.linspace(0, max_dist, num=50)  # (M,)
+        self.d_i = np.linspace(0, max_dist, num=25)  # (M,)
         N_dist = len(self.d_i)
 
         # Preferred horizontal angles
@@ -97,22 +97,19 @@ class BoundaryVectorCellLayer:
         self.two_sigma_ang_squared = 2 * self.sigma_ang**2  # (M,)
         self.two_sigma_vert_squared = 2 * self.sigma_vert**2  # (M,)
 
-    @tf.function()
+    @tf.function
     def get_bvc_activation(self, points: tf.Tensor) -> tf.Tensor:
         """Calculate the activation of BVCs based on input points.
 
         Args:
-            points: tf.Tensor of shape (N, 6), containing:
+            points: tf.Tensor of shape (N, 3), containing:
                 [:, 0]: latitude angles in radians
                 [:, 1]: longitude angles in radians
                 [:, 2]: distance values
 
         Returns:
-            Activations of the BVC neurons.
+            tf.Tensor: Activations of the BVC neurons.
         """
-        # Ensure points are float32
-        points = tf.cast(points, tf.float32)
-
         # Extract distances, horizontal angles, and vertical angles from points
         distances = points[:, 2]  # (N,)
         horizontal_angles = points[:, 1]  # (N,)
@@ -135,17 +132,17 @@ class BoundaryVectorCellLayer:
         )  # (N, M)
 
         # Compute Gaussians with normalization constants
-        PI = tf.constant(np.pi)
-        distance_gaussian = tf.exp(-(delta_d**2) / (2 * self.sigma_d**2)) / tf.sqrt(
+        PI = tf.constant(np.pi, dtype=tf.float32)
+        distance_gaussian = tf.exp(-(delta_d**2) / self.two_sigma_d_squared) / tf.sqrt(
             2 * PI * self.sigma_d**2
         )  # (N, M)
         horizontal_gaussian = tf.exp(
-            -(delta_ang**2) / (2 * self.sigma_ang**2)
+            -(delta_ang**2) / self.two_sigma_ang_squared
         ) / tf.sqrt(
             2 * PI * self.sigma_ang**2
         )  # (N, M)
         vertical_gaussian = tf.exp(
-            -(delta_vert**2) / (2 * self.sigma_vert**2)
+            -(delta_vert**2) / self.two_sigma_vert_squared
         ) / tf.sqrt(
             2 * PI * self.sigma_vert**2
         )  # (N, M)
@@ -161,28 +158,27 @@ class BoundaryVectorCellLayer:
         # Apply scaling factors
         activation = activation * self.scaling_factors  # (M,)
 
-        # Remove squaring step
-        # activation = tf.pow(activation, 2)
-
         # Apply thresholding (adjust if necessary)
         threshold = tf.constant(0.0001, dtype=tf.float32)  # Adjust threshold as needed
         activation = tf.where(
             activation < threshold, tf.zeros_like(activation), activation
         )
 
+        # Normalize activations by the number of points
         activation = activation / tf.cast(tf.shape(points)[0], tf.float32)
         return activation  # (M,)
 
-    def plot_activation_histogram(self, points: np.ndarray) -> None:
+    def plot_activation_histogram(self, points: tf.Tensor) -> None:
         """Plot a histogram of BVC activations.
 
         Args:
-            points: Input points of shape (N, 3) as outlined in get_bvc_activations
+            points: tf.Tensor of shape (N, 3), containing:
+                [:, 0]: latitude angles in radians
+                [:, 1]: longitude angles in radians
+                [:, 2]: distance values
         """
         # Get BVC activations
-        activations = self.get_bvc_activation(
-            tf.convert_to_tensor(points, dtype=tf.float32)
-        ).numpy()
+        activations = self.get_bvc_activation(points).numpy()
 
         # Create the histogram
         plt.figure(figsize=(10, 6))
@@ -195,49 +191,55 @@ class BoundaryVectorCellLayer:
 
     def plot_activation(
         self,
-        points: np.ndarray,
+        points: tf.Tensor,
         return_plot: bool = False,
     ) -> Union[None, plt.Figure]:
+        """Plot the BVC activations in 3D space.
+
+        Args:
+            points: tf.Tensor of shape (N, 3), containing:
+                [:, 0]: latitude angles in radians
+                [:, 1]: longitude angles in radians
+                [:, 2]: distance values
+            return_plot: If True, returns the matplotlib figure object.
+
+        Returns:
+            None or plt.Figure
+        """
         # Get BVC activations
-        activations = self.get_bvc_activation(
-            tf.convert_to_tensor(points, dtype=tf.float32)
-        ).numpy()
+        activations = self.get_bvc_activation(points).numpy()
 
         # Compute BVC positions
-        d_i = self.d_i.numpy().flatten()
-        phi_i = self.phi_i.numpy().flatten()
-        phi_i_vert = self.phi_i_vert.numpy().flatten()
+        d_i = self.d_i.numpy()
+        phi_i = self.phi_i.numpy()
+        phi_i_vert = self.phi_i_vert.numpy()
 
         # Convert points to x, y, z coordinates
-        xyz_coords = convert_to_3D(points)
+        xyz_coords = convert_to_3D(points).numpy()
 
         x_i = d_i * np.cos(phi_i) * np.cos(phi_i_vert)
         y_i = d_i * np.sin(phi_i) * np.cos(phi_i_vert)
         z_i = d_i * np.sin(phi_i_vert)
 
         # For non-active BVCs, set a small epsilon activation
-        epsilon = 1e-2
+        epsilon = 1e-4
         activations = np.maximum(activations, epsilon)
 
         # Normalize activations for plotting
         activations_normalized = activations / np.max(activations)
 
-        print(
-            "activations_normalized.shape:", activations_normalized.shape
-        )  # For debugging
-
         # Create the 3D plot
         fig = plt.figure(figsize=(12, 8))
         ax = fig.add_subplot(111, projection="3d")
 
-        # Plot the environment points with more vibrant appearance
+        # Plot the environment points
         ax.scatter(
             xyz_coords[:, 0],
             xyz_coords[:, 1],
             xyz_coords[:, 2],
-            c="dodgerblue",  # More vibrant blue color
-            s=1,  # Larger point size
-            alpha=0.2,  # More opacity
+            c="dodgerblue",
+            s=1,
+            alpha=0.2,
             label="Environment",
         )
 
@@ -321,7 +323,7 @@ if __name__ == "__main__":
     # Reshape the data from (259200,) to (360, 720)
     reshaped_data = vertical_boundaries.reshape(360, 720)
 
-    # Use the updated function
+    # Use the updated get_scan_points function
     points = get_scan_points(reshaped_data)
 
     # Define preferred vertical angles and corresponding sigma values
@@ -343,4 +345,7 @@ if __name__ == "__main__":
         sigma_vert_list=sigma_vert_list,
         scaling_factors=scaling_factors,
     )
+
+    # Plot the BVC activations
     bvc_layer.plot_activation(points)
+    bvc_layer.plot_activation_histogram(points)
