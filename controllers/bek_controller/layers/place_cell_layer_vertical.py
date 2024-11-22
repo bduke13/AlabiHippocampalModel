@@ -19,7 +19,7 @@ class PlaceCellLayer:
     def __init__(
         self,
         bvc_layer: BoundaryVectorCellLayer,
-        num_pc: int = 200,
+        num_pc: int = 400,
         timestep: int = 32 * 3,
         n_hd: int = 8,
         enable_ojas: bool = False,

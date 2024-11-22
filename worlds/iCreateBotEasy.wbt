@@ -88,11 +88,11 @@ DEF agent Create {
 }
 Wall {
   translation 0 0 -5
-  size 10.3 2.4 0.3
+  size 10 4 0.3
   appearance Roughcast {
     colorOverride 0.8 0.45 0.25
     textureTransform TextureTransform {
-      scale 1 2.4
+      scale 1 4
     }
   }
 }
@@ -100,18 +100,18 @@ Wall {
   translation -5 0 0
   rotation 0 1 0 1.5708
   name "wall(2)"
-  size 9.7 2.4 0.3
+  size 10 4 0.3
   appearance Roughcast {
     colorOverride 0.8 0.45 0.25
     textureTransform TextureTransform {
-      scale 1 2.4
+      scale 1 4
     }
   }
 }
 Wall {
   translation 0 0 5
   name "wall(3)"
-  size 10.3 2.4 0.3
+  size 10 4 0.3
   appearance Roughcast {
     colorOverride 0.8 0.45 0.25
     textureTransform TextureTransform {
@@ -123,11 +123,11 @@ Wall {
   translation 5 0 0
   rotation 0 1 0 1.5708
   name "wall(4)"
-  size 9.7 2.4 0.3
+  size 10 4 0.3
   appearance Roughcast {
     colorOverride 0.8 0.45 0.25
     textureTransform TextureTransform {
-      scale 1 2.4
+      scale 1 4
     }
   }
 }
