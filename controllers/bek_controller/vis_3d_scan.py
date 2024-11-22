@@ -3,67 +3,83 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-def get_scan_points(scan_data: np.ndarray, z_cutoff: float = 2.0) -> np.ndarray:
+def get_scan_points(scan_data: np.ndarray) -> np.ndarray:
     """
     Convert scan data into structured point information, excluding points below
-    45 degrees south of horizontal and above specified z-cutoff.
+    45 degrees south of horizontal.
 
     Args:
         scan_data: Raw scan data of shape (360, 720)
-        z_cutoff: Maximum z-coordinate value to include (in meters)
 
     Returns:
-        np.ndarray: Array of shape (N, 6) containing:
-            [:, 0]: x coordinates
-            [:, 1]: y coordinates
-            [:, 2]: z coordinates
-            [:, 3]: latitude angles in radians
-            [:, 4]: longitude angles in radians
-            [:, 5]: distance values
+        np.ndarray: Array of shape (N, 3) containing:
+            [:, 0]: latitude angles in radians
+            [:, 1]: longitude angles in radians
+            [:, 2]: distance values
     """
     # Create angles for longitude and latitude
     lon_angles = np.linspace(0, 2 * np.pi, 720)
     lat_angles = np.linspace(np.pi / 2, -np.pi / 2, 360)
 
     # Only process points above 20 degrees south of horizontal
-    # 180 is horizontal, +45 gives us the cutoff index
-    cutoff_idx = 200  # 180 + 20
+    cutoff_idx = 200  # 180 (horizontal) + 20 degrees
     filtered_data = scan_data[:cutoff_idx, :]
     filtered_lat_angles = lat_angles[:cutoff_idx]
 
     # Create meshgrid for angles
     lon_mesh, lat_mesh = np.meshgrid(lon_angles, filtered_lat_angles)
 
-    # Calculate 3D coordinates using broadcasting
+    # Get distance values
     r_values = filtered_data
-    x = r_values * np.cos(lat_mesh) * np.cos(lon_mesh)
-    y = r_values * np.cos(lat_mesh) * np.sin(lon_mesh)
-    z = r_values * np.sin(lat_mesh)
 
     # Flatten arrays
-    x_flat = x.flatten()
-    y_flat = y.flatten()
-    z_flat = z.flatten()
     lat_flat = lat_mesh.flatten()
     lon_flat = lon_mesh.flatten()
     r_flat = r_values.flatten()
 
-    # Filter points based on z-coordinate
-    z_mask = z_flat <= z_cutoff
-
-    # Stack all arrays into a single array with z-filtering
+    # Stack arrays into a single array
     points = np.column_stack(
         (
-            x_flat[z_mask],
-            y_flat[z_mask],
-            z_flat[z_mask],
-            lat_flat[z_mask],
-            lon_flat[z_mask],
-            r_flat[z_mask],
+            lat_flat,
+            lon_flat,
+            r_flat,
         )
     )
 
     return points
+
+
+def convert_to_3D(points: np.ndarray) -> np.ndarray:
+    """
+    Convert points from spherical coordinates (latitude angles, longitude angles, distances)
+    to Cartesian coordinates (x, y, z).
+
+    Args:
+        points: np.ndarray of shape (N, 3), containing:
+            [:, 0]: latitude angles in radians
+            [:, 1]: longitude angles in radians
+            [:, 2]: distance values
+
+    Returns:
+        np.ndarray: Array of shape (N, 3), containing:
+            [:, 0]: x coordinates
+            [:, 1]: y coordinates
+            [:, 2]: z coordinates
+    """
+    # Extract variables from points array
+    lat_angles = points[:, 0]  # Latitude angles in radians (theta)
+    lon_angles = points[:, 1]  # Longitude angles in radians (phi)
+    distances = points[:, 2]  # Distance values (r)
+
+    # Compute x, y, z coordinates
+    x_coords = distances * np.cos(lat_angles) * np.cos(lon_angles)
+    y_coords = distances * np.cos(lat_angles) * np.sin(lon_angles)
+    z_coords = distances * np.sin(lat_angles)
+
+    # Stack the coordinates into an array
+    xyz_coords = np.column_stack((x_coords, y_coords, z_coords))
+
+    return xyz_coords
 
 
 def plot_3d_environment_with_reference_line(points: np.ndarray, env_size=10):
@@ -71,38 +87,37 @@ def plot_3d_environment_with_reference_line(points: np.ndarray, env_size=10):
     Plot 3D environment with specified size, 1m increments, and a reference line.
 
     Args:
-        points: np.ndarray of shape (N, 6), containing:
-            [:, 0]: x coordinates
-            [:, 1]: y coordinates
-            [:, 2]: z coordinates
-            [:, 3]: latitude angles in radians
-            [:, 4]: longitude angles in radians
-            [:, 5]: distance values
+        points: np.ndarray of shape (N, 3), containing:
+            [:, 0]: latitude angles in radians
+            [:, 1]: longitude angles in radians
+            [:, 2]: distance values
+
         env_size: Size of the environment in meters (creates a cube of ±env_size)
 
     Returns:
         None
     """
-    # Extract variables from points array
-    x_coords = points[:, 0]
-    y_coords = points[:, 1]
-    z_coords = points[:, 2]
-    values = points[:, 5]
+    # Convert points to x, y, z coordinates
+    xyz_coords = convert_to_3D(points)
+    x_coords = xyz_coords[:, 0]
+    y_coords = xyz_coords[:, 1]
+    z_coords = xyz_coords[:, 2]
+    distances = points[:, 2]  # Distance values for coloring
 
     fig = plt.figure(figsize=(15, 15))
     ax = fig.add_subplot(111, projection="3d")
 
-    # Plot the filtered points
+    # Plot the points
     scatter = ax.scatter(
         x_coords,
         y_coords,
         z_coords,
-        c=values,
+        c=distances,
         cmap="viridis",
         alpha=0.3,
         s=1,
     )
-    plt.colorbar(scatter, label="Value")
+    plt.colorbar(scatter, label="Distance (meters)")
 
     # Plot the red dot at the origin
     ax.scatter(

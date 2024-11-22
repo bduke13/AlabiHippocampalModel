@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
 import tensorflow as tf
-from vis_3d_scan import get_scan_points
+from vis_3d_scan import get_scan_points, convert_to_3D
 
 
 class BoundaryVectorCellLayer:
@@ -97,18 +97,15 @@ class BoundaryVectorCellLayer:
         self.two_sigma_ang_squared = 2 * self.sigma_ang**2  # (M,)
         self.two_sigma_vert_squared = 2 * self.sigma_vert**2  # (M,)
 
-    @tf.function(input_signature=[tf.TensorSpec([None, 6], tf.float32)])
+    @tf.function()
     def get_bvc_activation(self, points: tf.Tensor) -> tf.Tensor:
         """Calculate the activation of BVCs based on input points.
 
         Args:
             points: tf.Tensor of shape (N, 6), containing:
-                [:, 0]: x coordinates
-                [:, 1]: y coordinates
-                [:, 2]: z coordinates
-                [:, 3]: latitude angles in radians
-                [:, 4]: longitude angles in radians
-                [:, 5]: distance values
+                [:, 0]: latitude angles in radians
+                [:, 1]: longitude angles in radians
+                [:, 2]: distance values
 
         Returns:
             Activations of the BVC neurons.
@@ -117,19 +114,20 @@ class BoundaryVectorCellLayer:
         points = tf.cast(points, tf.float32)
 
         # Extract distances, horizontal angles, and vertical angles from points
-        distances = points[:, 5]  # (N,)
-        angles = points[:, 4]  # (N,)
-        vertical_angles = points[:, 3]  # (N,)
+        distances = points[:, 2]  # (N,)
+        horizontal_angles = points[:, 1]  # (N,)
+        vertical_angles = points[:, 0]  # (N,)
 
         # Expand dimensions to (N, 1) for broadcasting
         distances = tf.expand_dims(distances, axis=1)  # (N, 1)
-        angles = tf.expand_dims(angles, axis=1)  # (N, 1)
+        horizontal_angles = tf.expand_dims(horizontal_angles, axis=1)  # (N, 1)
         vertical_angles = tf.expand_dims(vertical_angles, axis=1)  # (N, 1)
 
         # Compute differences
         delta_d = distances - self.d_i  # (N, M)
         delta_ang = tf.atan2(
-            tf.sin(angles - self.phi_i), tf.cos(angles - self.phi_i)
+            tf.sin(horizontal_angles - self.phi_i),
+            tf.cos(horizontal_angles - self.phi_i),
         )  # (N, M)
         delta_vert = tf.atan2(
             tf.sin(vertical_angles - self.phi_i_vert),
@@ -141,7 +139,9 @@ class BoundaryVectorCellLayer:
         distance_gaussian = tf.exp(-(delta_d**2) / (2 * self.sigma_d**2)) / tf.sqrt(
             2 * PI * self.sigma_d**2
         )  # (N, M)
-        angular_gaussian = tf.exp(-(delta_ang**2) / (2 * self.sigma_ang**2)) / tf.sqrt(
+        horizontal_gaussian = tf.exp(
+            -(delta_ang**2) / (2 * self.sigma_ang**2)
+        ) / tf.sqrt(
             2 * PI * self.sigma_ang**2
         )  # (N, M)
         vertical_gaussian = tf.exp(
@@ -151,7 +151,9 @@ class BoundaryVectorCellLayer:
         )  # (N, M)
 
         # Compute the product of Gaussians
-        gaussians = distance_gaussian * angular_gaussian * vertical_gaussian  # (N, M)
+        gaussians = (
+            distance_gaussian * horizontal_gaussian * vertical_gaussian
+        )  # (N, M)
 
         # Sum over input points to get activations for each BVC neuron
         activation = tf.reduce_sum(gaussians, axis=0)  # (M,)
@@ -175,7 +177,7 @@ class BoundaryVectorCellLayer:
         """Plot a histogram of BVC activations.
 
         Args:
-            points: Input points of shape (N, 6)
+            points: Input points of shape (N, 3) as outlined in get_bvc_activations
         """
         # Get BVC activations
         activations = self.get_bvc_activation(
@@ -201,14 +203,13 @@ class BoundaryVectorCellLayer:
             tf.convert_to_tensor(points, dtype=tf.float32)
         ).numpy()
 
-        print("activations.shape:", activations.shape)  # For debugging
         # Compute BVC positions
         d_i = self.d_i.numpy().flatten()
         phi_i = self.phi_i.numpy().flatten()
         phi_i_vert = self.phi_i_vert.numpy().flatten()
-        print("d_i.shape:", d_i.shape)  # For debugging
-        print("phi_i.shape:", phi_i.shape)  # For debugging
-        print("phi_i_vert.shape:", phi_i_vert.shape)  # For debugging
+
+        # Convert points to x, y, z coordinates
+        xyz_coords = convert_to_3D(points)
 
         x_i = d_i * np.cos(phi_i) * np.cos(phi_i_vert)
         y_i = d_i * np.sin(phi_i) * np.cos(phi_i_vert)
@@ -229,18 +230,14 @@ class BoundaryVectorCellLayer:
         fig = plt.figure(figsize=(12, 8))
         ax = fig.add_subplot(111, projection="3d")
 
-        # Downsample environment points for faster plotting
-        downsample_rate = 10  # Adjust as needed
-        env_points = points[::downsample_rate]
-
         # Plot the environment points with more vibrant appearance
         ax.scatter(
-            env_points[:, 0],
-            env_points[:, 1],
-            env_points[:, 2],
+            xyz_coords[:, 0],
+            xyz_coords[:, 1],
+            xyz_coords[:, 2],
             c="dodgerblue",  # More vibrant blue color
-            s=3,  # Larger point size
-            alpha=0.6,  # More opacity
+            s=1,  # Larger point size
+            alpha=0.2,  # More opacity
             label="Environment",
         )
 
@@ -270,7 +267,7 @@ class BoundaryVectorCellLayer:
                 z_i_layer,
                 s=sizes,
                 c=color,
-                alpha=0.8,
+                alpha=0.4,
                 edgecolor="black",
                 label=f"BVCs at {vert_angle:.2f} rad",
             )
@@ -334,7 +331,7 @@ if __name__ == "__main__":
     sigma_vert_list = [0.025, 0.025]  # Keep sigmas small
 
     # Define scaling factors for each layer
-    scaling_factors = [1.0, 1.0]  # Boost the higher layer by a factor of 3
+    scaling_factors = [1.0, 1.0]
 
     # Initialize BVC layer with per-layer sigma values and scaling factors
     bvc_layer = BoundaryVectorCellLayer(
@@ -347,4 +344,3 @@ if __name__ == "__main__":
         scaling_factors=scaling_factors,
     )
     bvc_layer.plot_activation(points)
-    bvc_layer.plot_activation_histogram(points)
