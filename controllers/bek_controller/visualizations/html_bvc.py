@@ -8,11 +8,11 @@ import matplotlib.colors as mcolors
 import webbrowser
 
 
-def plot_place_cells_group(
+def plot_boundary_cells_group(
     cell_indices,
     hmap_x,
     hmap_y,
-    hmap_z,
+    hmap_to_plot,
     colors_rgb,
     group_index,
     output_dir="visualizations/outputs/",
@@ -21,26 +21,26 @@ def plot_place_cells_group(
     return_plot=False,
 ):
     """
-    Plots a hexbin plot for a given place cell index and saves or shows it based on flags.
+    Plots a hexbin plot for a given boundary cell index and saves or shows it based on flags.
 
     Args:
-    - cell_index: The index of the place cell to plot.
+    - cell_index: The index of the boundary cell to plot.
     - hmap_x: The x coordinates of the grid.
     - hmap_y: The y coordinates of the grid.
-    - hmap_z: The activation data for the place cells (z-axis).
+    - hmap_to_plot: The activation data for the boundary cells (z-axis).
     - colors_rgb: List of RGB colors for plotting.
-    - output_dir: Directory to save the plot (default is 'place_cell_images/').
+    - output_dir: Directory to save the plot (default is 'boundary_cell_images/').
     - save_plot: Boolean flag to save the plot (default is True).
     - show_plot: Boolean flag to display the plot on the screen (default is False).
     - return_plot: Boolean flag to return the figure object (default is False).
     """
     # Create figure with 5 subplots side by side
     fig, axes = plt.subplots(1, 5, figsize=(25, 5))
-    fig.suptitle(f"Place Cells Group {group_index}", fontsize=16)
+    fig.suptitle(f"Boundary Cells Group {group_index}", fontsize=16)
 
     for idx, (ax, cell_index) in enumerate(zip(axes, cell_indices)):
         # Get activations for this cell
-        activations = hmap_z[:, cell_index]
+        activations = hmap_to_plot[:, cell_index]
 
         # Color for this cell
         color_rgb = colors_rgb[
@@ -85,9 +85,9 @@ def plot_place_cells_group(
     # Save the plot if save_plot flag is True
     if save_plot:
         os.makedirs(output_dir, exist_ok=True)
-        file_path = os.path.join(output_dir, f"place_cells_group_{group_index}.jpg")
+        file_path = os.path.join(output_dir, f"boundary_cells_group_{group_index}.jpg")
         plt.savefig(file_path, bbox_inches="tight", dpi=300)
-        print(f"Saved plot for place cells group {group_index} to {file_path}")
+        print(f"Saved plot for boundary cells group {group_index} to {file_path}")
 
     # Show the plot if show_plot flag is True
     if show_plot:
@@ -102,15 +102,15 @@ def plot_place_cells_group(
 
 
 def generate_html_report(cell_indices, output_dir):
-    """Generate an HTML report of all place cell visualizations."""
-    html_path = os.path.join(output_dir, "place_cells_report.html")
+    """Generate an HTML report of all boundary cell visualizations."""
+    html_path = os.path.join(output_dir, "boundary_cells_report.html")
 
     with open(html_path, "w") as f:
         f.write(
             """
         <html>
         <head>
-            <title>Place Cell Visualizations</title>
+            <title>Boundary Cell Visualizations</title>
             <style>
                 body { font-family: Arial, sans-serif; margin: 20px; }
                 .group-viz { margin-bottom: 30px; }
@@ -118,7 +118,7 @@ def generate_html_report(cell_indices, output_dir):
             </style>
         </head>
         <body>
-            <h1>Place Cell Visualizations</h1>
+            <h1>Boundary Cell Visualizations</h1>
         """
         )
 
@@ -128,7 +128,7 @@ def generate_html_report(cell_indices, output_dir):
                 f"""
             <div class="group-viz">
                 <h3>Group {i}</h3>
-                <img src="place_cells_group_{i}.jpg" style="max-width: 100%;">
+                <img src="boundary_cells_group_{i}.jpg" style="max-width: 100%;">
             </div>
             """
             )
@@ -156,11 +156,10 @@ if __name__ == "__main__":
     with open("hmap_y.pkl", "rb") as f:
         hmap_y = np.array(pickle.load(f))
     with open("hmap_bvc.pkl", "rb") as f:
-        hmap_z = np.asarray(pickle.load(f))
+        hmap_to_plot = np.asarray(pickle.load(f))
 
-    # Select top 100 cells based on total activation
-    total_activations = np.sum(hmap_z, axis=0)
-    cell_indices = np.argsort(total_activations)
+    # Use sequential indices without sorting
+    cell_indices = np.arange(hmap_to_plot.shape[1])
 
     # Generate and save plots in groups of 5
     for i in range(0, len(cell_indices), 5):
@@ -170,11 +169,11 @@ if __name__ == "__main__":
             group = np.append(group, group[-1])
 
         group_index = i // 5
-        plot_place_cells_group(
+        plot_boundary_cells_group(
             group,
             hmap_x,
             hmap_y,
-            hmap_z,
+            hmap_to_plot,
             colors_rgb,
             group_index,
             output_dir=output_dir,
