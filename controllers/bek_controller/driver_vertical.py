@@ -141,6 +141,15 @@ class Driver(Supervisor):
         self.timestep = 32 * 3
         self.tau_w = 10  # time constant for the window function
 
+        # Parameters for 3D BVC
+        # Define preferred vertical angles and corresponding sigma values
+        self.preferred_vertical_angles = [0, 0.3]
+        self.sigma_d_list = [0.2, 0.3]
+        self.sigma_ang_list = [0.025, 0.5]
+        self.sigma_vert_list = [0.025, 0.5]
+        self.scaling_factors = [1.0, 1.0]
+        self.num_bvc_per_dir = 25
+
         # Robot parameters
         self.max_speed = 16
         self.left_speed = self.max_speed
@@ -157,6 +166,12 @@ class Driver(Supervisor):
         self.hmap_z = np.zeros(
             (self.num_steps, self.num_place_cells)
         )  # place cell activations
+        self.hmap_bvc = np.zeros(
+            (
+                self.num_steps,
+                len(self.preferred_vertical_angles) * self.n_hd * self.num_bvc_per_dir,
+            )
+        )  # BVC cell activations
         self.hmap_h = np.zeros(
             (self.num_steps, self.n_hd)
         )  # head direction cell activations
@@ -193,6 +208,12 @@ class Driver(Supervisor):
             timestep=self.timestep,
             enable_ojas=enable_ojas,
             enable_stdp=enable_stdp,
+            preferred_vertical_angles=self.preferred_vertical_angles,
+            sigma_d_list=self.sigma_d_list,
+            sigma_ang_list=self.sigma_ang_list,
+            sigma_vert_list=self.sigma_vert_list,
+            scaling_factors=self.scaling_factors,
+            num_bvc_per_dir=self.num_bvc_per_dir,
         )
         self.load_rcn(
             num_reward_cells=self.num_reward_cells,
@@ -210,12 +231,6 @@ class Driver(Supervisor):
         self.directional_reward_estimates = tf.zeros(self.n_hd)
         self.step(self.timestep)
         self.step_count += 1
-
-        # Add warm-up period of 100 simulation steps
-        print("Starting warm-up period...")
-        for _ in range(10):
-            self.step(self.timestep)
-        print("Warm-up period complete.")
 
         # Initialize goal
         self.goal_location = [-1, 1]
@@ -250,6 +265,12 @@ class Driver(Supervisor):
         num_place_cells: int,
         n_hd: int,
         timestep: int,
+        preferred_vertical_angles: List[float],
+        sigma_d_list: List[float],
+        sigma_ang_list: List[float],
+        sigma_vert_list: List[float],
+        scaling_factors: List[float],
+        num_bvc_per_dir: int,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
     ):
@@ -273,12 +294,6 @@ class Driver(Supervisor):
                 self.pcn.reset_activations()
                 print("Loaded existing Place Cell Network.")
         except:
-            # Define preferred vertical angles and corresponding sigma values
-            preferred_vertical_angles = [0, 0.15, 0.3]
-            sigma_d_list = [0.2, 0.2, 0.2]  # sigma_d for each layer
-            sigma_ang_list = [0.025, 0.025, 0.025]  # sigma_ang for each layer
-            sigma_vert_list = [0.025, 0.025, 0.025]  # sigma_vert for each layer
-            scaling_factors = [2.0, 0.5, 0.5]
 
             # Initialize BVC layer with per-layer sigma values
             bvc = BoundaryVectorCellLayer(
@@ -289,6 +304,7 @@ class Driver(Supervisor):
                 sigma_ang_list=sigma_ang_list,
                 sigma_vert_list=sigma_vert_list,
                 scaling_factors=scaling_factors,
+                num_bvc_per_dir=num_bvc_per_dir,
             )
 
             self.pcn = PlaceCellLayer(
@@ -297,6 +313,11 @@ class Driver(Supervisor):
                 timestep=timestep,
                 n_hd=n_hd,
             )
+
+            self.hmap_bvc = np.zeros(
+                (self.num_steps, self.pcn.bvc_layer.num_bvc)
+            )  # place cell activations
+
             print("Initialized new Place Cell Network.")
 
         if enable_ojas is not None:
@@ -744,6 +765,7 @@ class Driver(Supervisor):
             self.hmap_x[self.step_count] = curr_pos[0]
             self.hmap_y[self.step_count] = curr_pos[2]
             self.hmap_z[self.step_count] = self.pcn.place_cell_activations
+            self.hmap_bvc[self.step_count] = self.pcn.bvc_activations
             self.hmap_h[self.step_count] = self.hd_activations
             self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn.bvc_activations)
 
@@ -983,6 +1005,9 @@ class Driver(Supervisor):
             with open("hmap_h.pkl", "wb") as output:
                 pickle.dump(self.hmap_h[: self.step_count], output)
                 files_saved.append("hmap_h.pkl")
+            with open("hmap_bvc.pkl", "wb") as output:
+                pickle.dump(self.hmap_bvc[: self.step_count], output)
+                files_saved.append("hmap_bvc.pkl")
 
         root = tk.Tk()
         root.withdraw()  # Hide the main window

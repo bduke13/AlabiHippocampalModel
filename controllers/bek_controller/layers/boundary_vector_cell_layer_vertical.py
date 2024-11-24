@@ -19,6 +19,7 @@ class BoundaryVectorCellLayer:
         sigma_ang_list: list = [0.025],
         sigma_vert_list: list = [0.025],
         scaling_factors: list = [1.0],
+        num_bvc_per_dir: int = 50,
     ) -> None:
         """
         Initialize the BoundaryVectorCellLayer with per-layer sigma values.
@@ -33,7 +34,7 @@ class BoundaryVectorCellLayer:
             scaling_factors: List of scaling factors for each vertical layer.
         """
         # Preferred distances
-        self.d_i = np.linspace(0, max_dist, num=25)
+        self.d_i = np.linspace(0, max_dist, num=num_bvc_per_dir)
         N_dist = len(self.d_i)
 
         # Preferred horizontal angles
