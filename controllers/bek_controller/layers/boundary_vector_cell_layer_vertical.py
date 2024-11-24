@@ -33,7 +33,7 @@ class BoundaryVectorCellLayer:
             scaling_factors: List of scaling factors for each vertical layer.
         """
         # Preferred distances
-        self.d_i = np.linspace(0, max_dist, num=50)  # (M,)
+        self.d_i = np.linspace(0, max_dist, num=25)
         N_dist = len(self.d_i)
 
         # Preferred horizontal angles
@@ -349,9 +349,9 @@ if __name__ == "__main__":
 
     preferred_vertical_angles = [0, 0.15, 0.3]
     sigma_d_list = [0.2, 0.2, 0.2]  # sigma_d for each layer
-    sigma_ang_list = [0.025, 0.025, 0.025]  # sigma_ang for each layer
-    sigma_vert_list = [0.025, 0.025, 0.025]  # sigma_vert for each layer
-    scaling_factors = [2.0, 0.5, 0.5]
+    sigma_ang_list = [0.025, 0.05, 0.05]  # sigma_ang for each layer
+    sigma_vert_list = [0.025, 0.1, 0.1]  # sigma_vert for each layer
+    scaling_factors = [1.0, 0.5, 0.1]
 
     # Initialize BVC layer with per-layer sigma values and scaling factors
     bvc_layer = BoundaryVectorCellLayer(
