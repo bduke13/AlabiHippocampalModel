@@ -113,7 +113,7 @@ class Driver(Supervisor):
         start_loc: Optional[List[int]] = None,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
-        enable_multiscale: Optional[bool] = None,
+        num_scales: Optional[bool] = None,
     ):
         """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
@@ -141,10 +141,7 @@ class Driver(Supervisor):
         self.n_hd = 8
         self.timestep = 32 * 3
         self.tau_w = 10  # time constant for the window function
-        if enable_multiscale:
-            self.num_scales = 2  # Currently 'small' and 'large'; adjust as necessary
-        else:
-            self.num_scales = 1
+        self.num_scales = num_scales
 
         # Robot parameters
         self.max_speed = 16
@@ -158,19 +155,8 @@ class Driver(Supervisor):
         self.goal_r = {"explore": 0.3, "exploit": 0.5}
 
         self.hmap_x = np.zeros(self.num_steps)  # x-coordinates
-        self.hmap_y = np.zeros(self.num_steps)  # y-coordinates
+        self.hmap_y = np.zeros(self.num_steps)  # y-coordinate
 
-        if enable_multiscale:
-            num_small_pc = int(self.num_place_cells * 0.75)  # Ratio can change
-            num_large_pc = self.num_place_cells - num_small_pc
-        else:
-            num_small_pc = self.num_place_cells
-            num_large_pc = 0
-
-        # Initialize hmaps for each scale
-        self.hmap_z_small = np.zeros((self.num_steps, num_small_pc))
-        self.hmap_z_large = np.zeros((self.num_steps, num_large_pc)) if num_large_pc > 0 else None
-        
         self.hmap_h = np.zeros(
             (self.num_steps, self.n_hd)
         )  # head direction cell activations
@@ -208,13 +194,21 @@ class Driver(Supervisor):
             timestep=self.timestep,
             enable_ojas=enable_ojas,
             enable_stdp=enable_stdp,
-            enable_multiscale=enable_multiscale
+            num_scales=self.num_scales,
         )
+
+        # Initialize hmap_z based on num_scales
+        self.hmap_z = [
+            np.zeros((self.num_steps, len(indices)))
+            for indices in self.pcn.scale_indices
+        ]
+
         self.load_rcn(
             num_reward_cells=self.num_reward_cells,
             num_place_cells=self.num_place_cells,
             num_replay=6,
         )
+
         self.head_direction_layer = HeadDirectionLayer(num_cells=self.n_hd)
 
         # Initialize boundaries
@@ -260,7 +254,7 @@ class Driver(Supervisor):
         timestep: int,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
-        enable_multiscale: Optional[bool] = None,
+        num_scales: Optional[bool] = None,
     ):
         """Loads an existing place cell network from disk or initializes a new one.
 
@@ -291,7 +285,7 @@ class Driver(Supervisor):
             )
 
             self.pcn = PlaceCellLayer(
-                bvc_layer=bvc, num_pc=num_place_cells, timestep=timestep, n_hd=n_hd, enable_multiscale=enable_multiscale
+                bvc_layer=bvc, num_pc=num_place_cells, timestep=timestep, n_hd=n_hd, num_scales=self.num_scales
             )
             print("Initialized new Place Cell Network.")
 
@@ -718,20 +712,20 @@ class Driver(Supervisor):
 
         # Update place cell and sensor maps
         if self.step_count < self.num_steps:
+            # Record the robot's current position
             self.hmap_x[self.step_count] = curr_pos[0]
             self.hmap_y[self.step_count] = curr_pos[2]
 
             # Update activations for each scale
-            if self.pcn.enable_multiscale:
-                # Small-scale activations
-                self.hmap_z_small[self.step_count] = self.pcn.get_activations_by_scale(scale="small").numpy()
-
-                # Large-scale activations (if applicable)
-                if self.hmap_z_large is not None:
-                    self.hmap_z_large[self.step_count] = self.pcn.get_activations_by_scale(scale="large").numpy()
+            if self.pcn.num_scales > 1:
+                for i, scale_hmap in enumerate(self.hmap_z):
+                    # Update hmap_z for the current scale
+                    scale_name = f"scale_{i}"
+                    scale_activations = self.pcn.get_activations_by_scale(scale=scale_name).numpy()
+                    scale_hmap[self.step_count] = scale_activations
             else:
-                # Single-scale activations
-                self.hmap_z_small[self.step_count] = self.pcn.place_cell_activations.numpy()
+                # Single-scale activations (if only one scale is used)
+                self.hmap_z[0][self.step_count] = self.pcn.place_cell_activations.numpy()
 
             # Update head direction cell activations
             self.hmap_h[self.step_count] = self.hd_activations
@@ -968,9 +962,10 @@ class Driver(Supervisor):
         the maps that store the agent's movement and activations.
 
         Parameters:
-            include_maps (bool): If True, saves the history of the agent's path and activations.
+            include_pcn (bool): If True, saves the Place Cell Network (PCN).
+            include_rcn (bool): If True, saves the Reward Cell Network (RCN).
+            include_hmaps (bool): If True, saves the history of the agent's path and activations.
         """
-
         files_saved = []
 
         # Save the Place Cell Network (PCN)
@@ -995,15 +990,18 @@ class Driver(Supervisor):
                 pickle.dump(self.hmap_y[: self.step_count], output)
                 files_saved.append("hmap_y.pkl")
 
-            # Save activations for small and large scales
-            with open("hmap_z_small.pkl", "wb") as output:
-                pickle.dump(self.hmap_z_small[: self.step_count], output)
-                files_saved.append("hmap_z_small.pkl")
-
-            if self.hmap_z_large is not None:  # Save only if multiscale is enabled
-                with open("hmap_z_large.pkl", "wb") as output:
-                    pickle.dump(self.hmap_z_large[: self.step_count], output)
-                    files_saved.append("hmap_z_large.pkl")
+            # Save activations for each scale dynamically
+            if self.num_scales > 1:
+                for i, scale_hmap in enumerate(self.hmap_z):
+                    filename = f"hmap_z_scale_{i}.pkl"
+                    with open(filename, "wb") as output:
+                        pickle.dump(scale_hmap[: self.step_count], output)
+                        files_saved.append(filename)
+            else:
+                # Save for single-scale configurations
+                with open("hmap_z.pkl", "wb") as output:
+                    pickle.dump(self.hmap_z[0][: self.step_count], output)
+                    files_saved.append("hmap_z.pkl")
 
             with open("hmap_g.pkl", "wb") as output:
                 pickle.dump(self.hmap_g[: self.step_count], output)
@@ -1031,6 +1029,7 @@ class Driver(Supervisor):
         print(f"Files Saved: {files_saved}")
         print("Saving Done!")
 
+
     def clear(self):
         """
         Clears the saved state files for the Place Cell Network (PCN), Reward Cell Network (RCN),
@@ -1048,7 +1047,9 @@ class Driver(Supervisor):
 
         # Add scale-specific files dynamically
         if self.num_scales > 1:  # Multiscale enabled
-            files_to_remove.extend(["hmap_z_small.pkl", "hmap_z_large.pkl"])
+            # Add a file for each scale dynamically
+            for i in range(self.num_scales):
+                files_to_remove.append(f"hmap_z_scale_{i}.pkl")
         else:  # Single-scale
             files_to_remove.append("hmap_z.pkl")
 
