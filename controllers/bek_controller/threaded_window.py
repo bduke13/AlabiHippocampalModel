@@ -78,8 +78,8 @@ class TrackingPlotWindow(BasePlotWindow):
     def __init__(
         self,
         history_buffer_len: int = 500,
-        xlim: Tuple[float, float] = (-10, 10),
-        ylim: Tuple[float, float] = (-10, 10),
+        xlim: Tuple[float, float] = (-2.5, 2.5),
+        ylim: Tuple[float, float] = (-2.5, 2.5),
     ):
         self.history_buffer_len = history_buffer_len
         self.data_x = []
@@ -89,8 +89,8 @@ class TrackingPlotWindow(BasePlotWindow):
 
     def setup_plot(self) -> Tuple[plt.Figure, List[Any]]:
         self.fig, self.ax = plt.subplots()
-        self.ax.set_xlim(0, 800)  # X from 0 to 800
-        self.ax.set_ylim(600, 0)  # Y from 600 to 0 (inverted)
+        self.ax.set_xlim(self.xlim)  # X from 0 to 800
+        self.ax.set_ylim(self.ylim)  # Y from 600 to 0 (inverted)
         self.ax.set_title("Agent Position")
         self.ax.set_xlabel("X Position")
         self.ax.set_ylabel("Y Position")

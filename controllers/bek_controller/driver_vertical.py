@@ -8,7 +8,7 @@ import pickle
 import os
 import time
 import tkinter as tk
-from tkinter import N, messagebox
+from tkinter import N, TOP, messagebox
 from typing import Optional, List
 from controller import Supervisor, Robot
 from enum import Enum, auto
@@ -25,6 +25,16 @@ np.set_printoptions(precision=2)
 PI = tf.constant(np.pi)
 rng = default_rng()  # random number generator
 cmap = get_cmap("plasma")
+
+from threaded_window import TrackingPlotWindow, GenericPlotProcess
+
+# Create plot windows and processes
+tracking_window = TrackingPlotWindow(
+    history_buffer_len=1000,
+    xlim=(-5, 5),
+    ylim=(-5, 5),
+)
+tracking_process = GenericPlotProcess(tracking_window, update_interval=50)
 
 
 class RobotMode(Enum):
@@ -102,7 +112,6 @@ class Driver(Supervisor):
         boundary_data (Tensor): Current LiDAR readings.
         goal_location (List[float]): Target [x,y] coordinates.
         expected_reward (float): Predicted reward at current state.
-        current_pcn_state (Tensor): Current place cell activations.
     """
 
     def initialization(
@@ -244,7 +253,6 @@ class Driver(Supervisor):
         # Initialize goal
         self.goal_location = [-1, 1]
         self.expected_reward = 0
-        self.current_pcn_state = tf.zeros_like(self.pcn.place_cell_activations)
 
         if randomize_start_loc:
             while True:
@@ -407,6 +415,9 @@ class Driver(Supervisor):
             if self.done:
                 break
 
+            curr_pos = self.robot.getField("translation").getSFVec3f()
+            tracking_process.add_data((curr_pos[0], curr_pos[2]))
+
     ########################################### EXPLORE ###########################################
 
     def explore(self) -> None:
@@ -422,7 +433,6 @@ class Driver(Supervisor):
         Returns:
             None
         """
-        self.current_pcn_state *= 0
 
         for s in range(self.tau_w):
             self.sense()
@@ -450,19 +460,11 @@ class Driver(Supervisor):
                 or self.mode == RobotMode.LEARN_HEBB
                 or self.mode == RobotMode.EXPLOIT
             ):
-                self.current_pcn_state += self.pcn.place_cell_activations
                 self.check_goal_reached()
 
             self.compute()
             self.forward()
             self.check_goal_reached()
-
-        if (
-            self.mode == RobotMode.DMTP
-            or self.mode == RobotMode.LEARN_HEBB
-            or self.mode == RobotMode.EXPLOIT
-        ):
-            self.current_pcn_state /= s  # 's' should be greater than 0
 
         self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
 
@@ -481,8 +483,6 @@ class Driver(Supervisor):
         Returns:
             None
         """
-        # Reset the current place cell state
-        self.current_pcn_state *= 0
 
         # Stop movement and update sensor readings
         self.stop()
@@ -562,7 +562,6 @@ class Driver(Supervisor):
                 self.compute()
                 self.forward()
                 # Accumulate place cell activations
-                self.current_pcn_state += self.pcn.place_cell_activations
                 self.check_goal_reached()
 
                 # Update reward cell activations and perform TD update
@@ -571,9 +570,6 @@ class Driver(Supervisor):
                 self.rcn.td_update(
                     self.pcn.place_cell_activations, next_reward=actual_reward
                 )
-
-            # Normalize the accumulated place cell state over the time window
-            self.current_pcn_state /= self.tau_w
 
     def get_actual_reward(self):
         """Determines the actual reward for the agent at the current state.
@@ -841,9 +837,7 @@ class Driver(Supervisor):
             self.sense()
             self.compute()
             self.forward()
-            self.current_pcn_state += self.pcn.place_cell_activations
             s_start += 1
-        self.current_pcn_state /= s_start
 
         # Replay the place cell activations
         self.rcn.replay(pcn=self.pcn)

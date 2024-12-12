@@ -100,7 +100,6 @@ class Driver(Supervisor):
         boundary_data (Tensor): Current LiDAR readings.
         goal_location (List[float]): Target [x,y] coordinates.
         expected_reward (float): Predicted reward at current state.
-        current_pcn_state (Tensor): Current place cell activations.
     """
 
     def initialization(
@@ -209,7 +208,6 @@ class Driver(Supervisor):
         # Initialize goal
         self.goal_location = [-1, 1]
         self.expected_reward = 0
-        self.current_pcn_state = tf.zeros_like(self.pcn.place_cell_activations)
 
         if randomize_start_loc:
             while True:
@@ -366,7 +364,6 @@ class Driver(Supervisor):
         Returns:
             None
         """
-        self.current_pcn_state *= 0
 
         for s in range(self.tau_w):
             self.sense()
@@ -394,19 +391,11 @@ class Driver(Supervisor):
                 or self.mode == RobotMode.LEARN_HEBB
                 or self.mode == RobotMode.EXPLOIT
             ):
-                self.current_pcn_state += self.pcn.place_cell_activations
                 self.check_goal_reached()
 
             self.compute()
             self.forward()
             self.check_goal_reached()
-
-        if (
-            self.mode == RobotMode.DMTP
-            or self.mode == RobotMode.LEARN_HEBB
-            or self.mode == RobotMode.EXPLOIT
-        ):
-            self.current_pcn_state /= s  # 's' should be greater than 0
 
         self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
 
@@ -425,8 +414,6 @@ class Driver(Supervisor):
         Returns:
             None
         """
-        # Reset the current place cell state
-        self.current_pcn_state *= 0
 
         # Stop movement and update sensor readings
         self.stop()
@@ -506,7 +493,6 @@ class Driver(Supervisor):
                 self.compute()
                 self.forward()
                 # Accumulate place cell activations
-                self.current_pcn_state += self.pcn.place_cell_activations
                 self.check_goal_reached()
 
                 # Update reward cell activations and perform TD update
@@ -515,9 +501,6 @@ class Driver(Supervisor):
                 self.rcn.td_update(
                     self.pcn.place_cell_activations, next_reward=actual_reward
                 )
-
-            # Normalize the accumulated place cell state over the time window
-            self.current_pcn_state /= self.tau_w
 
     def get_actual_reward(self):
         """Determines the actual reward for the agent at the current state.
@@ -780,9 +763,7 @@ class Driver(Supervisor):
             self.sense()
             self.compute()
             self.forward()
-            self.current_pcn_state += self.pcn.place_cell_activations
             s_start += 1
-        self.current_pcn_state /= s_start
 
         # Replay the place cell activations
         self.rcn.replay(pcn=self.pcn)
