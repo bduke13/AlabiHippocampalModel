@@ -100,9 +100,7 @@ class Driver(Supervisor):
         boundary_data (Tensor): Current LiDAR readings.
         goal_location (List[float]): Target [x,y] coordinates.
         expected_reward (float): Predicted reward at current state.
-        last_reward (float): Reward received in previous step.
         current_pcn_state (Tensor): Current place cell activations.
-        prev_pcn_state (Tensor): Previous place cell activations.
     """
 
     def initialization(
@@ -211,9 +209,7 @@ class Driver(Supervisor):
         # Initialize goal
         self.goal_location = [-1, 1]
         self.expected_reward = 0
-        self.last_reward = 0
         self.current_pcn_state = tf.zeros_like(self.pcn.place_cell_activations)
-        self.prev_pcn_state = tf.zeros_like(self.pcn.place_cell_activations)
 
         if randomize_start_loc:
             while True:
@@ -370,7 +366,6 @@ class Driver(Supervisor):
         Returns:
             None
         """
-        self.prev_pcn_state = self.current_pcn_state
         self.current_pcn_state *= 0
 
         for s in range(self.tau_w):

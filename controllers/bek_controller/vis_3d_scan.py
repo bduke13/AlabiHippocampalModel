@@ -3,9 +3,28 @@ import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf  # Import TensorFlow
 
+# Precompute all the static tensors we'll need
+num_rows, num_cols = 90, 180
+pi = tf.constant(np.pi, dtype=tf.float32)
+lon_angles = tf.linspace(0.0, 2.0 * pi, num_cols)
+lat_angles = tf.linspace(pi / 2.0, -pi / 2.0, num_rows)
 
+# Precompute the meshgrid once
+lon_mesh, lat_mesh = tf.meshgrid(lon_angles, lat_angles, indexing="xy")
+# Precompute the flattened angle tensors
+LON_FLAT = tf.reshape(lon_mesh, [-1])
+LAT_FLAT = tf.reshape(lat_mesh, [-1])
+
+
+@tf.function(
+    input_signature=[
+        tf.TensorSpec(shape=(90, 180), dtype=tf.float64),
+        tf.TensorSpec(shape=(), dtype=tf.float32),
+        tf.TensorSpec(shape=(), dtype=tf.float32),
+    ]
+)
 def get_scan_points(
-    scan_data: np.ndarray,
+    scan_data: tf.Tensor,
     top_cutoff_percentage: float = 0.0,
     bottom_cutoff_percentage: float = 0.5,
 ) -> tf.Tensor:
@@ -24,45 +43,20 @@ def get_scan_points(
             [:, 1]: longitude angles in radians (float32)
             [:, 2]: distance values (float32)
     """
-    num_rows, num_cols = scan_data.shape
+    # Ensure scan_data is float32
+    scan_data = tf.cast(scan_data, tf.float32)
 
-    # Convert scan_data to TensorFlow tensor of type float32
-    scan_data = tf.convert_to_tensor(scan_data, dtype=tf.float32)
+    # Just flatten the distances - we'll use the precomputed angle tensors
+    r_flat = tf.reshape(scan_data, [-1])
 
-    # Create angles for longitude and latitude using TensorFlow
-    pi = tf.constant(np.pi, dtype=tf.float32)
-    lon_angles = tf.linspace(0.0, 2.0 * pi, num_cols)
-    lat_angles = tf.linspace(pi / 2.0, -pi / 2.0, num_rows)
+    # Stack tensors into a single tensor using precomputed angles
+    points = tf.stack([LAT_FLAT, LON_FLAT, r_flat], axis=1)
 
-    # Compute cutoff indices based on percentages
-    top_cutoff_idx = int(num_rows * top_cutoff_percentage)
-    bottom_cutoff_idx = int(num_rows * bottom_cutoff_percentage)
-
-    # Ensure indices are within valid range
-    top_cutoff_idx = max(0, min(top_cutoff_idx, num_rows - 1))
-    bottom_cutoff_idx = max(0, min(bottom_cutoff_idx, num_rows - 1))
-
-    # Swap indices if necessary
-    if top_cutoff_idx > bottom_cutoff_idx:
-        top_cutoff_idx, bottom_cutoff_idx = bottom_cutoff_idx, top_cutoff_idx
-
-    # Slice the scan data and latitude angles based on cutoff indices
-    filtered_data = scan_data[top_cutoff_idx : bottom_cutoff_idx + 1, :]
-    filtered_lat_angles = lat_angles[top_cutoff_idx : bottom_cutoff_idx + 1]
-
-    # Create meshgrid for angles
-    lon_mesh, lat_mesh = tf.meshgrid(lon_angles, filtered_lat_angles, indexing="xy")
-
-    # Get distance values
-    r_values = filtered_data
-
-    # Flatten tensors
-    lat_flat = tf.reshape(lat_mesh, [-1])
-    lon_flat = tf.reshape(lon_mesh, [-1])
-    r_flat = tf.reshape(r_values, [-1])
-
-    # Stack tensors into a single tensor
-    points = tf.stack([lat_flat, lon_flat, r_flat], axis=1)
+    if top_cutoff_percentage > 0.0 or bottom_cutoff_percentage < 1.0:
+        # Only apply cutoffs if needed
+        top_idx = tf.cast(num_rows * top_cutoff_percentage * num_cols, tf.int32)
+        bottom_idx = tf.cast(num_rows * bottom_cutoff_percentage * num_cols, tf.int32)
+        points = points[top_idx:bottom_idx]
 
     return points
 

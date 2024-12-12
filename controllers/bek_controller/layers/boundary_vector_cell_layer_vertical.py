@@ -73,10 +73,7 @@ class BoundaryVectorCellLayer:
         self.two_sigma_ang_squared = 2 * self.sigma_ang**2  # (M,)
         self.two_sigma_vert_squared = 2 * self.sigma_vert**2  # (M,)
 
-    @tf.function(
-        input_signature=[tf.TensorSpec(shape=(None, 3), dtype=tf.float32)],
-        jit_compile=True,
-    )
+    @tf.function(jit_compile=True)  # Optimize with XLA
     def get_bvc_activation(self, points: tf.Tensor) -> tf.Tensor:
         """Calculate the activation of BVCs based on input points.
 
