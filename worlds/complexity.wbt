@@ -28,7 +28,8 @@ RectangleArena {
 DEF agent Create {
   hidden position_0_0 45249.17206706551
   hidden position_0_1 41597.76782541959
-  hidden rotation_7 0.9999999999999999 0 0 2.3285152418695696
+  hidden rotation_7 1 0 0 2.328515241869569
+  hidden rotation_8 -1 0 0 3.0810918907300775
   hidden translation_12 -6.9630044556845405e-06 -5.603289767057429e-06 -7.3141562086931344e-06
   hidden rotation_12 -7.097505350068368e-11 0.9999999999999999 -1.473530977373584e-10 0.7269319989228774
   hidden translation_13 -3.1769309627449616e-07 -6.2142113273974675e-06 6.965599044228554e-07
@@ -39,7 +40,7 @@ DEF agent Create {
   supervisor TRUE
   bodySlot [
     Solid {
-      translation 0 0.09 -0.08
+      translation 0 0.04 -0.08
       children [
         Display {
           width 100
@@ -47,32 +48,40 @@ DEF agent Create {
         }
         Compass {
         }
+        DEF range-finder-1 RangeFinder {
+          fieldOfView 6.28
+          width 720
+          height 1
+          spherical TRUE
+          maxRange 10
+          name "range-finder-1"
+        }
+        DEF range-finder-2 RangeFinder {
+          fieldOfView 6.28
+          width 720
+          height 1
+          spherical TRUE
+          maxRange 10
+          name "range-finder-2"
+        }
         DEF vertical-range-finder RangeFinder {
+          translation 0 0.1 0  # Raised by 0.1 meters
           rotation 1 0 0 0  # Horizontal orientation (0 degrees)
           fieldOfView 6.28  # 360 degrees horizontal
           verticalFieldOfView 1.0472  # 60 degrees vertical FOV
-          width 720  # horizontal resolution
-          height 360  # vertical resolution to get good sampling of the vertical space
+          width 180  # horizontal resolution
+          height 90  # vertical resolution to get good sampling of the vertical space
           spherical TRUE
-          maxRange 10
+          maxRange 20
           name "vertical-range-finder"  # Added name field to match controller
         }
+
         Shape {
           appearance PBRAppearance {
           }
           geometry Cylinder {
             height 0.04
             radius 0.05
-          }
-        }
-        Shape {
-          appearance PBRAppearance {
-            baseColor 0.8 0.8 0.8
-            roughness 0.3
-            metalness 0.5
-          }
-          geometry Sphere {
-            radius 0.03
           }
         }
       ]
