@@ -1,11 +1,8 @@
 # %%
-# Import statements remain the same
-from typing import Union
+import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.ticker import MultipleLocator
-import tensorflow as tf
-from layers import boundary_vector_cell_layer
+from typing import Union
 from vis_3d_scan import get_scan_points, convert_to_3D
 
 
@@ -41,65 +38,45 @@ class BoundaryVectorCellLayer:
         self.phi_i = np.repeat(np.linspace(0, 2 * np.pi, n_hd, endpoint=False), N_dist)
         self.d_i = np.tile(self.d_i, n_hd)
 
-        # Preferred vertical angles are expected to be in radians
-        preferred_vertical_angles_rad = preferred_vertical_angles  # Already in radians
-
-        # Generate BVC neurons for each vertical angle
-        self.phi_i_vert = []
+        # Initialize BVC properties per vertical layer
         self.d_i_all = []
         self.phi_i_all = []
+        self.phi_i_vert = []
         self.sigma_d_all = []
         self.sigma_ang_all = []
         self.sigma_vert_all = []
         self.scaling_factors_all = []
 
-        for idx, vert_angle in enumerate(preferred_vertical_angles_rad):
-            phi_i_vert_layer = [vert_angle] * len(self.phi_i)
-            self.phi_i_vert.extend(phi_i_vert_layer)
+        self.num_bvc = num_bvc_per_dir * n_hd * len(preferred_vertical_angles)
+
+        for idx, vert_angle in enumerate(preferred_vertical_angles):
+            num_neurons = len(self.phi_i)
             self.d_i_all.extend(self.d_i)
             self.phi_i_all.extend(self.phi_i)
+            self.phi_i_vert.extend([vert_angle] * num_neurons)
+            self.sigma_d_all.extend([sigma_d_list[idx]] * num_neurons)
+            self.sigma_ang_all.extend([sigma_ang_list[idx]] * num_neurons)
+            self.sigma_vert_all.extend([sigma_vert_list[idx]] * num_neurons)
+            self.scaling_factors_all.extend([scaling_factors[idx]] * num_neurons)
 
-            # Assign sigma_d, sigma_ang, sigma_vert for this layer
-            sigma_d_layer = [sigma_d_list[idx]] * len(self.phi_i)
-            sigma_ang_layer = [sigma_ang_list[idx]] * len(self.phi_i)
-            sigma_vert_layer = [sigma_vert_list[idx]] * len(self.phi_i)
-            self.sigma_d_all.extend(sigma_d_layer)
-            self.sigma_ang_all.extend(sigma_ang_layer)
-            self.sigma_vert_all.extend(sigma_vert_layer)
-
-            # Assign scaling factors for this layer
-            scaling_factor_layer = [scaling_factors[idx]] * len(self.phi_i)
-            self.scaling_factors_all.extend(scaling_factor_layer)
-
-        # Update BVC parameters
-        self.d_i = np.array(self.d_i_all)
-        self.phi_i = np.array(self.phi_i_all)
-        self.phi_i_vert = np.array(self.phi_i_vert)
-        self.sigma_d_array = np.array(self.sigma_d_all)
-        self.sigma_ang_array = np.array(self.sigma_ang_all)
-        self.sigma_vert_array = np.array(self.sigma_vert_all)
-        self.scaling_factors_array = np.array(self.scaling_factors_all)
-
-        # Total number of BVC neurons
-        self.num_bvc = len(self.d_i)
-
-        # Convert parameters to tensors WITHOUT expanding dimensions
-        self.d_i = tf.constant(self.d_i, dtype=tf.float32)  # (M,)
-        self.phi_i = tf.constant(self.phi_i, dtype=tf.float32)  # (M,)
+        # Convert to TensorFlow tensors for GPU processing
+        self.d_i = tf.constant(self.d_i_all, dtype=tf.float32)  # (M,)
+        self.phi_i = tf.constant(self.phi_i_all, dtype=tf.float32)  # (M,)
         self.phi_i_vert = tf.constant(self.phi_i_vert, dtype=tf.float32)  # (M,)
-        self.sigma_d = tf.constant(self.sigma_d_array, dtype=tf.float32)  # (M,)
-        self.sigma_ang = tf.constant(self.sigma_ang_array, dtype=tf.float32)  # (M,)
-        self.sigma_vert = tf.constant(self.sigma_vert_array, dtype=tf.float32)  # (M,)
-        self.scaling_factors = tf.constant(
-            self.scaling_factors_array, dtype=tf.float32
-        )  # (M,)
+        self.sigma_d = tf.constant(self.sigma_d_all, dtype=tf.float32)  # (M,)
+        self.sigma_ang = tf.constant(self.sigma_ang_all, dtype=tf.float32)  # (M,)
+        self.sigma_vert = tf.constant(self.sigma_vert_all, dtype=tf.float32)  # (M,)
+        self.scaling_factors = tf.constant(self.scaling_factors_all, dtype=tf.float32)
 
         # Precompute denominators
         self.two_sigma_d_squared = 2 * self.sigma_d**2  # (M,)
         self.two_sigma_ang_squared = 2 * self.sigma_ang**2  # (M,)
         self.two_sigma_vert_squared = 2 * self.sigma_vert**2  # (M,)
 
-    @tf.function
+    @tf.function(
+        input_signature=[tf.TensorSpec(shape=(None, 3), dtype=tf.float32)],
+        jit_compile=True,
+    )
     def get_bvc_activation(self, points: tf.Tensor) -> tf.Tensor:
         """Calculate the activation of BVCs based on input points.
 
@@ -112,17 +89,16 @@ class BoundaryVectorCellLayer:
         Returns:
             tf.Tensor: Activations of the BVC neurons.
         """
-        # Extract distances, horizontal angles, and vertical angles from points
         distances = points[:, 2]  # (N,)
         horizontal_angles = points[:, 1]  # (N,)
         vertical_angles = points[:, 0]  # (N,)
 
-        # Expand dimensions to (N, 1) for broadcasting
+        # Expand dimensions for broadcasting
         distances = tf.expand_dims(distances, axis=1)  # (N, 1)
         horizontal_angles = tf.expand_dims(horizontal_angles, axis=1)  # (N, 1)
         vertical_angles = tf.expand_dims(vertical_angles, axis=1)  # (N, 1)
 
-        # Compute differences
+        # Compute deltas
         delta_d = distances - self.d_i  # (N, M)
         delta_ang = tf.atan2(
             tf.sin(horizontal_angles - self.phi_i),
@@ -133,42 +109,30 @@ class BoundaryVectorCellLayer:
             tf.cos(vertical_angles - self.phi_i_vert),
         )  # (N, M)
 
-        # Compute Gaussians with normalization constants
+        # Gaussian computations
         PI = tf.constant(np.pi, dtype=tf.float32)
-        distance_gaussian = tf.exp(-(delta_d**2) / self.two_sigma_d_squared) / tf.sqrt(
-            2 * PI * self.sigma_d**2
-        )  # (N, M)
+        distance_gaussian = tf.exp(
+            -(delta_d**2) / self.two_sigma_d_squared
+        ) / tf.sqrt(2 * PI * self.sigma_d**2)
         horizontal_gaussian = tf.exp(
             -(delta_ang**2) / self.two_sigma_ang_squared
-        ) / tf.sqrt(
-            2 * PI * self.sigma_ang**2
-        )  # (N, M)
+        ) / tf.sqrt(2 * PI * self.sigma_ang**2)
         vertical_gaussian = tf.exp(
             -(delta_vert**2) / self.two_sigma_vert_squared
-        ) / tf.sqrt(
-            2 * PI * self.sigma_vert**2
-        )  # (N, M)
+        ) / tf.sqrt(2 * PI * self.sigma_vert**2)
 
-        # Compute the product of Gaussians
-        gaussians = (
+        # Combine Gaussians and sum activations
+        activations = (
             distance_gaussian * horizontal_gaussian * vertical_gaussian
         )  # (N, M)
+        activations = tf.reduce_sum(activations, axis=0)  # (M,)
 
-        # Sum over input points to get activations for each BVC neuron
-        activation = tf.reduce_sum(gaussians, axis=0)  # (M,)
-
-        # Apply scaling factors
-        activation = activation * self.scaling_factors  # (M,)
-
-        # Apply thresholding (adjust if necessary)
-        threshold = tf.constant(0.0001, dtype=tf.float32)  # Adjust threshold as needed
-        activation = tf.where(
-            activation < threshold, tf.zeros_like(activation), activation
-        )
-
-        # Normalize activations by the number of points
-        activation = activation / tf.cast(tf.shape(points)[0], tf.float32)
-        return activation  # (M,)
+        # Apply scaling factors and normalize
+        activations *= self.scaling_factors
+        activations /= tf.cast(
+            tf.shape(points)[0], tf.float32
+        )  # Normalize by input points
+        return activations
 
     def plot_activation_distribution(
         self,
@@ -243,7 +207,7 @@ class BoundaryVectorCellLayer:
         z_i = d_i * np.sin(phi_i_vert)
 
         # For non-active BVCs, set a small epsilon activation
-        epsilon = 1e-4
+        epsilon = 1e-6
         activations = np.maximum(activations, epsilon)
 
         # Normalize activations for plotting
@@ -260,7 +224,7 @@ class BoundaryVectorCellLayer:
             xyz_coords[:, 2],
             c="dodgerblue",
             s=1,
-            alpha=0.2,
+            alpha=0.6,
             label="Environment",
         )
 
@@ -336,9 +300,28 @@ class BoundaryVectorCellLayer:
         else:
             plt.show()
 
+    def generate_cell_names(self, output_file="cell_names.txt"):
+        """Generate a list of names for each BVC neuron and save to a file.
 
-# %%
+        Args:
+            output_file: The file to save the cell names.
+        """
+        self.cell_names = []
+        with open(output_file, "w") as f:
+            for i in range(self.num_bvc):
+                horizontal_angle_deg = np.degrees(self.phi_i.numpy()[i]) % 360
+                vertical_angle_deg = np.degrees(self.phi_i_vert.numpy()[i])
+                distance = self.d_i.numpy()[i]
+                name = f"BVC_{i}_Horiz{horizontal_angle_deg:.1f}_Vert{vertical_angle_deg:.1f}_Dist{distance:.1f}"
+                self.cell_names.append(name)
+                f.write(name + "\n")
+        print(f"Cell names saved to {output_file}")
+
+
 if __name__ == "__main__":
+    # Set mixed precision policy for better GPU performance
+    tf.keras.mixed_precision.set_global_policy("mixed_float16")
+
     # Load the data
     vertical_boundaries = np.load("first_vertical_scan.npy")
 

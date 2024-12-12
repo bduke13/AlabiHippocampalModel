@@ -15,25 +15,19 @@ def plot_boundary_cells_group(
     hmap_to_plot,
     colors_rgb,
     group_index,
+    names_file="cell_names.txt",  # Add the file parameter
     output_dir="visualizations/outputs/",
     save_plot=True,
     show_plot=False,
     return_plot=False,
 ):
     """
-    Plots a hexbin plot for a given boundary cell index and saves or shows it based on flags.
-
-    Args:
-    - cell_index: The index of the boundary cell to plot.
-    - hmap_x: The x coordinates of the grid.
-    - hmap_y: The y coordinates of the grid.
-    - hmap_to_plot: The activation data for the boundary cells (z-axis).
-    - colors_rgb: List of RGB colors for plotting.
-    - output_dir: Directory to save the plot (default is 'boundary_cell_images/').
-    - save_plot: Boolean flag to save the plot (default is True).
-    - show_plot: Boolean flag to display the plot on the screen (default is False).
-    - return_plot: Boolean flag to return the figure object (default is False).
+    Plots a hexbin plot for a group of place cells and saves or shows it.
     """
+    # Load cell names from the file
+    with open(names_file, "r") as f:
+        cell_names = [line.strip() for line in f]
+
     # Create figure with 5 subplots side by side
     fig, axes = plt.subplots(1, 5, figsize=(25, 5))
     fig.suptitle(f"Boundary Cells Group {group_index}", fontsize=16)
@@ -41,6 +35,13 @@ def plot_boundary_cells_group(
     for idx, (ax, cell_index) in enumerate(zip(axes, cell_indices)):
         # Get activations for this cell
         activations = hmap_to_plot[:, cell_index]
+
+        # Cell name from the loaded file
+        name = (
+            cell_names[cell_index]
+            if cell_index < len(cell_names)
+            else f"Cell {cell_index}"
+        )
 
         # Color for this cell
         color_rgb = colors_rgb[
@@ -78,7 +79,7 @@ def plot_boundary_cells_group(
 
         ax.set_xlabel("X")
         ax.set_ylabel("Y")
-        ax.set_title(f"Cell {cell_index}")
+        ax.set_title(name)  # Use the name from the file
 
     plt.tight_layout()
 

@@ -12,7 +12,7 @@ def plot_place_cells_group(
     cell_indices,
     hmap_x,
     hmap_y,
-    hmap_pcn,
+    hmap_z,
     colors_rgb,
     group_index,
     output_dir="visualizations/outputs/",
@@ -27,7 +27,7 @@ def plot_place_cells_group(
     - cell_index: The index of the place cell to plot.
     - hmap_x: The x coordinates of the grid.
     - hmap_y: The y coordinates of the grid.
-    - hmap_pcn: The activation data for the place cells (z-axis).
+    - hmap_z: The activation data for the place cells (z-axis).
     - colors_rgb: List of RGB colors for plotting.
     - output_dir: Directory to save the plot (default is 'place_cell_images/').
     - save_plot: Boolean flag to save the plot (default is True).
@@ -40,7 +40,7 @@ def plot_place_cells_group(
 
     for idx, (ax, cell_index) in enumerate(zip(axes, cell_indices)):
         # Get activations for this cell
-        activations = hmap_pcn[:, cell_index]
+        activations = hmap_z[:, cell_index]
 
         # Color for this cell
         color_rgb = colors_rgb[
@@ -155,11 +155,11 @@ if __name__ == "__main__":
         hmap_x = np.array(pickle.load(f))
     with open("hmap_y.pkl", "rb") as f:
         hmap_y = np.array(pickle.load(f))
-    with open("hmap_pcn.pkl", "rb") as f:
-        hmap_pcn = np.asarray(pickle.load(f))
+    with open("hmap_z.pkl", "rb") as f:
+        hmap_z = np.asarray(pickle.load(f))
 
     # Use sequential indices without sorting
-    cell_indices = np.arange(hmap_pcn.shape[1])
+    cell_indices = np.arange(hmap_z.shape[1])
 
     # Generate and save plots in groups of 5
     for i in range(0, len(cell_indices), 5):
@@ -173,7 +173,7 @@ if __name__ == "__main__":
             group,
             hmap_x,
             hmap_y,
-            hmap_pcn,
+            hmap_z,
             colors_rgb,
             group_index,
             output_dir=output_dir,

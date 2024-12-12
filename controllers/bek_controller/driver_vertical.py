@@ -16,7 +16,9 @@ from layers.boundary_vector_cell_layer_vertical import BoundaryVectorCellLayer
 from layers.head_direction_layer import HeadDirectionLayer
 from layers.place_cell_layer_vertical import PlaceCellLayer
 from layers.reward_cell_layer import RewardCellLayer
-from vis_3d_scan import get_scan_points, plot_3d_environment_with_reference_line
+from vis_3d_scan import (
+    get_scan_points,
+)
 
 tf.random.set_seed(5)
 np.set_printoptions(precision=2)
@@ -102,7 +104,6 @@ class Driver(Supervisor):
         expected_reward (float): Predicted reward at current state.
         last_reward (float): Reward received in previous step.
         current_pcn_state (Tensor): Current place cell activations.
-        prev_pcn_state (Tensor): Previous place cell activations.
     """
 
     def initialization(
@@ -110,6 +111,8 @@ class Driver(Supervisor):
         mode=RobotMode.PLOTTING,
         randomize_start_loc: bool = True,
         run_time_hours: int = 1,
+        sigma_d: Optional[List[float]] = None,
+        sigma_a: Optional[List[float]] = None,
         start_loc: Optional[List[int]] = None,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
@@ -143,12 +146,19 @@ class Driver(Supervisor):
 
         # Parameters for 3D BVC
         # Define preferred vertical angles and corresponding sigma values
-        self.preferred_vertical_angles = [0, 0.3]
-        self.sigma_d_list = [0.2, 0.3]
-        self.sigma_ang_list = [0.025, 0.5]
-        self.sigma_vert_list = [0.025, 0.5]
-        self.scaling_factors = [1.0, 1.0]
-        self.num_bvc_per_dir = 25
+        self.preferred_vertical_angles = [0]
+        self.sigma_d_list = [0.5]
+        self.sigma_ang_list = [1.57]
+        self.sigma_vert_list = [0.5]
+        self.scaling_factors = [1.0]
+        self.num_bvc_per_dir = 50
+
+        if sigma_d:
+            self.sigma_d_list = sigma_d
+            print(f"overriding sigma_d_list to {self.sigma_d_list}")
+        if sigma_a:
+            self.sigma_ang_list = sigma_a
+            print(f"overriding sigma_ang_list to {self.sigma_ang_list}")
 
         # Robot parameters
         self.max_speed = 16
@@ -237,7 +247,6 @@ class Driver(Supervisor):
         self.expected_reward = 0
         self.last_reward = 0
         self.current_pcn_state = tf.zeros_like(self.pcn.place_cell_activations)
-        self.prev_pcn_state = tf.zeros_like(self.pcn.place_cell_activations)
 
         if randomize_start_loc:
             while True:
@@ -253,12 +262,13 @@ class Driver(Supervisor):
             self.robot.resetPhysics()
         else:
             self.robot.getField("translation").setSFVec3f(
-                [start_loc[0], 0.5, start_loc[1]]
+                [start_loc[0], 0.1, start_loc[1]]
             )
             self.robot.resetPhysics()
 
         self.sense()
         self.compute()
+        self.done = False
 
     def load_pcn(
         self,
@@ -314,10 +324,8 @@ class Driver(Supervisor):
                 n_hd=n_hd,
             )
 
-            self.hmap_bvc = np.zeros(
-                (self.num_steps, self.pcn.bvc_layer.num_bvc)
-            )  # place cell activations
-
+            bvc.generate_cell_names()
+            print("done")
             print("Initialized new Place Cell Network.")
 
         if enable_ojas is not None:
@@ -398,6 +406,9 @@ class Driver(Supervisor):
                 print("Unknown state. Exiting...")
                 break
 
+            if self.done:
+                break
+
     ########################################### EXPLORE ###########################################
 
     def explore(self) -> None:
@@ -413,7 +424,6 @@ class Driver(Supervisor):
         Returns:
             None
         """
-        self.prev_pcn_state = self.current_pcn_state
         self.current_pcn_state *= 0
 
         for s in range(self.tau_w):
@@ -758,7 +768,6 @@ class Driver(Supervisor):
         # Advance the timestep and update position
         self.step(self.timestep)
         curr_pos = self.robot.getField("translation").getSFVec3f()
-        # self.pcn.bvc_layer.plot_activation(self.vertical_boundaries)
 
         # Update place cell and sensor maps
         if self.step_count < self.num_steps:
@@ -974,7 +983,6 @@ class Driver(Supervisor):
         Parameters:
             include_maps (bool): If True, saves the history of the agent's path and activations.
         """
-
         files_saved = []
         # Save the Place Cell Network (PCN)
         if include_pcn:
@@ -1009,6 +1017,9 @@ class Driver(Supervisor):
                 pickle.dump(self.hmap_bvc[: self.step_count], output)
                 files_saved.append("hmap_bvc.pkl")
 
+        self.done = True
+        return
+
         root = tk.Tk()
         root.withdraw()  # Hide the main window
         root.attributes("-topmost", True)  # Always keep the window on top
@@ -1030,8 +1041,10 @@ class Driver(Supervisor):
             "hmap_x.pkl",
             "hmap_y.pkl",
             "hmap_z.pkl",
+            "hmap_bvc.pkl",
             "hmap_g.pkl",
             "hmap_h.pkl",
+            "cell_names.txt",
         ]
 
         for file in files_to_remove:
