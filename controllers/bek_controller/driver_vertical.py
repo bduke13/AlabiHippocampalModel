@@ -26,15 +26,15 @@ PI = tf.constant(np.pi)
 rng = default_rng()  # random number generator
 cmap = get_cmap("plasma")
 
-from threaded_window import TrackingPlotWindow, GenericPlotProcess
+# from threaded_window import TrackingPlotWindow, GenericPlotProcess
 
 # Create plot windows and processes
-tracking_window = TrackingPlotWindow(
-    history_buffer_len=1000,
-    xlim=(-5, 5),
-    ylim=(-5, 5),
-)
-tracking_process = GenericPlotProcess(tracking_window, update_interval=50)
+# tracking_window = TrackingPlotWindow(
+#    history_buffer_len=1000,
+#    xlim=(-5, 5),
+#    ylim=(-5, 5),
+# )
+# tracking_process = GenericPlotProcess(tracking_window, update_interval=50)
 
 
 class RobotMode(Enum):
@@ -416,7 +416,8 @@ class Driver(Supervisor):
                 break
 
             curr_pos = self.robot.getField("translation").getSFVec3f()
-            tracking_process.add_data((curr_pos[0], curr_pos[2]))
+
+    #        tracking_process.add_data((curr_pos[0], curr_pos[2]))
 
     ########################################### EXPLORE ###########################################
 
@@ -696,9 +697,6 @@ class Driver(Supervisor):
         if hasattr(self, "vertical_boundaries"):
             self.vertical_boundaries = np.roll(
                 self.vertical_boundaries, int(self.current_heading_deg / 2), axis=1
-            )
-            self.vertical_boundaries = get_scan_points(
-                scan_data=self.vertical_boundaries,
             )
 
         # 4. Convert the current heading from degrees to radians.

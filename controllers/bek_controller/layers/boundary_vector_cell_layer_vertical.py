@@ -3,7 +3,20 @@ import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Union
-from vis_3d_scan import get_scan_points, convert_to_3D
+from vis_3d_scan import convert_to_3D
+
+
+# Precompute all the static tensors we'll need
+num_rows, num_cols = 90, 180
+pi = tf.constant(np.pi, dtype=tf.float32)
+lon_angles = tf.linspace(0.0, 2.0 * pi, num_cols)
+lat_angles = tf.linspace(pi / 2.0, -pi / 2.0, num_rows)
+
+# Precompute the meshgrid once
+lon_mesh, lat_mesh = tf.meshgrid(lon_angles, lat_angles, indexing="xy")
+# Precompute the flattened angle tensors
+LON_FLAT = tf.reshape(lon_mesh, [-1])
+LAT_FLAT = tf.reshape(lat_mesh, [-1])
 
 
 class BoundaryVectorCellLayer:
@@ -73,6 +86,47 @@ class BoundaryVectorCellLayer:
         self.two_sigma_ang_squared = 2 * self.sigma_ang**2  # (M,)
         self.two_sigma_vert_squared = 2 * self.sigma_vert**2  # (M,)
 
+    @tf.function()
+    def get_scan_points(
+        self,
+        scan_data: tf.Tensor,
+        top_cutoff_percentage: float = 0.0,
+        bottom_cutoff_percentage: float = 0.5,
+    ) -> tf.Tensor:
+        """
+        Convert scan data into structured point information, excluding points outside
+        specified vertical percentage ranges.
+
+        Args:
+            scan_data: Raw scan data of shape (num_rows, num_cols)
+            top_cutoff_percentage: The percentage (0 to 1) from the top to start processing
+            bottom_cutoff_percentage: The percentage (0 to 1) from the top to stop processing
+
+        Returns:
+            tf.Tensor: Tensor of shape (N, 3) containing:
+                [:, 0]: latitude angles in radians (float32)
+                [:, 1]: longitude angles in radians (float32)
+                [:, 2]: distance values (float32)
+        """
+        # Ensure scan_data is float32
+        scan_data = tf.cast(scan_data, tf.float32)
+
+        # Just flatten the distances - we'll use the precomputed angle tensors
+        r_flat = tf.reshape(scan_data, [-1])
+
+        # Stack tensors into a single tensor using precomputed angles
+        points = tf.stack([LAT_FLAT, LON_FLAT, r_flat], axis=1)
+
+        if top_cutoff_percentage > 0.0 or bottom_cutoff_percentage < 1.0:
+            # Only apply cutoffs if needed
+            top_idx = tf.cast(num_rows * top_cutoff_percentage * num_cols, tf.int32)
+            bottom_idx = tf.cast(
+                num_rows * bottom_cutoff_percentage * num_cols, tf.int32
+            )
+            points = points[top_idx:bottom_idx]
+
+        return points
+
     @tf.function(jit_compile=True)  # Optimize with XLA
     def get_bvc_activation(self, points: tf.Tensor) -> tf.Tensor:
         """Calculate the activation of BVCs based on input points.
@@ -86,6 +140,8 @@ class BoundaryVectorCellLayer:
         Returns:
             tf.Tensor: Activations of the BVC neurons.
         """
+
+        points = self.get_scan_points(points)
         distances = points[:, 2]  # (N,)
         horizontal_angles = points[:, 1]  # (N,)
         vertical_angles = points[:, 0]  # (N,)
@@ -324,9 +380,6 @@ if __name__ == "__main__":
 
     # Reshape the data from (259200,) to (360, 720)
     reshaped_data = vertical_boundaries.reshape(360, 720)
-
-    # Use the updated get_scan_points function
-    points = get_scan_points(reshaped_data)
 
     preferred_vertical_angles = [0, 0.15, 0.3]
     sigma_d_list = [0.2, 0.2, 0.2]  # sigma_d for each layer
