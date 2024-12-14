@@ -69,13 +69,13 @@ class PlaceCellLayer:
         self.bvc_activations = tf.zeros(self.num_bvc, dtype=tf.float32)
 
         # Coefficient to modify effect of place cell recurrent inhibition (Γ_pp in Equation 3.2a)
-        self.gamma_pp = 0.3
+        self.gamma_pp = 0.5
 
         # Coefficient to modify effect of boundary vector cell afferent inhibition (Γ_pb in Equation 3.2a)
         self.gamma_pb = 0.3
 
         # Time constant for the membrane potential dynamics of place cells (τ_p in Equation 3.2a)
-        self.tau_p = 0.2
+        self.tau_p = 0.5
 
         # Normalization factor for synaptic weight updates (α_pb in Equation 3.3)
         self.alpha_pb = np.sqrt(0.5)
