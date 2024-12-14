@@ -16,9 +16,6 @@ from layers.boundary_vector_cell_layer_vertical import BoundaryVectorCellLayer
 from layers.head_direction_layer import HeadDirectionLayer
 from layers.place_cell_layer_vertical import PlaceCellLayer
 from layers.reward_cell_layer import RewardCellLayer
-from vis_3d_scan import (
-    get_scan_points,
-)
 
 tf.random.set_seed(5)
 np.set_printoptions(precision=2)
@@ -756,6 +753,7 @@ class Driver(Supervisor):
             hd_activations=self.hd_activations,
             collided=np.any(self.collided),
         )
+        # self.pcn.bvc_layer.plot_activation(self.vertical_boundaries)
 
         # Advance the timestep and update position
         self.step(self.timestep)
