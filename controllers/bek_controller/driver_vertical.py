@@ -676,24 +676,22 @@ class Driver(Supervisor):
             hd_activations: Head direction cell activations
             collided: Collision status from bumpers
         """
-
-        # 1. Capture distance data from both range finders and calculate angles
-
-        vertical_data = self.vertical_range_finder.getRangeImage()
-        if vertical_data is not None:
-            self.vertical_boundaries = np.array(vertical_data).reshape(90, 180)
-
-        # 2. Get the robot's current heading in degrees using the compass and convert it to an integer.
-        # Shape: scalar (int)
+        # 1. Get the robot's current heading in degrees using the compass and convert it to an integer
         self.current_heading_deg = int(
             self.get_bearing_in_degrees(self.compass.getValues())
         )
 
-        # 3. Roll the vertical LiDAR data based on the current heading to align the 'front' with index 0.
-        # Shape: (720, 360) - Roll each vertical slice according to the robot's current heading
-        if hasattr(self, "vertical_boundaries"):
-            self.vertical_boundaries = np.roll(
-                self.vertical_boundaries, int(self.current_heading_deg / 2), axis=1
+        # 2 & 3. Get the scan data from the range finder and convert to tf and roll it to a static direction
+        vertical_data = self.vertical_range_finder.getRangeImage()
+
+        if vertical_data is not None:
+            # Convert the list to a tf.Tensor of dtype float32
+            vertical_boundaries_tf = tf.constant(vertical_data, dtype=tf.float32)
+            # Reshape it into a 90x180 array
+            vertical_boundaries_tf = tf.reshape(vertical_boundaries_tf, [90, 180])
+
+            self.vertical_boundaries = tf.roll(
+                vertical_boundaries_tf, shift=int(self.current_heading_deg / 2), axis=1
             )
 
         # 4. Convert the current heading from degrees to radians.
