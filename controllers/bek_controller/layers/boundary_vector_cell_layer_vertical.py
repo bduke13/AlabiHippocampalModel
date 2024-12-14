@@ -1,7 +1,6 @@
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Union
 from vis_3d_scan import convert_to_3D
 
 
