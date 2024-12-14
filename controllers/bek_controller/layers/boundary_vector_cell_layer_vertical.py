@@ -1,3 +1,4 @@
+from numpy.core.multiarray import dtype
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
@@ -24,35 +25,6 @@ class BoundaryVectorCellLayer:
         self.num_rows = num_rows
         self.num_cols = num_cols
         self.preferred_vertical_angles = preferred_vertical_angles
-
-        # Precompute angles and flatten once
-        pi = tf.constant(np.pi, dtype=tf.float32)
-        lon_angles = tf.linspace(0.0, 2.0 * pi, self.num_cols)
-        lat_angles = tf.linspace(pi / 2.0, -pi / 2.0, self.num_rows)
-        lon_mesh, lat_mesh = tf.meshgrid(lon_angles, lat_angles, indexing="xy")
-
-        # Flatten lat and lon just once and store them as attributes
-        self.lat_flat = tf.reshape(lat_mesh, [-1])
-        self.lon_flat = tf.reshape(lon_mesh, [-1])
-
-        # Compute cutoff indices
-        self.top_idx = tf.cast(
-            self.num_rows * top_cutoff_percentage * self.num_cols, tf.int32
-        )
-        self.bottom_idx = tf.cast(
-            self.num_rows * bottom_cutoff_percentage * self.num_cols, tf.int32
-        )
-
-        # Slice lat, lon according to cutoffs
-        lat_slice = self.lat_flat[self.top_idx : self.bottom_idx]
-        lon_slice = self.lon_flat[self.top_idx : self.bottom_idx]
-
-        # Set horizontal and vertical angles as constants
-        horizontal_angles = tf.expand_dims(lon_slice, axis=1)
-        vertical_angles = tf.expand_dims(lat_slice, axis=1)
-
-        self.horizontal_angles = tf.constant(horizontal_angles, dtype=tf.float32)
-        self.vertical_angles = tf.constant(vertical_angles, dtype=tf.float32)
 
         # Precompute BVC parameters
         d_i = np.linspace(0, max_dist, num=num_bvc_per_dir)
@@ -95,6 +67,63 @@ class BoundaryVectorCellLayer:
         self.two_sigma_vert_squared = 2 * self.sigma_vert**2
         self.PI = tf.constant(np.pi, dtype=tf.float32)
 
+        # Precompute angles and flatten once
+        pi = tf.constant(np.pi, dtype=tf.float32)
+        lon_angles = tf.linspace(0.0, 2.0 * pi, self.num_cols)
+        lat_angles = tf.linspace(pi / 2.0, -pi / 2.0, self.num_rows)
+        lon_mesh, lat_mesh = tf.meshgrid(lon_angles, lat_angles, indexing="xy")
+
+        # Flatten lat and lon just once and store them as attributes
+        self.lat_flat = tf.reshape(lat_mesh, [-1])
+        self.lon_flat = tf.reshape(lon_mesh, [-1])
+
+        # Compute cutoff indices
+        self.top_idx = tf.cast(
+            self.num_rows * top_cutoff_percentage * self.num_cols, tf.int32
+        )
+        self.bottom_idx = tf.cast(
+            self.num_rows * bottom_cutoff_percentage * self.num_cols, tf.int32
+        )
+
+        # Slice lat, lon according to cutoffs
+        lat_slice = self.lat_flat[self.top_idx : self.bottom_idx]
+        lon_slice = self.lon_flat[self.top_idx : self.bottom_idx]
+
+        horizontal_angles = tf.expand_dims(lon_slice, axis=1)
+        vertical_angles = tf.expand_dims(lat_slice, axis=1)
+
+        # Existing initialization logic...
+        # Precompute horizontal and vertical Gaussian values
+        horizontal_gaussian_precomputed = tf.exp(
+            -(
+                tf.atan2(
+                    tf.sin(horizontal_angles - self.phi_i),
+                    tf.cos(horizontal_angles - self.phi_i),
+                )
+                ** 2
+            )
+            / self.two_sigma_ang_squared
+        ) / tf.sqrt(2 * self.PI * self.sigma_ang**2)
+
+        vertical_gaussian_precomputed = tf.exp(
+            -(
+                tf.atan2(
+                    tf.sin(vertical_angles - self.phi_i_vert),
+                    tf.cos(vertical_angles - self.phi_i_vert),
+                )
+                ** 2
+            )
+            / self.two_sigma_vert_squared
+        ) / tf.sqrt(2 * self.PI * self.sigma_vert**2)
+
+        point_gaussian_precomputed = (
+            horizontal_gaussian_precomputed * vertical_gaussian_precomputed
+        )
+
+        self.point_gaussian_precomputed = tf.constant(
+            point_gaussian_precomputed, dtype=tf.float32
+        )
+
     @tf.function(
         jit_compile=True,
         input_signature=[
@@ -120,31 +149,17 @@ class BoundaryVectorCellLayer:
 
         # Compute deltas
         delta_d = distances - self.d_i
-        delta_ang = tf.atan2(
-            tf.sin(self.horizontal_angles - self.phi_i),
-            tf.cos(self.horizontal_angles - self.phi_i),
-        )
-        delta_vert = tf.atan2(
-            tf.sin(self.vertical_angles - self.phi_i_vert),
-            tf.cos(self.vertical_angles - self.phi_i_vert),
-        )
 
         # Gaussian computations
         distance_gaussian = tf.exp(
             -(delta_d**2) / self.two_sigma_d_squared
         ) / tf.sqrt(2 * self.PI * self.sigma_d**2)
-        horizontal_gaussian = tf.exp(
-            -(delta_ang**2) / self.two_sigma_ang_squared
-        ) / tf.sqrt(2 * self.PI * self.sigma_ang**2)
-        vertical_gaussian = tf.exp(
-            -(delta_vert**2) / self.two_sigma_vert_squared
-        ) / tf.sqrt(2 * self.PI * self.sigma_vert**2)
 
-        # Combine Gaussians and sum
-        activations = distance_gaussian * horizontal_gaussian * vertical_gaussian
+        # Use precomputed horizontal and vertical Gaussians
+        activations = distance_gaussian * self.point_gaussian_precomputed
+
+        # Sum and normalize
         activations = tf.reduce_sum(activations, axis=0)
-
-        # Apply scaling and normalize
         activations *= self.scaling_factors
         activations /= tf.cast(tf.size(dist_slice), tf.float32)
         return activations
