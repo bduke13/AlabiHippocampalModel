@@ -154,6 +154,7 @@ class Driver(Supervisor):
         self.hmap_z = np.zeros(
             (self.num_steps, self.num_place_cells)
         )  # place cell activations
+
         self.hmap_h = np.zeros(
             (self.num_steps, self.n_hd)
         )  # head direction cell activations
@@ -197,6 +198,7 @@ class Driver(Supervisor):
             num_replay=6,
         )
         self.head_direction_layer = HeadDirectionLayer(num_cells=self.n_hd)
+        self.hmap_bvc = np.zeros((self.num_steps, self.pcn.bvc_layer.num_bvc))
 
         # Initialize boundaries
         self.boundary_data = tf.Variable(tf.zeros((720, 1)))
@@ -695,6 +697,7 @@ class Driver(Supervisor):
             self.hmap_x[self.step_count] = curr_pos[0]
             self.hmap_y[self.step_count] = curr_pos[2]
             self.hmap_z[self.step_count] = self.pcn.place_cell_activations
+            self.hmap_bvc[self.step_count] = self.pcn.bvc_activations
             self.hmap_h[self.step_count] = self.hd_activations
             self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn.bvc_activations)
 
@@ -932,6 +935,9 @@ class Driver(Supervisor):
             with open("hmap_h.pkl", "wb") as output:
                 pickle.dump(self.hmap_h[: self.step_count], output)
                 files_saved.append("hmap_h.pkl")
+            with open("hmap_bvc.pkl", "wb") as output:
+                pickle.dump(self.hmap_bvc[: self.step_count], output)
+                files_saved.append("hmap_bvc.pkl")
 
         root = tk.Tk()
         root.withdraw()  # Hide the main window
@@ -954,6 +960,7 @@ class Driver(Supervisor):
             "hmap_x.pkl",
             "hmap_y.pkl",
             "hmap_z.pkl",
+            "hmap_bvc.pkl",
             "hmap_g.pkl",
             "hmap_h.pkl",
         ]
