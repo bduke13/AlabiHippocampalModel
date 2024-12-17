@@ -184,6 +184,11 @@ class Driver(Supervisor):
         if self.mode == RobotMode.LEARN_OJAS:
             self.clear()
 
+        # Initialize boundaries
+        self.lidar_resolution = 720
+        self.boundary_data = tf.Variable(tf.zeros((self.lidar_resolution, 1)))
+        self.lidar_angles = np.linspace(0, 2 * np.pi, self.lidar_resolution, False)
+
         # Initialize layers
         self.load_pcn(
             num_place_cells=self.num_place_cells,
@@ -199,9 +204,6 @@ class Driver(Supervisor):
         )
         self.head_direction_layer = HeadDirectionLayer(num_cells=self.n_hd)
         self.hmap_bvc = np.zeros((self.num_steps, self.pcn.bvc_layer.num_bvc))
-
-        # Initialize boundaries
-        self.boundary_data = tf.Variable(tf.zeros((720, 1)))
 
         self.directional_reward_estimates = tf.zeros(self.n_hd)
         self.step(self.timestep)
@@ -262,10 +264,11 @@ class Driver(Supervisor):
         except:
             bvc = BoundaryVectorCellLayer(
                 max_dist=10,
-                input_dim=720,
+                input_dim=self.lidar_resolution,
                 n_hd=n_hd,
                 sigma_ang=90,
                 sigma_d=0.5,
+                lidar_angles=self.lidar_angles,
             )
 
             self.pcn = PlaceCellLayer(
@@ -683,7 +686,7 @@ class Driver(Supervisor):
         """
         # Compute the place cell network activations
         self.pcn.get_place_cell_activations(
-            input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)],
+            distances=self.boundaries,
             hd_activations=self.hd_activations,
             collided=np.any(self.collided),
         )
