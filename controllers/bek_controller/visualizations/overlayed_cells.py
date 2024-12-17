@@ -12,7 +12,7 @@ def plot_overlayed_cells(
     hmap_y_path="hmap_y.pkl",
     hmap_z_path="hmap_z.pkl",
     colors_path="visualizations/colors.json",
-    gridsize=100,
+    gridsize=50,
     save_plot=False,
     suffix="",
 ):
@@ -175,7 +175,7 @@ if __name__ == "__main__":
         hmap_y_path="hmap_y.pkl",
         hmap_z_path="hmap_z.pkl",
         colors_path="visualizations/colors.json",
-        gridsize=100,
+        gridsize=50,
         save_plot=False,
         suffix="test",
     )

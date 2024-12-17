@@ -23,15 +23,15 @@ PI = tf.constant(np.pi)
 rng = default_rng()  # random number generator
 cmap = get_cmap("plasma")
 
-# from threaded_window import TrackingPlotWindow, GenericPlotProcess
+from threaded_window import TrackingPlotWindow, GenericPlotProcess
 
 # Create plot windows and processes
-# tracking_window = TrackingPlotWindow(
-#    history_buffer_len=1000,
-#    xlim=(-5, 5),
-#    ylim=(-5, 5),
-# )
-# tracking_process = GenericPlotProcess(tracking_window, update_interval=50)
+tracking_window = TrackingPlotWindow(
+    history_buffer_len=1000,
+    xlim=(-5, 5),
+    ylim=(-5, 5),
+)
+tracking_process = GenericPlotProcess(tracking_window, update_interval=50)
 
 
 class RobotMode(Enum):
@@ -152,9 +152,9 @@ class Driver(Supervisor):
         # Parameters for 3D BVC
         # Define preferred vertical angles and corresponding sigma values
         self.preferred_vertical_angles = [0]
-        self.sigma_d_list = [0.5]
-        self.sigma_ang_list = [1.57]
-        self.sigma_vert_list = [0.5]
+        self.sigma_d_list = [0.1]
+        self.sigma_ang_list = [0.2]
+        self.sigma_vert_list = [0.01]
         self.scaling_factors = [1.0]
         self.num_bvc_per_dir = 50
 
@@ -414,7 +414,7 @@ class Driver(Supervisor):
 
             curr_pos = self.robot.getField("translation").getSFVec3f()
 
-    #        tracking_process.add_data((curr_pos[0], curr_pos[2]))
+            tracking_process.add_data((curr_pos[0], curr_pos[2]))
 
     ########################################### EXPLORE ###########################################
 
@@ -694,7 +694,10 @@ class Driver(Supervisor):
                 vertical_boundaries_tf, shift=int(self.current_heading_deg / 2), axis=1
             )
 
-        # 4. Convert the current heading from degrees to radians.
+        # Convert to numpy and save
+        # vertical_boundaries_np = self.vertical_boundaries.numpy()
+        # np.save("first_vertical_scan.npy", vertical_boundaries_np)
+
         # Shape: scalar (float) - Current heading of the robot in radians.
         current_heading_rad = np.deg2rad(self.current_heading_deg)
 
@@ -751,7 +754,7 @@ class Driver(Supervisor):
             hd_activations=self.hd_activations,
             collided=np.any(self.collided),
         )
-        # self.pcn.bvc_layer.plot_activation(self.vertical_boundaries)
+        # self.pcn.bvc_layer.plot_scan_3d_radial(self.vertical_boundaries)
 
         # Advance the timestep and update position
         self.step(self.timestep)

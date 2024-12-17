@@ -14,7 +14,7 @@ class PlaceCellLayer:
     def __init__(
         self,
         bvc_layer: BoundaryVectorCellLayer,
-        num_pc: int = 400,
+        num_pc: int = 200,
         timestep: int = 32 * 3,
         n_hd: int = 8,
         enable_ojas: bool = False,
@@ -46,9 +46,9 @@ class PlaceCellLayer:
 
         self.tau = timestep / 1000.0
         self.bvc_activations = tf.zeros(self.num_bvc, dtype=tf.float32)
-        self.gamma_pp = 0.3
+        self.gamma_pp = 0.5
         self.gamma_pb = 0.3
-        self.tau_p = 0.2
+        self.tau_p = 0.5
         self.alpha_pb = tf.sqrt(tf.constant(0.5, dtype=tf.float32))
 
         self.prev_place_cell_activations = tf.zeros(num_pc, dtype=tf.float32)

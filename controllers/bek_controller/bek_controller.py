@@ -2,7 +2,7 @@
 
 if __name__ == "__main__":
     import tensorflow as tf
-    from driver_vertical import Driver, RobotMode
+    from driver import Driver, RobotMode
     from visualizations.overlayed_cells import plot_overlayed_cells
 
     bot = Driver()

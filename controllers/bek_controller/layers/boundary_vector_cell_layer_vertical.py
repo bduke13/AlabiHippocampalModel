@@ -42,6 +42,8 @@ class BoundaryVectorCellLayer:
         self.sigma_vert_all = []
         self.scaling_factors_all = []
 
+        # Assume preferred_vertical_angles are in radians
+        # If they are in degrees, convert: preferred_vertical_angles = np.radians(preferred_vertical_angles)
         for idx, vert_angle in enumerate(preferred_vertical_angles):
             num_neurons = len(phi_i)
             self.d_i_all.extend(d_i)
@@ -67,13 +69,17 @@ class BoundaryVectorCellLayer:
         self.two_sigma_vert_squared = 2 * self.sigma_vert**2
         self.PI = tf.constant(np.pi, dtype=tf.float32)
 
-        # Precompute angles and flatten once
+        # Generate latitude (vertical) and longitude (horizontal) angles
         pi = tf.constant(np.pi, dtype=tf.float32)
-        lon_angles = tf.linspace(0.0, 2.0 * pi, self.num_cols)
-        lat_angles = tf.linspace(pi / 2.0, -pi / 2.0, self.num_rows)
+        lon_angles = tf.linspace(
+            0.0, 2.0 * pi, self.num_cols
+        )  # horizontal angles [0, 2*pi]
+        lat_angles = tf.linspace(
+            pi / 2.0, -pi / 2.0, self.num_rows
+        )  # vertical angles [pi/2, -pi/2]
         lon_mesh, lat_mesh = tf.meshgrid(lon_angles, lat_angles, indexing="xy")
 
-        # Flatten lat and lon just once and store them as attributes
+        # Flatten lat and lon
         self.lat_flat = tf.reshape(lat_mesh, [-1])
         self.lon_flat = tf.reshape(lon_mesh, [-1])
 
@@ -92,28 +98,19 @@ class BoundaryVectorCellLayer:
         horizontal_angles = tf.expand_dims(lon_slice, axis=1)
         vertical_angles = tf.expand_dims(lat_slice, axis=1)
 
-        # Existing initialization logic...
-        # Precompute horizontal and vertical Gaussian values
+        # Precompute horizontal Gaussian (using wrapped angle difference)
+        horizontal_diff = tf.atan2(
+            tf.sin(horizontal_angles - self.phi_i),
+            tf.cos(horizontal_angles - self.phi_i),
+        )
         horizontal_gaussian_precomputed = tf.exp(
-            -(
-                tf.atan2(
-                    tf.sin(horizontal_angles - self.phi_i),
-                    tf.cos(horizontal_angles - self.phi_i),
-                )
-                ** 2
-            )
-            / self.two_sigma_ang_squared
+            -(horizontal_diff**2) / self.two_sigma_ang_squared
         ) / tf.sqrt(2 * self.PI * self.sigma_ang**2)
 
+        # Precompute vertical Gaussian (using direct difference, no wrapping)
+        vertical_diff = vertical_angles - self.phi_i_vert
         vertical_gaussian_precomputed = tf.exp(
-            -(
-                tf.atan2(
-                    tf.sin(vertical_angles - self.phi_i_vert),
-                    tf.cos(vertical_angles - self.phi_i_vert),
-                )
-                ** 2
-            )
-            / self.two_sigma_vert_squared
+            -(vertical_diff**2) / self.two_sigma_vert_squared
         ) / tf.sqrt(2 * self.PI * self.sigma_vert**2)
 
         point_gaussian_precomputed = (
@@ -127,7 +124,7 @@ class BoundaryVectorCellLayer:
     @tf.function(
         jit_compile=True,
         input_signature=[
-            tf.TensorSpec(shape=(90, 180), dtype=tf.float32),
+            tf.TensorSpec(shape=(None, None), dtype=tf.float32),
         ],
     )
     def get_bvc_activation(self, scan_data: tf.Tensor) -> tf.Tensor:
@@ -150,18 +147,29 @@ class BoundaryVectorCellLayer:
         # Compute deltas
         delta_d = distances - self.d_i
 
-        # Gaussian computations
+        # Gaussian computations for distance
         distance_gaussian = tf.exp(
             -(delta_d**2) / self.two_sigma_d_squared
         ) / tf.sqrt(2 * self.PI * self.sigma_d**2)
 
-        # Use precomputed horizontal and vertical Gaussians
+        # Combine with precomputed horizontal and vertical Gaussians
         activations = distance_gaussian * self.point_gaussian_precomputed
 
-        # Sum and normalize
+        # Sum over all points
         activations = tf.reduce_sum(activations, axis=0)
+
+        # Normalize activations to [0,1] range
+        # epsilon = 1e-10  # Small constant to avoid division by zero
+        # activations = (activations - tf.reduce_min(activations)) / (
+        #    tf.reduce_max(activations) - tf.reduce_min(activations) + epsilon
+        # )
+
+        # Scale by scaling_factors if desired
         activations *= self.scaling_factors
-        activations /= tf.cast(tf.size(dist_slice), tf.float32)
+
+        # If you'd prefer not to normalize by number of points, comment out the line below:
+        # activations /= tf.cast(tf.size(dist_slice), tf.float32)
+
         return activations
 
     def plot_activation_distribution(
@@ -206,8 +214,9 @@ class BoundaryVectorCellLayer:
         phi_i = self.phi_i.numpy()
         phi_i_vert = self.phi_i_vert.numpy()
 
-        x_i = d_i * np.cos(phi_i) * np.cos(phi_i_vert)
-        y_i = d_i * np.sin(phi_i) * np.cos(phi_i_vert)
+        # Convert from spherical coords based on phi_i (horizontal) and phi_i_vert (vertical)
+        x_i = d_i * np.cos(phi_i_vert) * np.cos(phi_i)
+        y_i = d_i * np.cos(phi_i_vert) * np.sin(phi_i)
         z_i = d_i * np.sin(phi_i_vert)
 
         epsilon = 1e-6
@@ -246,7 +255,7 @@ class BoundaryVectorCellLayer:
                 c=color,
                 alpha=0.4,
                 edgecolor="black",
-                label=f"BVCs at {vert_angle:.2f} rad",
+                label=f"BVCs at {np.degrees(horiz_angle):.1f}° longitude",
             )
 
         ax.scatter(
@@ -264,6 +273,201 @@ class BoundaryVectorCellLayer:
         ax.set_xlim(-10, 10)
         ax.set_ylim(-10, 10)
         ax.set_zlim(-10, 10)
+
+        if return_plot:
+            return fig
+        else:
+            plt.show()
+
+    def plot_scan_spherical(self, scan_data: tf.Tensor, return_plot: bool = False):
+        """
+        Create a pure spherical coordinate visualization where:
+        - Radius (r) = distance from scan_data
+        - Azimuth (θ) = horizontal angle (longitude)
+        - Elevation (φ) = vertical angle (latitude)
+        """
+        # Get the flattened data
+        dist_flat = tf.reshape(scan_data, [-1])
+        dist_slice = dist_flat[self.top_idx : self.bottom_idx].numpy()
+        lat_slice = self.lat_flat[self.top_idx : self.bottom_idx].numpy()
+        lon_slice = self.lon_flat[self.top_idx : self.bottom_idx].numpy()
+
+        # Filter out invalid values
+        valid_mask = ~(np.isnan(dist_slice) | np.isinf(dist_slice) | (dist_slice <= 0))
+        dist_slice = dist_slice[valid_mask]
+        lat_slice = lat_slice[valid_mask]
+        lon_slice = lon_slice[valid_mask]
+
+        if len(dist_slice) == 0:
+            print("Warning: No valid data points to plot!")
+            return None
+
+        # Create the figure with two subplots
+        fig = plt.figure(figsize=(15, 6))
+
+        # First subplot: Distance vs Longitude (top view)
+        ax1 = fig.add_subplot(121, projection="polar")
+        scatter1 = ax1.scatter(
+            lon_slice, dist_slice, c=lat_slice, cmap="viridis", alpha=0.6
+        )
+        ax1.set_title("Top View (Distance vs Longitude)")
+        plt.colorbar(scatter1, label="Elevation Angle (rad)")
+
+        # Second subplot: Distance vs Elevation (side view)
+        ax2 = fig.add_subplot(122, projection="polar")
+        # Convert latitude to proper polar angle (90° - elevation)
+        polar_angle = np.pi / 2 - lat_slice
+        scatter2 = ax2.scatter(
+            polar_angle, dist_slice, c=lon_slice, cmap="hsv", alpha=0.6
+        )
+        ax2.set_title("Side View (Distance vs Elevation)")
+        plt.colorbar(scatter2, label="Longitude (rad)")
+
+        # Customize the side view
+        ax2.set_theta_zero_location("N")  # 0° at the top
+        ax2.set_theta_direction(-1)  # clockwise
+
+        # Add text annotations for orientation
+        fig.text(0.25, 0.95, "Top View", ha="center", va="bottom")
+        fig.text(0.75, 0.95, "Side View", ha="center", va="bottom")
+
+        plt.tight_layout()
+
+        if return_plot:
+            return fig
+        else:
+            plt.show()
+
+    def plot_scan_3d_radial(self, scan_data: tf.Tensor, return_plot: bool = False):
+        """
+        Create a 3D radial plot of the scan data and BVCs using spherical coordinates.
+        Points are plotted using (r, θ, φ) where:
+        r = distance from scan_data
+        θ (theta) = horizontal angle (azimuth)
+        φ (phi) = vertical angle (elevation)
+        """
+        # Get BVC activations
+        activations = self.get_bvc_activation(scan_data).numpy()
+        epsilon = 1e-3
+        activations = np.maximum(activations, epsilon)
+        activations_normalized = activations / np.max(activations)
+
+        # Get BVC parameters
+        d_i = self.d_i.numpy()
+        phi_i = self.phi_i.numpy()
+        phi_i_vert = self.phi_i_vert.numpy()
+        # Get the flattened data
+        dist_flat = tf.reshape(scan_data, [-1])
+        dist_slice = dist_flat[self.top_idx : self.bottom_idx].numpy()
+        lat_slice = self.lat_flat[self.top_idx : self.bottom_idx].numpy()
+        lon_slice = self.lon_flat[self.top_idx : self.bottom_idx].numpy()
+
+        # Filter out invalid values
+        valid_mask = ~(np.isnan(dist_slice) | np.isinf(dist_slice) | (dist_slice <= 0))
+        dist_slice = dist_slice[valid_mask]
+        lat_slice = lat_slice[valid_mask]
+        lon_slice = lon_slice[valid_mask]
+
+        if len(dist_slice) == 0:
+            print("Warning: No valid data points to plot!")
+            return None
+
+        # Create the figure
+        fig = plt.figure(figsize=(12, 8))
+        ax = fig.add_subplot(111, projection="3d")
+
+        # Convert spherical to cartesian coordinates
+        # r = distance, theta = horizontal angle, phi = vertical angle
+        x = dist_slice * np.cos(lat_slice) * np.cos(lon_slice)
+        y = dist_slice * np.cos(lat_slice) * np.sin(lon_slice)
+        z = dist_slice * np.sin(lat_slice)
+
+        # Create scatter plot with distance-based coloring
+        scatter = ax.scatter(x, y, z, c=dist_slice, cmap="viridis", s=10, alpha=0.6)
+
+        # Add colorbar
+        cbar = plt.colorbar(scatter)
+        cbar.set_label("Distance (m)")
+
+        # Add scanner position at origin
+        ax.scatter(0, 0, 0, color="red", s=100, marker="o", label="Scanner Position")
+
+        # Add reference sphere (wireframe)
+        r = np.max(dist_slice) * 0.5  # radius of reference sphere
+        u = np.linspace(0, 2 * np.pi, 20)
+        v = np.linspace(0, np.pi, 20)
+        x_sphere = r * np.outer(np.cos(u), np.sin(v))
+        y_sphere = r * np.outer(np.sin(u), np.sin(v))
+        z_sphere = r * np.outer(np.ones(np.size(u)), np.cos(v))
+        ax.plot_wireframe(
+            x_sphere, y_sphere, z_sphere, color="gray", alpha=0.2, linewidth=0.5
+        )
+
+        # Set labels and title
+        ax.set_xlabel("X (meters)")
+        ax.set_ylabel("Y (meters)")
+        ax.set_zlabel("Z (meters)")
+        ax.set_title("3D Radial Scan Visualization")
+
+        # Make the plot cubic
+        x_range = x.max() - x.min() if len(x) > 0 else 1
+        y_range = y.max() - y.min() if len(y) > 0 else 1
+        z_range = z.max() - z.min() if len(z) > 0 else 1
+
+        max_range = np.array([x_range, y_range, z_range]).max() / 2.0
+        mid_x = (x.max() + x.min()) * 0.5 if len(x) > 0 else 0
+        mid_y = (y.max() + y.min()) * 0.5 if len(y) > 0 else 0
+        mid_z = (z.max() + z.min()) * 0.5 if len(z) > 0 else 0
+        ax.set_xlim(mid_x - max_range, mid_x + max_range)
+        ax.set_ylim(mid_y - max_range, mid_y + max_range)
+        ax.set_zlim(mid_z - max_range, mid_z + max_range)
+
+        # Add BVCs with their activations
+        unique_horiz_angles = np.unique(phi_i)
+
+        # Define colors for different horizontal angles (in degrees)
+        colors_dict = {}
+        angles = np.linspace(0, 2 * np.pi, 8, endpoint=False)  # 8 evenly spaced angles
+        colors = ["red", "blue", "green", "purple", "orange", "cyan", "yellow", "brown"]
+
+        for angle, color in zip(angles, colors):
+            colors_dict[angle] = color
+
+        # Sort angles so 0 degrees are plotted last (on top)
+        sorted_indices = np.argsort(np.abs(unique_horiz_angles))[::-1]
+
+        for idx in sorted_indices:
+            horiz_angle = unique_horiz_angles[idx]
+            mask = phi_i == horiz_angle
+
+            # Find the closest predefined angle
+            angle_diffs = np.abs(np.array(list(colors_dict.keys())) - horiz_angle)
+            closest_angle = list(colors_dict.keys())[np.argmin(angle_diffs)]
+            color = colors_dict[closest_angle]
+
+            # Convert BVC spherical coordinates to cartesian
+            x_bvc = d_i[mask] * np.cos(phi_i_vert[mask]) * np.cos(phi_i[mask])
+            y_bvc = d_i[mask] * np.cos(phi_i_vert[mask]) * np.sin(phi_i[mask])
+            z_bvc = d_i[mask] * np.sin(phi_i_vert[mask])
+
+            activations_layer = activations_normalized[mask]
+            sizes = activations_layer * 100  # Scale the sizes based on activation
+
+            ax.scatter(
+                x_bvc,
+                y_bvc,
+                z_bvc,
+                s=sizes,
+                c=color,  # using color from colors_dict
+                alpha=0.4,
+                edgecolor="black",
+                label=f"BVCs at {np.degrees(horiz_angle):.1f}° longitude",
+            )
+
+        # Add legend
+        handles, labels = ax.get_legend_handles_labels()
+        unique = dict(zip(labels, handles))
+        ax.legend(unique.values(), unique.keys())
 
         if return_plot:
             return fig
@@ -289,9 +493,16 @@ class BoundaryVectorCellLayer:
 if __name__ == "__main__":
     # Load the data (example)
     vertical_boundaries = np.load("first_vertical_scan.npy")
-    reshaped_data = vertical_boundaries.reshape(360, 720)
 
-    preferred_vertical_angles = [0, 0.15, 0.3]
+    # Print diagnostic information
+    print("Data shape:", vertical_boundaries.shape)
+    print("Contains NaN:", np.any(np.isnan(vertical_boundaries)))
+    print("Contains Inf:", np.any(np.isinf(vertical_boundaries)))
+    print("Min value:", np.min(vertical_boundaries))
+    print("Max value:", np.max(vertical_boundaries))
+    print(vertical_boundaries.shape)
+
+    preferred_vertical_angles = [0, 0.15, 0.3]  # assumed to be in radians
     sigma_d_list = [0.2, 0.2, 0.2]
     sigma_ang_list = [0.025, 0.05, 0.05]
     sigma_vert_list = [0.025, 0.1, 0.1]
@@ -305,10 +516,10 @@ if __name__ == "__main__":
         sigma_ang_list=sigma_ang_list,
         sigma_vert_list=sigma_vert_list,
         scaling_factors=scaling_factors,
-        num_rows=360,
-        num_cols=720,
+        num_rows=90,
+        num_cols=180,
     )
 
     # Example usage
-    bvc_layer.plot_activation(reshaped_data)
-    bvc_layer.plot_activation_distribution(reshaped_data)
+    bvc_layer.plot_scan_3d_radial(vertical_boundaries)
+    bvc_layer.plot_activation_distribution(vertical_boundaries)
