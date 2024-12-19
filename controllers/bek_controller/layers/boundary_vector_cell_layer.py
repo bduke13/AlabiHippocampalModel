@@ -78,10 +78,12 @@ class BoundaryVectorCellLayer:
         ) / tf.sqrt(2 * self.PI * self.sigma_d**2)
 
         # Return the product of distance and angular Gaussian functions for BVC activation
-
         bvc_activations = tf.reduce_sum((distance_gaussian * self.angular_gaussian), 0)
-        clipped_activations = tf.clip_by_value(bvc_activations, 0, 1)
-        return clipped_activations
+
+        # Normalize by dividing by the maximum value
+        max_activation = tf.reduce_max(bvc_activations)
+        normalized_activations = bvc_activations / (max_activation * 2)
+        return normalized_activations
 
     def plot_activation(
         self,

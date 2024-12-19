@@ -153,24 +153,15 @@ class BoundaryVectorCellLayer:
         ) / tf.sqrt(2 * self.PI * self.sigma_d**2)
 
         # Combine with precomputed horizontal and vertical Gaussians
-        activations = distance_gaussian * self.point_gaussian_precomputed
+        bvc_activations = distance_gaussian * self.point_gaussian_precomputed
 
         # Sum over all points
-        activations = tf.reduce_sum(activations, axis=0)
+        bvc_activations = tf.reduce_sum(bvc_activations, axis=0)
 
-        # Normalize activations to [0,1] range
-        # epsilon = 1e-10  # Small constant to avoid division by zero
-        # activations = (activations - tf.reduce_min(activations)) / (
-        #    tf.reduce_max(activations) - tf.reduce_min(activations) + epsilon
-        # )
-
-        # Scale by scaling_factors if desired
-        activations *= self.scaling_factors
-
-        # If you'd prefer not to normalize by number of points, comment out the line below:
-        # activations /= tf.cast(tf.size(dist_slice), tf.float32)
-
-        return activations
+        # Normalize by dividing by the maximum value
+        max_activation = tf.reduce_max(bvc_activations)
+        normalized_activations = bvc_activations / (max_activation * 2)
+        return normalized_activations
 
     def plot_activation_distribution(
         self, scan_data: np.ndarray, return_plot: bool = False
