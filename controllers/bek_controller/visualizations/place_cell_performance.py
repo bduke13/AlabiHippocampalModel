@@ -21,7 +21,7 @@ def separate_subplots(
     """
     Creates a figure with two subplots:
       - Left subplot: Place cell hexbin plot for the most active cell at a chosen reference point.
-      - Right subplot: Distance scatter plot from the chosen reference point.
+      - Right subplot: Distance hexbin plot from the chosen reference point.
 
     Args:
         hmap_x (np.ndarray): X coordinates of points.
@@ -64,7 +64,7 @@ def separate_subplots(
 
     # ----- Left Subplot: Place Cell Hexbin -----
     # Create a hexbin plot using activations
-    hb = ax_pc.hexbin(
+    hb_pc = ax_pc.hexbin(
         hmap_x,
         hmap_y,
         C=activations,
@@ -75,15 +75,15 @@ def separate_subplots(
     )
 
     # Get aggregated activations per bin
-    counts = hb.get_array()
+    counts = hb_pc.get_array()
     max_count = counts.max() if len(counts) > 0 else 0
     counts_normalized = counts / max_count if max_count > 0 else counts
 
-    # Create RGBA colors
+    # Create RGBA colors for the place cell hexbin
     rgba_colors = np.zeros((len(counts), 4))
     rgba_colors[:, 0:3] = color_rgb  # Set RGB values
     rgba_colors[:, 3] = counts_normalized  # Set alpha based on activation
-    hb.set_facecolors(rgba_colors)
+    hb_pc.set_facecolors(rgba_colors)
 
     ax_pc.set_xlabel("X Coordinate")
     ax_pc.set_ylabel("Y Coordinate")
@@ -91,7 +91,7 @@ def separate_subplots(
     ax_pc.grid(True, alpha=0.3)
     ax_pc.set_aspect("equal", adjustable="box")
 
-    # ----- Right Subplot: Distances -----
+    # ----- Right Subplot: Distances Scatter Plot -----
     # Compute activation distances from ref_activation to all points
     activation_distances = cdist(
         hmap_z, ref_activation[np.newaxis, :], metric="euclidean"
@@ -100,19 +100,9 @@ def separate_subplots(
     # Create a custom colormap: closer = red, farther = black
     cmap = LinearSegmentedColormap.from_list("red_black", ["red", "black"])
 
-    sc = ax_dist.scatter(
-        hmap_x,
-        hmap_y,
-        c=activation_distances,
-        cmap=cmap,
-        alpha=0.8,
-        s=20,
-        edgecolors="none",
-    )
-
-    # Add a colorbar for distances
-    cbar = fig.colorbar(sc, ax=ax_dist)
-    cbar.set_label("Euclidean Distance")
+    # Create scatter plot using the axis object
+    scatter = ax_dist.scatter(hmap_x, hmap_y, c=activation_distances, cmap=cmap, s=5)
+    plt.colorbar(scatter, ax=ax_dist, label="Distance")
 
     ax_dist.set_title(f"Distances from point {random_index}")
     ax_dist.set_xlabel("X Coordinate")
@@ -120,15 +110,16 @@ def separate_subplots(
     ax_dist.grid(True, alpha=0.3)
     ax_dist.set_aspect("equal", adjustable="box")
 
-    # Add reference point as a larger blue dot
+    # Highlight the reference point
     ax_dist.scatter(
         hmap_x[random_index],
         hmap_y[random_index],
         color="blue",
-        s=40,  # double the size
-        zorder=5,  # ensure it's on top
+        s=40,
+        zorder=5,
         label="Reference Point",
     )
+    ax_dist.legend()
 
     plt.tight_layout()
     plt.show()
