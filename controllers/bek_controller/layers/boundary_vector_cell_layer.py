@@ -12,6 +12,7 @@ class BoundaryVectorCellLayer:
         n_hd: int,
         sigma_ang: float,
         sigma_d: float,
+        lidar_angles: np.ndarray,
     ) -> None:
         """Initialize the boundary vector cell (BVC) layer.
 
@@ -32,6 +33,8 @@ class BoundaryVectorCellLayer:
         # Preferred distances for each BVC; determines how sensitive each BVC is to specific distances.
         self.d_i = np.tile(np.arange(0, max_dist, sigma_d / 2), n_hd)[np.newaxis, :]
 
+        self.n_hd = n_hd
+
         # Total number of BVC neurons = 8 head directions * 48 preferred distances per head direction.
         self.num_bvc = self.d_i.size
 
@@ -50,9 +53,15 @@ class BoundaryVectorCellLayer:
         # Distance standard deviation for the Gaussian function.
         self.sigma_d = tf.constant(sigma_d, dtype=tf.float32)
 
-    def get_bvc_activation(
-        self, distances: np.ndarray, angles: np.ndarray
-    ) -> tf.Tensor:
+        self.PI = tf.constant(np.pi)
+
+        # Compute Gaussian function for angular tuning
+        self.angular_gaussian = tf.exp(
+            -((lidar_angles[self.input_indices] - self.phi_i) ** 2)
+            / (2 * self.sigma_ang**2)
+        ) / tf.sqrt(2 * self.PI * self.sigma_ang**2)
+
+    def get_bvc_activation(self, distances) -> tf.Tensor:
         """Calculate the activation of BVCs based on input distances and angles.
 
         Args:
@@ -63,25 +72,22 @@ class BoundaryVectorCellLayer:
             Activations of the BVC neurons, computed as the product of Gaussian functions for
             distance and angle tuning.
         """
-        PI = tf.constant(np.pi)
-
         # Compute Gaussian function for distance tuning
         distance_gaussian = tf.exp(
             -((distances[self.input_indices] - self.d_i) ** 2) / (2 * self.sigma_d**2)
-        ) / tf.sqrt(2 * PI * self.sigma_d**2)
-
-        # Compute Gaussian function for angular tuning
-        angular_gaussian = tf.exp(
-            -((angles[self.input_indices] - self.phi_i) ** 2) / (2 * self.sigma_ang**2)
-        ) / tf.sqrt(2 * PI * self.sigma_ang**2)
+        ) / tf.sqrt(2 * self.PI * self.sigma_d**2)
 
         # Return the product of distance and angular Gaussian functions for BVC activation
-        return tf.reduce_sum((distance_gaussian * angular_gaussian), 0)
+        bvc_activations = tf.reduce_sum((distance_gaussian * self.angular_gaussian), 0)
+
+        # Normalize by dividing by the maximum value
+        max_activation = tf.reduce_max(bvc_activations)
+        normalized_activations = bvc_activations / (max_activation * 2)
+        return normalized_activations
 
     def plot_activation(
         self,
         distances: np.ndarray,
-        angles: np.ndarray,
         return_plot: bool = False,
     ) -> Union[None, plt.Figure]:
         """Plot the BVC activation on a polar plot and overlay the raw data.

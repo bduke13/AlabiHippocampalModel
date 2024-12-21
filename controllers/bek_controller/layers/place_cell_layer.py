@@ -114,7 +114,7 @@ class PlaceCellLayer:
         self.enable_stdp = enable_stdp
 
     def get_place_cell_activations(
-        self, input_data, hd_activations, collided: bool = False
+        self, distances, hd_activations, collided: bool = False
     ):
         """Compute place cell activations from BVC and head direction inputs.
 
@@ -127,9 +127,7 @@ class PlaceCellLayer:
         self.prev_place_cell_activations = tf.identity(self.place_cell_activations)
 
         # Compute BVC activations based on the input distances and angles
-        self.bvc_activations = self.bvc_layer.get_bvc_activation(
-            input_data[0], input_data[1]
-        )
+        self.bvc_activations = self.bvc_layer.get_bvc_activation(distances=distances)
 
         # Compute the input to place cells by taking the dot product of the input weights and BVC activations
         # Afferent excitation term: ∑_j W_ij^{pb} v_j^b (Equation 3.2a)

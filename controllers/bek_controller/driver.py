@@ -100,9 +100,6 @@ class Driver(Supervisor):
         boundary_data (Tensor): Current LiDAR readings.
         goal_location (List[float]): Target [x,y] coordinates.
         expected_reward (float): Predicted reward at current state.
-        last_reward (float): Reward received in previous step.
-        current_pcn_state (Tensor): Current place cell activations.
-        prev_pcn_state (Tensor): Previous place cell activations.
     """
 
     def initialization(
@@ -157,6 +154,7 @@ class Driver(Supervisor):
         self.hmap_z = np.zeros(
             (self.num_steps, self.num_place_cells)
         )  # place cell activations
+
         self.hmap_h = np.zeros(
             (self.num_steps, self.n_hd)
         )  # head direction cell activations
@@ -186,6 +184,11 @@ class Driver(Supervisor):
         if self.mode == RobotMode.LEARN_OJAS:
             self.clear()
 
+        # Initialize boundaries
+        self.lidar_resolution = 720
+        self.boundary_data = tf.Variable(tf.zeros((self.lidar_resolution, 1)))
+        self.lidar_angles = np.linspace(0, 2 * np.pi, self.lidar_resolution, False)
+
         # Initialize layers
         self.load_pcn(
             num_place_cells=self.num_place_cells,
@@ -200,9 +203,7 @@ class Driver(Supervisor):
             num_replay=6,
         )
         self.head_direction_layer = HeadDirectionLayer(num_cells=self.n_hd)
-
-        # Initialize boundaries
-        self.boundary_data = tf.Variable(tf.zeros((720, 1)))
+        self.hmap_bvc = np.zeros((self.num_steps, self.pcn.bvc_layer.num_bvc))
 
         self.directional_reward_estimates = tf.zeros(self.n_hd)
         self.step(self.timestep)
@@ -211,9 +212,6 @@ class Driver(Supervisor):
         # Initialize goal
         self.goal_location = [-1, 1]
         self.expected_reward = 0
-        self.last_reward = 0
-        self.current_pcn_state = tf.zeros_like(self.pcn.place_cell_activations)
-        self.prev_pcn_state = tf.zeros_like(self.pcn.place_cell_activations)
 
         if randomize_start_loc:
             while True:
@@ -266,10 +264,11 @@ class Driver(Supervisor):
         except:
             bvc = BoundaryVectorCellLayer(
                 max_dist=10,
-                input_dim=720,
+                input_dim=self.lidar_resolution,
                 n_hd=n_hd,
                 sigma_ang=90,
                 sigma_d=0.5,
+                lidar_angles=self.lidar_angles,
             )
 
             self.pcn = PlaceCellLayer(
@@ -370,8 +369,6 @@ class Driver(Supervisor):
         Returns:
             None
         """
-        self.prev_pcn_state = self.current_pcn_state
-        self.current_pcn_state *= 0
 
         for s in range(self.tau_w):
             self.sense()
@@ -399,19 +396,11 @@ class Driver(Supervisor):
                 or self.mode == RobotMode.LEARN_HEBB
                 or self.mode == RobotMode.EXPLOIT
             ):
-                self.current_pcn_state += self.pcn.place_cell_activations
                 self.check_goal_reached()
 
             self.compute()
             self.forward()
             self.check_goal_reached()
-
-        if (
-            self.mode == RobotMode.DMTP
-            or self.mode == RobotMode.LEARN_HEBB
-            or self.mode == RobotMode.EXPLOIT
-        ):
-            self.current_pcn_state /= s  # 's' should be greater than 0
 
         self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
 
@@ -430,8 +419,6 @@ class Driver(Supervisor):
         Returns:
             None
         """
-        # Reset the current place cell state
-        self.current_pcn_state *= 0
 
         # Stop movement and update sensor readings
         self.stop()
@@ -511,7 +498,6 @@ class Driver(Supervisor):
                 self.compute()
                 self.forward()
                 # Accumulate place cell activations
-                self.current_pcn_state += self.pcn.place_cell_activations
                 self.check_goal_reached()
 
                 # Update reward cell activations and perform TD update
@@ -520,9 +506,6 @@ class Driver(Supervisor):
                 self.rcn.td_update(
                     self.pcn.place_cell_activations, next_reward=actual_reward
                 )
-
-            # Normalize the accumulated place cell state over the time window
-            self.current_pcn_state /= self.tau_w
 
     def get_actual_reward(self):
         """Determines the actual reward for the agent at the current state.
@@ -703,7 +686,7 @@ class Driver(Supervisor):
         """
         # Compute the place cell network activations
         self.pcn.get_place_cell_activations(
-            input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)],
+            distances=self.boundaries,
             hd_activations=self.hd_activations,
             collided=np.any(self.collided),
         )
@@ -717,6 +700,7 @@ class Driver(Supervisor):
             self.hmap_x[self.step_count] = curr_pos[0]
             self.hmap_y[self.step_count] = curr_pos[2]
             self.hmap_z[self.step_count] = self.pcn.place_cell_activations
+            self.hmap_bvc[self.step_count] = self.pcn.bvc_activations
             self.hmap_h[self.step_count] = self.hd_activations
             self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn.bvc_activations)
 
@@ -785,9 +769,7 @@ class Driver(Supervisor):
             self.sense()
             self.compute()
             self.forward()
-            self.current_pcn_state += self.pcn.place_cell_activations
             s_start += 1
-        self.current_pcn_state /= s_start
 
         # Replay the place cell activations
         self.rcn.replay(pcn=self.pcn)
@@ -956,6 +938,9 @@ class Driver(Supervisor):
             with open("hmap_h.pkl", "wb") as output:
                 pickle.dump(self.hmap_h[: self.step_count], output)
                 files_saved.append("hmap_h.pkl")
+            with open("hmap_bvc.pkl", "wb") as output:
+                pickle.dump(self.hmap_bvc[: self.step_count], output)
+                files_saved.append("hmap_bvc.pkl")
 
         root = tk.Tk()
         root.withdraw()  # Hide the main window
@@ -978,6 +963,7 @@ class Driver(Supervisor):
             "hmap_x.pkl",
             "hmap_y.pkl",
             "hmap_z.pkl",
+            "hmap_bvc.pkl",
             "hmap_g.pkl",
             "hmap_h.pkl",
         ]
