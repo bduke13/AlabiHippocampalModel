@@ -101,8 +101,6 @@ class Driver(Supervisor):
         goal_location (List[float]): Target [x,y] coordinates.
         expected_reward (float): Predicted reward at current state.
         last_reward (float): Reward received in previous step.
-        current_pcn_state (Tensor): Current place cell activations.
-        prev_pcn_state (Tensor): Previous place cell activations.
     """
 
     def initialization(
@@ -113,7 +111,7 @@ class Driver(Supervisor):
         start_loc: Optional[List[int]] = None,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
-        num_scales: Optional[bool] = None,
+        enable_multiscale: Optional[bool] = False,
     ):
         """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
@@ -141,7 +139,7 @@ class Driver(Supervisor):
         self.n_hd = 8
         self.timestep = 32 * 3
         self.tau_w = 10  # time constant for the window function
-        self.num_scales = num_scales
+        self.enable_multiscale = enable_multiscale
 
         # Robot parameters
         self.max_speed = 16
@@ -187,25 +185,28 @@ class Driver(Supervisor):
         if self.mode == RobotMode.LEARN_OJAS:
             self.clear()
 
-        # Initialize layers
+        # Define the number of place cells for each layer
+        self.num_small_place_cells = 200  # Adjust as needed
+        self.num_large_place_cells = 200  # Adjust as needed
+
+        # Load or initialize PCN layer(s)
         self.load_pcn(
-            num_place_cells=self.num_place_cells,
+            num_small_place_cells=self.num_small_place_cells,
+            num_large_place_cells=self.num_large_place_cells,
             n_hd=self.n_hd,
             timestep=self.timestep,
             enable_ojas=enable_ojas,
             enable_stdp=enable_stdp,
-            num_scales=self.num_scales,
         )
 
-        # Initialize hmap_z based on num_scales
-        self.hmap_z = [
-            np.zeros((self.num_steps, len(indices)))
-            for indices in self.pcn.scale_indices
-        ]
+        # Initialize history maps for both layers
+        self.hmap_z_small = np.zeros((self.num_steps, self.num_small_place_cells))
+        self.hmap_z_large = np.zeros((self.num_steps, self.num_large_place_cells))
 
         self.load_rcn(
             num_reward_cells=self.num_reward_cells,
-            num_place_cells=self.num_place_cells,
+            num_small_place_cells=self.num_small_place_cells,
+            num_large_place_cells=self.num_large_place_cells,
             num_replay=6,
         )
 
@@ -222,8 +223,6 @@ class Driver(Supervisor):
         self.goal_location = [-1, 1]
         self.expected_reward = 0
         self.last_reward = 0
-        self.place_cell_trace = tf.zeros_like(self.pcn.place_cell_activations)
-        self.prev_pcn_state = tf.zeros_like(self.pcn.place_cell_activations)
 
         if randomize_start_loc:
             while True:
@@ -249,85 +248,191 @@ class Driver(Supervisor):
 
     def load_pcn(
         self,
-        num_place_cells: int,
+        num_small_place_cells: int,
+        num_large_place_cells: int,
         n_hd: int,
         timestep: int,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
-        num_scales: Optional[bool] = None,
     ):
-        """Loads an existing place cell network from disk or initializes a new one.
+        """Loads the multi-scale or single-scale PCN(s), and conditionally enables Oja’s or STDP.
 
-        Args:
-            num_place_cells (int): Number of place cells in the network.
-            n_hd (int): Number of head direction cells.
-            timestep (int): Time step duration in milliseconds.
-            enable_ojas (Optional[bool], optional): Flag to enable Oja's learning rule.
-                If None, determined by robot mode. Defaults to None.
-            enable_stdp (Optional[bool], optional): Flag to enable Spike-Timing-Dependent Plasticity.
-                If None, determined by robot mode. Defaults to None.
-
-        Returns:
-            PlaceCellLayer: The loaded or newly initialized place cell network.
+        If enable_multiscale == True:
+        - pcn_small and pcn_large are loaded or created
+        Else:
+        - Only pcn_small is loaded or created
+        Also toggles self.pcn_small.enable_ojas / enable_stdp depending on arguments or mode.
+        Same for self.pcn_large if multiscale is on.
         """
-        try:
-            with open("pcn.pkl", "rb") as f:
-                self.pcn = pickle.load(f)
-                self.pcn.reset_activations()
-                print("Loaded existing Place Cell Network.")
-        except:
-            bvc = BoundaryVectorCellLayer(
-                max_dist=12,
-                input_dim=720,
-                n_hd=n_hd,
-                sigma_ang=90,
-                sigma_d=0.5,
-            )
+        if self.enable_multiscale:
+            # ------ SMALL PCN ------
+            try:
+                with open("pcn_small.pkl", "rb") as f:
+                    self.pcn_small = pickle.load(f)
+                    self.pcn_small.reset_activations()
+                    print("Loaded existing Small Place Cell Network.")
+            except FileNotFoundError:
+                bvc = BoundaryVectorCellLayer(
+                    max_dist=12,
+                    input_dim=720,
+                    n_hd=n_hd,
+                    sigma_ang=90,
+                    sigma_d=0.5,
+                )
+                self.pcn_small = PlaceCellLayer(
+                    bvc_layer=bvc,
+                    num_pc=num_small_place_cells,
+                    timestep=timestep,
+                    n_hd=n_hd,
+                    enable_ojas=False,  # We'll set this below
+                    enable_stdp=False,  # We'll set this below
+                    modulate_by_vis_density=False,
+                )
+                print("Initialized new Small Place Cell Network.")
 
-            self.pcn = PlaceCellLayer(
-                bvc_layer=bvc, num_pc=num_place_cells, timestep=timestep, n_hd=n_hd, num_scales=self.num_scales
-            )
-            print("Initialized new Place Cell Network.")
+            # Mirror the original logic for Oja’s / STDP
+            if enable_ojas is not None:
+                self.pcn_small.enable_ojas = enable_ojas
+            elif (self.mode in [RobotMode.LEARN_OJAS, RobotMode.LEARN_HEBB, RobotMode.DMTP]):
+                self.pcn_small.enable_ojas = True
 
-        if enable_ojas is not None:
-            self.pcn.enable_ojas = enable_ojas
-        elif (
-            self.mode == RobotMode.LEARN_OJAS
-            or self.mode == RobotMode.LEARN_HEBB
-            or self.mode == RobotMode.DMTP
-        ):
-            self.pcn.enable_ojas = True
+            if enable_stdp is not None:
+                self.pcn_small.enable_stdp = enable_stdp
+            elif (self.mode in [RobotMode.LEARN_HEBB, RobotMode.DMTP]):
+                self.pcn_small.enable_stdp = True
 
-        if enable_stdp is not None:
-            self.pcn.enable_stdp = enable_stdp
-        elif self.mode == RobotMode.LEARN_HEBB or self.mode == RobotMode.DMTP:
-            self.pcn.enable_stdp = True
+            # ------ LARGE PCN ------
+            try:
+                with open("pcn_large.pkl", "rb") as f:
+                    self.pcn_large = pickle.load(f)
+                    self.pcn_large.reset_activations()
+                    print("Loaded existing Large Place Cell Network.")
+            except FileNotFoundError:
+                bvc = BoundaryVectorCellLayer(
+                    max_dist=12,
+                    input_dim=720,
+                    n_hd=n_hd,
+                    sigma_ang=90,
+                    sigma_d=0.5,
+                )
+                self.pcn_large = PlaceCellLayer(
+                    bvc_layer=bvc,
+                    num_pc=num_large_place_cells,
+                    timestep=timestep,
+                    n_hd=n_hd,
+                    enable_ojas=False,  # set below
+                    enable_stdp=False,  # set below
+                    modulate_by_vis_density=False,
+                )
+                print("Initialized new Large Place Cell Network.")
 
-        return self.pcn
+            # Mirror the original logic for Oja’s / STDP
+            if enable_ojas is not None:
+                self.pcn_large.enable_ojas = enable_ojas
+            elif (self.mode in [RobotMode.LEARN_OJAS, RobotMode.LEARN_HEBB, RobotMode.DMTP]):
+                self.pcn_large.enable_ojas = True
 
-    def load_rcn(self, num_reward_cells: int, num_place_cells: int, num_replay: int):
-        """Loads or initializes the reward cell network.
+            if enable_stdp is not None:
+                self.pcn_large.enable_stdp = enable_stdp
+            elif (self.mode in [RobotMode.LEARN_HEBB, RobotMode.DMTP]):
+                self.pcn_large.enable_stdp = True
 
-        Args:
-            num_reward_cells (int): Number of reward cells in the network.
-            num_place_cells (int): Number of place cells providing input.
-            num_replay (int): Number of replay iterations for memory consolidation.
+        else:
+            # SINGLE-SCALE: Just pcn_small
+            try:
+                with open("pcn_small.pkl", "rb") as f:
+                    self.pcn_small = pickle.load(f)
+                    self.pcn_small.reset_activations()
+                    print("Loaded existing Place Cell Network.")
+            except FileNotFoundError:
+                bvc = BoundaryVectorCellLayer(
+                    max_dist=12,
+                    input_dim=720,
+                    n_hd=n_hd,
+                    sigma_ang=90,
+                    sigma_d=0.5,
+                )
+                self.pcn_small = PlaceCellLayer(
+                    bvc_layer=bvc,
+                    num_pc=num_small_place_cells,
+                    timestep=timestep,
+                    n_hd=n_hd,
+                    enable_ojas=False,  # We'll handle below
+                    enable_stdp=False,  # We'll handle below
+                    modulate_by_vis_density=False,
+                )
+                print("Initialized new Place Cell Network.")
 
-        Returns:
-            RewardCellLayer: The loaded or newly initialized reward cell network.
+            # Mirror the original logic for Oja’s / STDP
+            if enable_ojas is not None:
+                self.pcn_small.enable_ojas = enable_ojas
+            elif (self.mode in [RobotMode.LEARN_OJAS, RobotMode.LEARN_HEBB, RobotMode.DMTP]):
+                self.pcn_small.enable_ojas = True
+
+            if enable_stdp is not None:
+                self.pcn_small.enable_stdp = enable_stdp
+            elif (self.mode in [RobotMode.LEARN_HEBB, RobotMode.DMTP]):
+                self.pcn_small.enable_stdp = True
+
+    def load_rcn(
+        self,
+        num_reward_cells: int,
+        num_small_place_cells: int,
+        num_large_place_cells: int,
+        num_replay: int,
+    ):
         """
-        try:
-            with open("rcn.pkl", "rb") as f:
-                self.rcn = pickle.load(f)
-                print("Loaded existing Reward Cell Network.")
-        except:
-            self.rcn = RewardCellLayer(
-                num_reward_cells=num_reward_cells,
-                input_dim=num_place_cells,
-                num_replay=num_replay,
-            )
-            print("Initialized new Reward Cell Network.")
-        return self.rcn
+        Loads or initializes one or two Reward Cell Networks, depending on
+        enable_multiscale.
+
+        If enable_multiscale is True:
+            - Loads/initializes self.rcn_small (for small scale)
+            - Loads/initializes self.rcn_large (for large scale)
+        Else:
+            - Loads/initializes a single self.rcn
+        """
+
+        if self.enable_multiscale:
+            # --- RCN SMALL ---
+            try:
+                with open("rcn_small.pkl", "rb") as f:
+                    self.rcn_small = pickle.load(f)
+                    print("Loaded existing SMALL Reward Cell Network.")
+            except FileNotFoundError:
+                self.rcn_small = RewardCellLayer(
+                    num_reward_cells=num_reward_cells,
+                    input_dim=num_small_place_cells,
+                    num_replay=num_replay,
+                )
+                print("Initialized new SMALL Reward Cell Network.")
+
+            # --- RCN LARGE ---
+            try:
+                with open("rcn_large.pkl", "rb") as f:
+                    self.rcn_large = pickle.load(f)
+                    print("Loaded existing LARGE Reward Cell Network.")
+            except FileNotFoundError:
+                self.rcn_large = RewardCellLayer(
+                    num_reward_cells=num_reward_cells,
+                    input_dim=num_large_place_cells,
+                    num_replay=num_replay,
+                )
+                print("Initialized new LARGE Reward Cell Network.")
+
+        else:
+            # Single-scale approach
+            try:
+                with open("rcn.pkl", "rb") as f:
+                    self.rcn = pickle.load(f)
+                    print("Loaded existing Reward Cell Network.")
+            except FileNotFoundError:
+                self.rcn = RewardCellLayer(
+                    num_reward_cells=num_reward_cells,
+                    input_dim=num_small_place_cells,  # Or whichever you prefer
+                    num_replay=num_replay,
+                )
+                print("Initialized new Reward Cell Network.")
+
 
     ########################################### RUN LOOP ###########################################
 
@@ -370,131 +475,211 @@ class Driver(Supervisor):
     ########################################### EXPLORE ###########################################
 
     def explore(self) -> None:
-        """Handles the exploration mode logic for the robot.
-
-        The robot moves forward for a set number of steps while:
-        - Updating place and reward cell activations
-        - Checking for collisions and turning if needed
-        - Computing TD updates for reward learning
-        - Monitoring goal proximity
-        - Randomly changing direction periodically
-
-        Returns:
-            None
         """
+        Handles the exploration mode logic for the robot.
 
+        If enable_multiscale is True, train small and large networks in parallel:
+            - self.rcn_small + self.pcn_small
+            - self.rcn_large + self.pcn_large
+        If enable_multiscale is False, train single network:
+            - self.rcn + self.pcn_large  (or whichever one you use)
+        """
         for step in range(self.tau_w):
+            # Sense environment
             self.sense()
 
-            # Update the reward cell activations
-            self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations)
-
-            # Determine the actual reward
+            # -----------------------------
+            # TRAIN REWARD NETWORK(S)
+            # -----------------------------
             actual_reward = self.get_actual_reward()
 
-            # Perform TD update
-            self.rcn.td_update(
-                self.pcn.place_cell_activations, next_reward=actual_reward
-            )
+            if self.enable_multiscale:
+                # 1) Update & TD for small scale
+                self.rcn_small.update_reward_cell_activations(
+                    self.pcn_small.place_cell_activations
+                )
+                self.rcn_small.td_update(
+                    self.pcn_small.place_cell_activations, next_reward=actual_reward
+                )
 
+                # 2) Update & TD for large scale
+                self.rcn_large.update_reward_cell_activations(
+                    self.pcn_large.place_cell_activations
+                )
+                self.rcn_large.td_update(
+                    self.pcn_large.place_cell_activations, next_reward=actual_reward
+                )
+            else:
+                # Single-scale approach
+                self.rcn.update_reward_cell_activations(
+                    self.pcn_small.place_cell_activations
+                )
+                self.rcn.td_update(
+                    self.pcn_small.place_cell_activations, next_reward=actual_reward
+                )
+
+            # -----------------------------
+            # COLLISION / MOVEMENT LOGIC
+            # -----------------------------
             if np.any(self.collided):
+                # E.g. turn randomly, break from loop
                 random_angle = np.random.uniform(-np.pi, np.pi)
                 self.turn(random_angle)
                 break
 
+            # Compute new PCN activations and update maps
             self.compute_pcn_activations()
             self.update_hmaps()
             self.forward()
             self.check_goal_reached()
 
-        self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
+        # Possibly turn randomly after finishing the for-loop
+        self.turn(np.random.normal(0, np.deg2rad(30)))
 
     ########################################### EXPLOIT ###########################################
 
     def exploit(self):
-        """Executes goal-directed navigation using learned reward maps.
+        """
+        Executes goal-directed navigation using learned reward maps.
 
         The robot:
-        - Computes potential rewards in different directions
-        - Selects movement direction with highest expected reward
-        - Updates place and reward cell activations during movement
-        - Monitors goal proximity and collision status
-        - Switches to exploration if reward expectations are too low
+            - Computes potential rewards in different directions
+            - Selects movement direction with highest expected reward
+            - Updates place and reward cell activations during movement
+            - Monitors goal proximity and collision status
+            - Switches to exploration if reward expectations are too low
 
-        Returns:
-            None
+        If enable_multiscale == True, uses both pcn_small + rcn_small AND pcn_large + rcn_large.
+        Otherwise, uses a single-scale approach (pcn_large + rcn).
         """
-
         # Stop movement and update sensor readings
         self.stop()
         self.sense()
+
+        # Always compute place cell activations
         self.compute_pcn_activations()
+
+        # Update history maps
         self.update_hmaps()
         self.check_goal_reached()
 
         # Proceed only if enough steps have been taken
         if self.step_count > self.tau_w:
-            num_steps = 1
-            pot_rew = np.empty(self.n_hd)
+            num_steps = 1  # number of "look-ahead" steps
+            pot_rew_small = None
+            pot_rew_large = None
 
-            # Update reward cell network based on current place cell activations
-            self.rcn.update_reward_cell_activations(
-                self.pcn.place_cell_activations, visit=True
-            )
-
-            # Check if the reward is too low; if so, switch to exploration
-            max_reward_activation = tf.reduce_max(self.rcn.reward_cell_activations)
-            if max_reward_activation <= 1e-6:
-                print("Reward too low. Switching to exploration.")
-                self.explore()
-                return
-
-            # Calculate potential reward for each direction
-            for d in range(self.n_hd):
-                # Simulate future place cell activations in direction 'd'
-                pcn_activations = self.pcn.preplay(d, num_steps=num_steps)
-                # Update reward cell activations based on the simulated activations
-                self.rcn.update_reward_cell_activations(pcn_activations)
-
-                # Store potential reward
-                pot_rew[d] = tf.reduce_max(
-                    np.nan_to_num(self.rcn.reward_cell_activations)
+            # -------------------------------------------------
+            # 1) MULTISCALE vs. SINGLE-SCALE REWARD UPDATES
+            # -------------------------------------------------
+            if self.enable_multiscale:
+                # --- SMALL LAYER RCN ---
+                self.rcn_small.update_reward_cell_activations(
+                    self.pcn_small.place_cell_activations, visit=True
                 )
+                max_reward_activation_small = tf.reduce_max(self.rcn_small.reward_cell_activations)
 
-            # Update directional reward estimates based on computed potential rewards
-            self.directional_reward_estimates = pot_rew
+                # --- LARGE LAYER RCN ---
+                self.rcn_large.update_reward_cell_activations(
+                    self.pcn_large.place_cell_activations, visit=True
+                )
+                max_reward_activation_large = tf.reduce_max(self.rcn_large.reward_cell_activations)
 
-            # Calculate the action angle using circular mean
+                # If both networks' reward activations are too low, explore instead
+                if max_reward_activation_small <= 1e-6 and max_reward_activation_large <= 1e-6:
+                    print("All reward signals too low. Switching to exploration.")
+                    self.explore()
+                    return
+
+            else:
+                # --- SINGLE-SCALE RCN ---
+                self.rcn.update_reward_cell_activations(
+                    self.pcn_small.place_cell_activations, visit=True
+                )
+                max_reward_activation = tf.reduce_max(self.rcn.reward_cell_activations)
+
+                # If the reward is too low, switch to exploration
+                if max_reward_activation <= 1e-6:
+                    print("Reward too low. Switching to exploration.")
+                    self.explore()
+                    return
+
+            # -------------------------------------------------
+            # 2) CALCULATE POTENTIAL REWARD FOR EACH DIRECTION
+            # -------------------------------------------------
             angles = np.linspace(0, 2 * np.pi, self.n_hd, endpoint=False)
+
+            # For small scale
+            if self.enable_multiscale:
+                pot_rew_small = np.zeros(self.n_hd)
+                pot_rew_large = np.zeros(self.n_hd)
+                for d in range(self.n_hd):
+                    # "preplay" or predict small PCN activations
+                    pcn_small_future = self.pcn_small.preplay(d, num_steps=num_steps)
+                    self.rcn_small.update_reward_cell_activations(pcn_small_future)
+                    pot_rew_small[d] = tf.reduce_max(np.nan_to_num(self.rcn_small.reward_cell_activations))
+
+                    # Similarly for large PCN
+                    pcn_large_future = self.pcn_large.preplay(d, num_steps=num_steps)
+                    self.rcn_large.update_reward_cell_activations(pcn_large_future)
+                    pot_rew_large[d] = tf.reduce_max(np.nan_to_num(self.rcn_large.reward_cell_activations))
+
+                # Combine or keep them separate as desired; here's a simple sum to choose a direction
+                combined_pot_rew = pot_rew_small + pot_rew_large
+                self.directional_reward_estimates = combined_pot_rew
+            else:
+                # Single-scale
+                pot_rew = np.zeros(self.n_hd)
+                for d in range(self.n_hd):
+                    # "preplay" or predict future PCN activations
+                    pcn_future = self.pcn_small.preplay(d, num_steps=num_steps)
+                    self.rcn.update_reward_cell_activations(pcn_future)
+                    pot_rew[d] = tf.reduce_max(np.nan_to_num(self.rcn.reward_cell_activations))
+                self.directional_reward_estimates = pot_rew
+
+            # -------------------------------------------------
+            # 3) DETERMINE ACTION ANGLE
+            # -------------------------------------------------
             action_angle = circmean(angles, weights=self.directional_reward_estimates)
-
-            # Determine the maximum reward for the chosen action
             index = int(action_angle // (2 * np.pi / self.n_hd))
-            max_reward = pot_rew[index]
+            max_reward = self.directional_reward_estimates[index]
 
-            # If the max reward is too low, switch to exploration
+            # If the chosen reward is too low, switch to exploration
             if max_reward <= 1e-3:
+                print("Chosen direction reward too low. Switching to exploration.")
                 self.explore()
                 return
 
-            # Handle collision by turning and updating the reward cell network
+            # Check for collisions
             if np.any(self.collided):
                 random_angle = np.random.uniform(-np.pi, np.pi)
                 self.turn(random_angle)
                 self.stop()
-                self.rcn.td_update(self.pcn.place_cell_activations, max_reward)
+
+                # Perform a final TD update before returning
+                if self.enable_multiscale:
+                    # small
+                    self.rcn_small.td_update(self.pcn_small.place_cell_activations, max_reward)
+                    # large
+                    self.rcn_large.td_update(self.pcn_large.place_cell_activations, max_reward)
+                else:
+                    self.rcn.td_update(self.pcn_small.place_cell_activations, max_reward)
+
                 return
             else:
                 # Adjust the action angle if necessary
                 if abs(action_angle) > np.pi:
                     action_angle -= np.sign(action_angle) * 2 * np.pi
-                # Calculate the angle to turn towards the desired heading
-                angle_to_turn = -np.deg2rad(
-                    np.rad2deg(action_angle) - self.current_heading_deg
-                ) % (2 * np.pi)
+
+                # Calculate the angle to turn
+                angle_to_turn = -np.deg2rad(np.rad2deg(action_angle) - self.current_heading_deg)
+                angle_to_turn %= (2 * np.pi)
+
                 self.turn(angle_to_turn)
 
-            # Move forward for a set duration
+            # -------------------------------------------------
+            # 4) MOVE FORWARD FOR A SET DURATION
+            # -------------------------------------------------
             for s in range(self.tau_w):
                 self.sense()
                 self.compute_pcn_activations()
@@ -502,12 +687,17 @@ class Driver(Supervisor):
                 self.forward()
                 self.check_goal_reached()
 
-                # Update reward cell activations and perform TD update
-                self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations)
+                # Perform RCN updates during movement
                 actual_reward = self.get_actual_reward()
-                self.rcn.td_update(
-                    self.pcn.place_cell_activations, next_reward=actual_reward
-                )
+
+                if self.enable_multiscale:
+                    self.rcn_small.update_reward_cell_activations(self.pcn_small.place_cell_activations)
+                    self.rcn_small.td_update(self.pcn_small.place_cell_activations, next_reward=actual_reward)
+                    self.rcn_large.update_reward_cell_activations(self.pcn_large.place_cell_activations)
+                    self.rcn_large.td_update(self.pcn_large.place_cell_activations, next_reward=actual_reward)
+                else:
+                    self.rcn.update_reward_cell_activations(self.pcn_small.place_cell_activations)
+                    self.rcn.td_update(self.pcn_small.place_cell_activations, next_reward=actual_reward)
 
     def get_actual_reward(self):
         """Determines the actual reward for the agent at the current state.
@@ -693,16 +883,27 @@ class Driver(Supervisor):
     ########################################### COMPUTE PCN ACTIVATIONS ###########################################
 
     def compute_pcn_activations(self):
-        """
-        Compute the activations of place cells and handle the environment interactions.
-        """
-        self.pcn.get_place_cell_activations(
-            input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)],
-            hd_activations=self.hd_activations,
-            vis_density=self.vis_density,
-        )
+        if self.enable_multiscale:
+            # Compute activations for the small PCN (unaffected by complexity)
+            self.pcn_small.get_place_cell_activations(
+                input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)],
+                hd_activations=self.hd_activations,
+                vis_density=0.0,  # No modulation
+            )
 
-        # Advance the timestep and update position
+            # Compute activations for the large PCN (affected by complexity)
+            self.pcn_large.get_place_cell_activations(
+                input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)],
+                hd_activations=self.hd_activations,
+                vis_density=self.vis_density,  # Modulated by complexity
+            )
+        else:
+            self.pcn_small.get_place_cell_activations(
+                input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)],
+                hd_activations=self.hd_activations,
+                vis_density=0.0,  # No modulation
+            )
+        
         self.step(self.timestep)
 
     ########################################### UPDATE HMAPS ###########################################
@@ -710,33 +911,24 @@ class Driver(Supervisor):
     def update_hmaps(self):
         curr_pos = self.robot.getField("translation").getSFVec3f()
 
-        # Update place cell and sensor maps
         if self.step_count < self.num_steps:
-            # Record the robot's current position
+            # Record position and always record the small PCN
             self.hmap_x[self.step_count] = curr_pos[0]
             self.hmap_y[self.step_count] = curr_pos[2]
-
-            # Update activations for each scale
-            if self.pcn.num_scales > 1:
-                for i, scale_hmap in enumerate(self.hmap_z):
-                    # Update hmap_z for the current scale
-                    scale_name = f"scale_{i}"
-                    scale_activations = self.pcn.get_activations_by_scale(scale=scale_name).numpy()
-                    scale_hmap[self.step_count] = scale_activations
-            else:
-                # Single-scale activations (if only one scale is used)
-                self.hmap_z[0][self.step_count] = self.pcn.place_cell_activations.numpy()
-
-            # Update head direction cell activations
+            # Always record the small PCN
+            self.hmap_z_small[self.step_count] = self.pcn_small.place_cell_activations.numpy()
+            
             self.hmap_h[self.step_count] = self.hd_activations
-
-            # Update goal-related activations
-            self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn.bvc_activations)
-
-            # Record visual density (environmental complexity)
             self.hmap_vis_density[self.step_count] = self.vis_density
+            
+            if self.enable_multiscale:
+                # If multiscale, also record the large PCN
+                self.hmap_z_large[self.step_count] = self.pcn_large.place_cell_activations.numpy()
+                self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn_large.bvc_activations)
+            else:
+                # Single-scale => only small PCN, so record e.g. the small BVC sum
+                self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn_small.bvc_activations)
 
-        # Increment timestep
         self.step_count += 1
 
     ########################################### CHECK GOAL REACHED ###########################################
@@ -801,12 +993,10 @@ class Driver(Supervisor):
             self.compute_pcn_activations()
             self.update_hmaps()
             self.forward()
-            self.place_cell_trace += self.pcn.place_cell_activations
             step += 1
-        self.place_cell_trace /= step
 
         # Replay the place cell activations
-        self.rcn.replay(pcn=self.pcn)
+        self.rcn.replay(pcn=self.pcn_small)
 
     ########################################### ENVIRONMENTAL COMPLEXITY ###########################################
     
@@ -962,23 +1152,42 @@ class Driver(Supervisor):
         the maps that store the agent's movement and activations.
 
         Parameters:
-            include_pcn (bool): If True, saves the Place Cell Network (PCN).
+            include_pcn (bool): If True, saves both the small and large Place Cell Networks (PCN).
             include_rcn (bool): If True, saves the Reward Cell Network (RCN).
             include_hmaps (bool): If True, saves the history of the agent's path and activations.
         """
         files_saved = []
 
-        # Save the Place Cell Network (PCN)
+        # Save PCNs
         if include_pcn:
-            with open("pcn.pkl", "wb") as output:
-                pickle.dump(self.pcn, output)
-                files_saved.append("pcn.pkl")
+            # Always save the small PCN
+            with open("pcn_small.pkl", "wb") as output:
+                pickle.dump(self.pcn_small, output)
+                files_saved.append("pcn_small.pkl")
+            
+            # Save the large PCN only if it exists (multiscale mode)
+            if self.enable_multiscale and hasattr(self, "pcn_large"):
+                with open("pcn_large.pkl", "wb") as output:
+                    pickle.dump(self.pcn_large, output)
+                    files_saved.append("pcn_large.pkl")
 
-        # Save the Reward Cell Network (RCN)
+        # Save RCNs
         if include_rcn:
-            with open("rcn.pkl", "wb") as output:
-                pickle.dump(self.rcn, output)
-                files_saved.append("rcn.pkl")
+            if self.enable_multiscale:
+                # Save both RCNs in multiscale mode
+                if hasattr(self, "rcn_small"):
+                    with open("rcn_small.pkl", "wb") as output:
+                        pickle.dump(self.rcn_small, output)
+                        files_saved.append("rcn_small.pkl")
+                if hasattr(self, "rcn_large"):
+                    with open("rcn_large.pkl", "wb") as output:
+                        pickle.dump(self.rcn_large, output)
+                        files_saved.append("rcn_large.pkl")
+            else:
+                # Save the single RCN in single-scale mode
+                with open("rcn.pkl", "wb") as output:
+                    pickle.dump(self.rcn, output)
+                    files_saved.append("rcn.pkl")
 
         # Save the history maps if specified
         if include_hmaps:
@@ -990,18 +1199,16 @@ class Driver(Supervisor):
                 pickle.dump(self.hmap_y[: self.step_count], output)
                 files_saved.append("hmap_y.pkl")
 
-            # Save activations for each scale dynamically
-            if self.num_scales > 1:
-                for i, scale_hmap in enumerate(self.hmap_z):
-                    filename = f"hmap_z_scale_{i}.pkl"
-                    with open(filename, "wb") as output:
-                        pickle.dump(scale_hmap[: self.step_count], output)
-                        files_saved.append(filename)
-            else:
-                # Save for single-scale configurations
-                with open("hmap_z.pkl", "wb") as output:
-                    pickle.dump(self.hmap_z[0][: self.step_count], output)
-                    files_saved.append("hmap_z.pkl")
+            # Save the small PCN activations always
+            with open("hmap_z_small.pkl", "wb") as output:
+                pickle.dump(self.hmap_z_small[: self.step_count], output)
+                files_saved.append("hmap_z_small.pkl")
+
+            # Save the large PCN activations only if multiscale
+            if self.enable_multiscale and hasattr(self, "hmap_z_large"):
+                with open("hmap_z_large.pkl", "wb") as output:
+                    pickle.dump(self.hmap_z_large[: self.step_count], output)
+                    files_saved.append("hmap_z_large.pkl")
 
             with open("hmap_g.pkl", "wb") as output:
                 pickle.dump(self.hmap_g[: self.step_count], output)
@@ -1029,29 +1236,22 @@ class Driver(Supervisor):
         print(f"Files Saved: {files_saved}")
         print("Saving Done!")
 
-
     def clear(self):
-        """
-        Clears the saved state files for the Place Cell Network (PCN), Reward Cell Network (RCN),
-        and the history maps by removing their corresponding pickle files.
-        """
         files_to_remove = [
             "pcn.pkl",
+            "pcn_small.pkl",
+            "pcn_large.pkl",
             "rcn.pkl",
+            "rcn_small.pkl",
+            "rcn_large.pkl",
             "hmap_x.pkl",
             "hmap_y.pkl",
             "hmap_g.pkl",
             "hmap_h.pkl",
             "hmap_vis_density.pkl",
+            "hmap_z_small.pkl",
+            "hmap_z_large.pkl",
         ]
-
-        # Add scale-specific files dynamically
-        if self.num_scales > 1:  # Multiscale enabled
-            # Add a file for each scale dynamically
-            for i in range(self.num_scales):
-                files_to_remove.append(f"hmap_z_scale_{i}.pkl")
-        else:  # Single-scale
-            files_to_remove.append("hmap_z.pkl")
 
         for file in files_to_remove:
             try:
