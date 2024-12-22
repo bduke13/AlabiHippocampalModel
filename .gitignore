@@ -32,4 +32,4 @@ controllers/bek_controller/network_plots.ipynb
 *.wbproj
 
 # Ignore controller (should force commit this)
-controllers/bek_controller/bek_controller.py
+#controllers/bek_controller/bek_controller.py
