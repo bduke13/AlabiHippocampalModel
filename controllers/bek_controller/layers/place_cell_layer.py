@@ -44,7 +44,7 @@ class PlaceCellLayer:
         self.w_rec_tripartite = tf.zeros(shape=(n_hd, num_pc, num_pc), dtype=tf.float32)
 
         # Activation values for place cells
-        self.place_cell_activations = tf.zeros(num_pc, dtype=tf.float32)
+        self.place_cell_activations = tf.Variable(tf.zeros(num_pc, dtype=tf.float32))
 
         # Time constant for updating place cell activations
         self.tau = timestep / 1000  # Convert timestep to seconds
@@ -154,8 +154,8 @@ class PlaceCellLayer:
 
     def reset_activations(self):
         """Reset place cell activations and related variables to zero."""
-        self.place_cell_activations.assign(tf.zeros_like(self.place_cell_activations))
-        self.activation_update.assign(tf.zeros_like(self.activation_update))
+        self.place_cell_activations = tf.zeros_like(self.place_cell_activations, dtype=tf.float32)
+        self.activation_update = tf.zeros_like(self.activation_update, dtype=tf.float32)
         self.place_cell_trace = None
 
     def preplay(self, direction, num_steps=1):

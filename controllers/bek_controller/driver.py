@@ -201,7 +201,8 @@ class Driver(Supervisor):
 
         # Initialize history maps for both layers
         self.hmap_z_small = np.zeros((self.num_steps, self.num_small_place_cells))
-        self.hmap_z_large = np.zeros((self.num_steps, self.num_large_place_cells))
+        if self.enable_multiscale:
+            self.hmap_z_large = np.zeros((self.num_steps, self.num_large_place_cells))
 
         self.load_rcn(
             num_reward_cells=self.num_reward_cells,
@@ -313,7 +314,7 @@ class Driver(Supervisor):
                     input_dim=720,
                     n_hd=n_hd,
                     sigma_ang=90,
-                    sigma_d=0.5,
+                    sigma_d=1,
                 )
                 self.pcn_large = PlaceCellLayer(
                     bvc_layer=bvc,
@@ -397,32 +398,32 @@ class Driver(Supervisor):
             try:
                 with open("rcn_small.pkl", "rb") as f:
                     self.rcn_small = pickle.load(f)
-                    print("Loaded existing SMALL Reward Cell Network.")
+                    print("Loaded existing Small Reward Cell Network.")
             except FileNotFoundError:
                 self.rcn_small = RewardCellLayer(
                     num_reward_cells=num_reward_cells,
                     input_dim=num_small_place_cells,
                     num_replay=num_replay,
                 )
-                print("Initialized new SMALL Reward Cell Network.")
+                print("Initialized new Small Reward Cell Network.")
 
             # --- RCN LARGE ---
             try:
                 with open("rcn_large.pkl", "rb") as f:
                     self.rcn_large = pickle.load(f)
-                    print("Loaded existing LARGE Reward Cell Network.")
+                    print("Loaded existing Large Reward Cell Network.")
             except FileNotFoundError:
                 self.rcn_large = RewardCellLayer(
                     num_reward_cells=num_reward_cells,
                     input_dim=num_large_place_cells,
                     num_replay=num_replay,
                 )
-                print("Initialized new LARGE Reward Cell Network.")
+                print("Initialized new Large Reward Cell Network.")
 
         else:
             # Single-scale approach
             try:
-                with open("rcn.pkl", "rb") as f:
+                with open("rcn_small.pkl", "rb") as f:
                     self.rcn = pickle.load(f)
                     print("Loaded existing Reward Cell Network.")
             except FileNotFoundError:
@@ -1185,9 +1186,9 @@ class Driver(Supervisor):
                         files_saved.append("rcn_large.pkl")
             else:
                 # Save the single RCN in single-scale mode
-                with open("rcn.pkl", "wb") as output:
+                with open("rcn_small.pkl", "wb") as output:
                     pickle.dump(self.rcn, output)
-                    files_saved.append("rcn.pkl")
+                    files_saved.append("rcn_small.pkl")
 
         # Save the history maps if specified
         if include_hmaps:
@@ -1205,7 +1206,7 @@ class Driver(Supervisor):
                 files_saved.append("hmap_z_small.pkl")
 
             # Save the large PCN activations only if multiscale
-            if self.enable_multiscale and hasattr(self, "hmap_z_large"):
+            if self.enable_multiscale:
                 with open("hmap_z_large.pkl", "wb") as output:
                     pickle.dump(self.hmap_z_large[: self.step_count], output)
                     files_saved.append("hmap_z_large.pkl")
@@ -1238,10 +1239,8 @@ class Driver(Supervisor):
 
     def clear(self):
         files_to_remove = [
-            "pcn.pkl",
             "pcn_small.pkl",
             "pcn_large.pkl",
-            "rcn.pkl",
             "rcn_small.pkl",
             "rcn_large.pkl",
             "hmap_x.pkl",
