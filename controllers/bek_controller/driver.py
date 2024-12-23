@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import tensorflow as tf
 from numpy.random import default_rng
@@ -6,63 +7,22 @@ from matplotlib.cm import get_cmap
 from astropy.stats import circmean, circvar
 import pickle
 import os
-import time
 import tkinter as tk
 from tkinter import N, messagebox
 from typing import Optional, List
 from controller import Supervisor, Robot
-from enum import Enum, auto
 from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
 from layers.head_direction_layer import HeadDirectionLayer
 from layers.place_cell_layer import PlaceCellLayer
 from layers.reward_cell_layer import RewardCellLayer
+from objects.RobotMode import RobotMode
+from analysis.stats_collector import stats_collector
 
 tf.random.set_seed(5)
 np.set_printoptions(precision=2)
 PI = tf.constant(np.pi)
 rng = default_rng()  # random number generator
 cmap = get_cmap("plasma")
-
-
-class RobotMode(Enum):
-    """Defines the different operating modes for the robot's behavior and learning.
-
-    The robot can operate in several modes that control its behavior, learning mechanisms,
-    and data collection. These modes determine how the robot explores its environment,
-    learns from experiences, and utilizes learned information.
-
-    Modes:
-        LEARN_OJAS: Initial learning phase where the robot randomly explores while only
-            enabling competition (Oja's rule) between place cells. Runs until time limit.
-
-        LEARN_HEBB: Secondary learning phase with both Oja's rule and tripartite (Hebbian)
-            learning enabled during random exploration. Must run after LEARN_OJAS since
-            place cells need to stabilize first.
-
-        DMTP: Delayed Matching to Place task. Random exploration with both learning rules
-            enabled until goal is reached, then updates reward map in reward cell network.
-
-        EXPLOIT: Goal-directed navigation using the learned reward map. Both learning
-            rules remain enabled while the robot navigates to known goals.
-
-        PLOTTING: Random exploration mode with all learning disabled in both place cell
-            and reward cell networks. Used for visualization and analysis.
-
-        MANUAL_CONTROL: Enables direct user control of the robot in the Webots simulator
-            through keyboard inputs.
-
-        RECORDING: Random exploration with learning disabled, focused on collecting and
-            saving sensor data for offline analysis or training.
-    """
-
-    LEARN_OJAS = auto()
-    LEARN_HEBB = auto()
-    DMTP = auto()
-    EXPLOIT = auto()
-    PLOTTING = auto()
-    MANUAL_CONTROL = auto()
-    RECORDING = auto()
-
 
 class Driver(Supervisor):
     """Controls robot navigation and learning using neural networks for place and reward cells.
@@ -113,6 +73,7 @@ class Driver(Supervisor):
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
         enable_multiscale: Optional[bool] = False,
+        stats_collector: Optional[stats_collector] = None,  # Pass a Stats object
     ):
         """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
@@ -186,6 +147,9 @@ class Driver(Supervisor):
         self.right_position_sensor = self.getDevice("right wheel sensor")
         self.right_position_sensor.enable(self.timestep)
 
+        self.start_loc = start_loc
+        self.stats_collector = stats_collector
+
         if self.mode == RobotMode.LEARN_OJAS:
             self.clear()
 
@@ -243,7 +207,7 @@ class Driver(Supervisor):
             self.robot.resetPhysics()
         else:
             self.robot.getField("translation").setSFVec3f(
-                [start_loc[0], 0.5, start_loc[1]]
+                [self.start_loc[0], 0.5, self.start_loc[1]]
             )
             self.robot.resetPhysics()
 
@@ -913,6 +877,11 @@ class Driver(Supervisor):
         # Shape: scalar (int) - 1 if collision detected on the right bumper, 0 otherwise.
         self.collided.scatter_nd_update([[1]], [int(self.right_bumper.getValue())])
 
+        # Log collisions
+        if np.any(self.collided):
+            if self.stats_collector:
+                self.stats_collector.update_stat("collision_count", self.stats_collector.stats["collision_count"] + 1)
+
         # Get environmental complexity
         self.vis_density = self.compute_visual_density(self.boundaries, self.current_heading_deg)
 
@@ -995,7 +964,7 @@ class Driver(Supervisor):
         curr_pos_2d = [curr_pos[0], curr_pos[2]]  # Use only x and z coordinates
 
         # In LEARN_OJAS mode, save the layers after runtime is reached
-        if self.mode == RobotMode.LEARN_OJAS and self.getTime() >= 60 * self.run_time_minutes:
+        if self.mode == RobotMode.LEARN_OJAS or self.mode == RobotMode.PLOTTING and self.getTime() >= 60 * self.run_time_minutes:
             self.save()
 
         # In DMTP mode, continue running even after finding the goal
@@ -1033,11 +1002,11 @@ class Driver(Supervisor):
             if self.enable_multiscale:
                 self.rcn_small.update_reward_cell_activations(
                     self.pcn_small.place_cell_activations,
-                    visit=True
+                    visit=True,
                 )
                 self.rcn_large.update_reward_cell_activations(
                     self.pcn_large.place_cell_activations,
-                    visit=True
+                    visit=True,
                 )
                 print("Replay called for RCN Small")
                 self.rcn_small.replay(pcn=self.pcn_small)
@@ -1075,11 +1044,33 @@ class Driver(Supervisor):
             print(f"Distance to goal: {distance_to_goal}")
             print(f"Time taken: {self.getTime()}")
 
-            # Save layers if not in Exploit mode
-            self.save(
-                include_rcn=(self.mode != RobotMode.EXPLOIT),
-                include_pcn=(self.mode != RobotMode.EXPLOIT),
-            )
+            if self.stats_collector:
+                # Generate trial name based on existing JSON files
+                stats_folder = os.path.join("controllers", "bek_controller", "analysis", "stats")
+                os.makedirs(stats_folder, exist_ok=True)
+                existing_files = [f for f in os.listdir(stats_folder) if f.endswith(".json")]
+                trial_index = len(existing_files) + 1
+                trial_id = f"trial_{trial_index}_corner_{self.start_loc[0]}_{self.start_loc[1]}"
+                
+                # Update stats and save JSON
+                self.stats_collector.update_stat("trial_id", trial_id)
+                self.stats_collector.update_stat("start_location", self.start_loc)
+                self.stats_collector.update_stat("goal_location", self.goal_location)
+                self.stats_collector.update_stat("total_distance_traveled", round(self.compute_path_length(),2))
+                self.stats_collector.update_stat("total_time_secs", round(self.getTime(), 2))
+                self.stats_collector.update_stat("success", self.getTime() <= 5 * 60)  # Success if goal reached in under 5 minutes
+                self.stats_collector.save_stats(trial_id)
+
+            root = tk.Tk()
+            root.withdraw()  # Hide the main window
+            root.attributes("-topmost", True)  # Keep the dialog on top
+            root.update()
+            messagebox.showinfo("Information", "Trial Saved! Press OK to exit.")
+            root.destroy()
+
+            # Pause the simulation
+            time.sleep(2)
+            self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
 
     ########################################### AUTO PILOT ###########################################
 
@@ -1156,7 +1147,7 @@ class Driver(Supervisor):
         )
 
         # Define a maximum influence radius for the goal
-        max_influence_radius = 0.75  # Adjust based on environment size
+        max_influence_radius = 1  # Adjust based on environment size
         goal_weight = np.exp(-distance_to_goal / max_influence_radius)  # Exponential decay
 
         # Combine wall density and goal gradient
@@ -1164,6 +1155,7 @@ class Driver(Supervisor):
 
         # Clamp between 0 and 1
         vis_density = np.clip(vis_density, 0, 1)
+
         return vis_density
 
     ########################################### HELPER METHODS ###########################################
@@ -1245,6 +1237,10 @@ class Driver(Supervisor):
             self.sense()
             if not orientation < neg * angle:
                 break
+        # Log the turn count
+        if self.stats_collector:
+            self.stats_collector.update_stat("turn_count", self.stats_collector.stats["turn_count"] + 1)
+
         self.stop()
         self.sense()
 
@@ -1293,8 +1289,8 @@ class Driver(Supervisor):
         include_hmaps: bool = True,
     ):
         """
-        Saves the state of the PCN (Place Cell Network), RCN (Reward Cell Network), and optionally
-        the maps that store the agent's movement and activations.
+        Saves the state of the PCN (Place Cell Network), RCN (Reward Cell Network), 
+        history maps, and optionally navigation statistics.
 
         Parameters:
             include_pcn (bool): If True, saves both the small and large Place Cell Networks (PCN).
@@ -1305,7 +1301,6 @@ class Driver(Supervisor):
 
         # Save PCNs
         if include_pcn:
-            # Always save the small PCN
             with open("pcn_small.pkl", "wb") as output:
                 pickle.dump(self.pcn_small, output)
                 files_saved.append("pcn_small.pkl")
@@ -1319,7 +1314,6 @@ class Driver(Supervisor):
         # Save RCNs
         if include_rcn:
             if self.enable_multiscale:
-                # Save both RCNs in multiscale mode
                 if hasattr(self, "rcn_small"):
                     with open("rcn_small.pkl", "wb") as output:
                         pickle.dump(self.rcn_small, output)
@@ -1329,12 +1323,11 @@ class Driver(Supervisor):
                         pickle.dump(self.rcn_large, output)
                         files_saved.append("rcn_large.pkl")
             else:
-                # Save the single RCN in single-scale mode
                 with open("rcn_small.pkl", "wb") as output:
                     pickle.dump(self.rcn, output)
                     files_saved.append("rcn_small.pkl")
 
-        # Save the history maps if specified
+        # Save history maps
         if include_hmaps:
             with open("hmap_x.pkl", "wb") as output:
                 pickle.dump(self.hmap_x[: self.step_count], output)
@@ -1344,12 +1337,10 @@ class Driver(Supervisor):
                 pickle.dump(self.hmap_y[: self.step_count], output)
                 files_saved.append("hmap_y.pkl")
 
-            # Save the small PCN activations always
             with open("hmap_z_small.pkl", "wb") as output:
                 pickle.dump(self.hmap_z_small[: self.step_count], output)
                 files_saved.append("hmap_z_small.pkl")
 
-            # Save the large PCN activations only if multiscale
             if self.enable_multiscale:
                 with open("hmap_z_large.pkl", "wb") as output:
                     pickle.dump(self.hmap_z_large[: self.step_count], output)
