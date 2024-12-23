@@ -12,12 +12,13 @@ bot = Driver()
 stats_collector = stats_collector(output_dir="controllers\\bek_controller\\analysis\\stats")
 
 bot.initialization(
-    mode=RobotMode.LEARN_OJAS,
-    randomize_start_loc=True,
-    run_time_hours=2,
-    dmtp_run_time_hours=0.5,
-    start_loc=[2, -2],
+    mode=RobotMode.PLOTTING,
+    randomize_start_loc=False,
+    run_time_hours=1,
+    dmtp_run_time_hours=0.2,
+    start_loc=[2, 2],
     enable_multiscale=True,
     stats_collector=stats_collector
 )
+
 bot.run()
