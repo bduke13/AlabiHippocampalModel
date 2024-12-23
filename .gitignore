@@ -33,3 +33,6 @@ controllers/bek_controller/network_plots.ipynb
 
 # Ignore controller (should force commit this)
 controllers/bek_controller/bek_controller.py
+
+# Ignore stats
+*trial_*.json
