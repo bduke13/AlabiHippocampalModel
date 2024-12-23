@@ -108,6 +108,7 @@ class Driver(Supervisor):
         mode=RobotMode.PLOTTING,
         randomize_start_loc: bool = True,
         run_time_hours: int = 1,
+        dmtp_run_time_hours: int = 0.5,
         start_loc: Optional[List[int]] = None,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
@@ -139,6 +140,8 @@ class Driver(Supervisor):
         self.n_hd = 8
         self.timestep = 32 * 3
         self.tau_w = 10  # time constant for the window function
+        if self.mode == RobotMode.EXPLOIT:
+            self.tau_w = 3
         self.enable_multiscale = enable_multiscale
 
         # Robot parameters
@@ -148,6 +151,7 @@ class Driver(Supervisor):
         self.wheel_radius = 0.031
         self.axle_length = 0.271756
         self.run_time_minutes = run_time_hours * 60
+        self.dmtp_run_time_minutes = dmtp_run_time_hours * 60
         self.step_count = 0
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
         self.goal_r = {"explore": 0.3, "exploit": 0.5}
@@ -314,7 +318,7 @@ class Driver(Supervisor):
                     input_dim=720,
                     n_hd=n_hd,
                     sigma_ang=90,
-                    sigma_d=1,
+                    sigma_d=1.2,
                 )
                 self.pcn_large = PlaceCellLayer(
                     bvc_layer=bvc,
@@ -424,10 +428,10 @@ class Driver(Supervisor):
             # Single-scale approach
             try:
                 with open("rcn_small.pkl", "rb") as f:
-                    self.rcn = pickle.load(f)
+                    self.rcn_small = pickle.load(f)
                     print("Loaded existing Reward Cell Network.")
             except FileNotFoundError:
-                self.rcn = RewardCellLayer(
+                self.rcn_small = RewardCellLayer(
                     num_reward_cells=num_reward_cells,
                     input_dim=num_small_place_cells,  # Or whichever you prefer
                     num_replay=num_replay,
@@ -512,10 +516,10 @@ class Driver(Supervisor):
                 )
             else:
                 # Single-scale approach
-                self.rcn.update_reward_cell_activations(
+                self.rcn_small.update_reward_cell_activations(
                     self.pcn_small.place_cell_activations
                 )
-                self.rcn.td_update(
+                self.rcn_small.td_update(
                     self.pcn_small.place_cell_activations, next_reward=actual_reward
                 )
 
@@ -551,8 +555,9 @@ class Driver(Supervisor):
             - Switches to exploration if reward expectations are too low
 
         If enable_multiscale == True, uses both pcn_small + rcn_small AND pcn_large + rcn_large.
-        Otherwise, uses a single-scale approach (pcn_large + rcn).
+        Otherwise, uses a single-scale approach (pcn_small + rcn).
         """
+
         # Stop movement and update sensor readings
         self.stop()
         self.sense()
@@ -578,26 +583,33 @@ class Driver(Supervisor):
                 self.rcn_small.update_reward_cell_activations(
                     self.pcn_small.place_cell_activations, visit=True
                 )
-                max_reward_activation_small = tf.reduce_max(self.rcn_small.reward_cell_activations)
+                max_reward_activation_small = tf.reduce_max(
+                    self.rcn_small.reward_cell_activations
+                )
 
                 # --- LARGE LAYER RCN ---
                 self.rcn_large.update_reward_cell_activations(
                     self.pcn_large.place_cell_activations, visit=True
                 )
-                max_reward_activation_large = tf.reduce_max(self.rcn_large.reward_cell_activations)
+                max_reward_activation_large = tf.reduce_max(
+                    self.rcn_large.reward_cell_activations
+                )
 
                 # If both networks' reward activations are too low, explore instead
-                if max_reward_activation_small <= 1e-6 and max_reward_activation_large <= 1e-6:
+                if (
+                    max_reward_activation_small <= 1e-6
+                    and max_reward_activation_large <= 1e-6
+                ):
                     print("All reward signals too low. Switching to exploration.")
                     self.explore()
                     return
 
             else:
                 # --- SINGLE-SCALE RCN ---
-                self.rcn.update_reward_cell_activations(
+                self.rcn_small.update_reward_cell_activations(
                     self.pcn_small.place_cell_activations, visit=True
                 )
-                max_reward_activation = tf.reduce_max(self.rcn.reward_cell_activations)
+                max_reward_activation = tf.reduce_max(self.rcn_small.reward_cell_activations)
 
                 # If the reward is too low, switch to exploration
                 if max_reward_activation <= 1e-6:
@@ -610,32 +622,56 @@ class Driver(Supervisor):
             # -------------------------------------------------
             angles = np.linspace(0, 2 * np.pi, self.n_hd, endpoint=False)
 
-            # For small scale
             if self.enable_multiscale:
                 pot_rew_small = np.zeros(self.n_hd)
                 pot_rew_large = np.zeros(self.n_hd)
+                
                 for d in range(self.n_hd):
                     # "preplay" or predict small PCN activations
                     pcn_small_future = self.pcn_small.preplay(d, num_steps=num_steps)
                     self.rcn_small.update_reward_cell_activations(pcn_small_future)
-                    pot_rew_small[d] = tf.reduce_max(np.nan_to_num(self.rcn_small.reward_cell_activations))
+                    pot_rew_small[d] = tf.reduce_max(
+                        np.nan_to_num(self.rcn_small.reward_cell_activations)
+                    )
 
                     # Similarly for large PCN
                     pcn_large_future = self.pcn_large.preplay(d, num_steps=num_steps)
                     self.rcn_large.update_reward_cell_activations(pcn_large_future)
-                    pot_rew_large[d] = tf.reduce_max(np.nan_to_num(self.rcn_large.reward_cell_activations))
+                    pot_rew_large[d] = tf.reduce_max(
+                        np.nan_to_num(self.rcn_large.reward_cell_activations)
+                    )
 
-                # Combine or keep them separate as desired; here's a simple sum to choose a direction
-                combined_pot_rew = pot_rew_small + pot_rew_large
+                # -------------------------------------------------
+                # NEW: Weighted combination based on vis_density
+                # -------------------------------------------------
+                # Let alpha = self.vis_density (clamped to [0,1])
+                alpha = float(np.clip(self.vis_density, 0.0, 1.0))
+                
+                # Weighted combination
+                #  - In "dense" areas (vis_density high), rely more on the small scale
+                #  - In open areas (vis_density low), rely more on the large scale
+                combined_pot_rew = alpha * pot_rew_small + (1.0 - alpha) * pot_rew_large
+
+                #  Print which scale contributes the most
+                small_contribution = alpha * np.sum(pot_rew_small)
+                large_contribution = (1.0 - alpha) * np.sum(pot_rew_large)
+
+                if small_contribution > large_contribution:
+                    print("Small scale has the most impact on the decision.")
+                else:
+                    print("Large scale has the most impact on the decision.")
+
                 self.directional_reward_estimates = combined_pot_rew
+
             else:
                 # Single-scale
                 pot_rew = np.zeros(self.n_hd)
                 for d in range(self.n_hd):
-                    # "preplay" or predict future PCN activations
                     pcn_future = self.pcn_small.preplay(d, num_steps=num_steps)
-                    self.rcn.update_reward_cell_activations(pcn_future)
-                    pot_rew[d] = tf.reduce_max(np.nan_to_num(self.rcn.reward_cell_activations))
+                    self.rcn_small.update_reward_cell_activations(pcn_future)
+                    pot_rew[d] = tf.reduce_max(
+                        np.nan_to_num(self.rcn_small.reward_cell_activations)
+                    )
                 self.directional_reward_estimates = pot_rew
 
             # -------------------------------------------------
@@ -659,12 +695,16 @@ class Driver(Supervisor):
 
                 # Perform a final TD update before returning
                 if self.enable_multiscale:
-                    # small
-                    self.rcn_small.td_update(self.pcn_small.place_cell_activations, max_reward)
-                    # large
-                    self.rcn_large.td_update(self.pcn_large.place_cell_activations, max_reward)
+                    self.rcn_small.td_update(
+                        self.pcn_small.place_cell_activations, max_reward
+                    )
+                    self.rcn_large.td_update(
+                        self.pcn_large.place_cell_activations, max_reward
+                    )
                 else:
-                    self.rcn.td_update(self.pcn_small.place_cell_activations, max_reward)
+                    self.rcn_small.td_update(
+                        self.pcn_small.place_cell_activations, max_reward
+                    )
 
                 return
             else:
@@ -673,9 +713,10 @@ class Driver(Supervisor):
                     action_angle -= np.sign(action_angle) * 2 * np.pi
 
                 # Calculate the angle to turn
-                angle_to_turn = -np.deg2rad(np.rad2deg(action_angle) - self.current_heading_deg)
+                angle_to_turn = -np.deg2rad(
+                    np.rad2deg(action_angle) - self.current_heading_deg
+                )
                 angle_to_turn %= (2 * np.pi)
-
                 self.turn(angle_to_turn)
 
             # -------------------------------------------------
@@ -692,13 +733,25 @@ class Driver(Supervisor):
                 actual_reward = self.get_actual_reward()
 
                 if self.enable_multiscale:
-                    self.rcn_small.update_reward_cell_activations(self.pcn_small.place_cell_activations)
-                    self.rcn_small.td_update(self.pcn_small.place_cell_activations, next_reward=actual_reward)
-                    self.rcn_large.update_reward_cell_activations(self.pcn_large.place_cell_activations)
-                    self.rcn_large.td_update(self.pcn_large.place_cell_activations, next_reward=actual_reward)
+                    self.rcn_small.update_reward_cell_activations(
+                        self.pcn_small.place_cell_activations
+                    )
+                    self.rcn_small.td_update(
+                        self.pcn_small.place_cell_activations, next_reward=actual_reward
+                    )
+                    self.rcn_large.update_reward_cell_activations(
+                        self.pcn_large.place_cell_activations
+                    )
+                    self.rcn_large.td_update(
+                        self.pcn_large.place_cell_activations, next_reward=actual_reward
+                    )
                 else:
-                    self.rcn.update_reward_cell_activations(self.pcn_small.place_cell_activations)
-                    self.rcn.td_update(self.pcn_small.place_cell_activations, next_reward=actual_reward)
+                    self.rcn_small.update_reward_cell_activations(
+                        self.pcn_small.place_cell_activations
+                    )
+                    self.rcn_small.td_update(
+                        self.pcn_small.place_cell_activations, next_reward=actual_reward
+                    )
 
     def get_actual_reward(self):
         """Determines the actual reward for the agent at the current state.
@@ -939,17 +992,80 @@ class Driver(Supervisor):
         Check if the robot has reached the goal and perform necessary actions when the goal is reached.
         """
         curr_pos = self.robot.getField("translation").getSFVec3f()
-        # DMTP Mode and exploit mode both stop when they both see the goal
-        if (
-            self.mode == RobotMode.EXPLOIT or self.mode == RobotMode.DMTP
-        ) and np.allclose(
-            self.goal_location, [curr_pos[0], curr_pos[2]], 0, self.goal_r["exploit"]
+        curr_pos_2d = [curr_pos[0], curr_pos[2]]  # Use only x and z coordinates
+
+        # In LEARN_OJAS mode, save the layers after runtime is reached
+        if self.mode == RobotMode.LEARN_OJAS and self.getTime() >= 60 * self.run_time_minutes:
+            self.save()
+
+        # In DMTP mode, continue running even after finding the goal
+        elif self.mode == RobotMode.DMTP and np.allclose(
+            self.goal_location, curr_pos_2d, atol=self.goal_r["explore"]
         ):
-            self.auto_pilot()  # Navigate to the goal slowly and call rcn.replay()
-            print("Goal reached")
+            print("Goal found in DMTP mode. Adjusting position and replaying activations.")
+            
+            step = 0
+            # Ensure precise positioning if needed
+            while not np.allclose(
+                self.goal_location, [curr_pos[0], curr_pos[2]], 0, self.goal_r["explore"]
+            ):
+                curr_pos = self.robot.getField("translation").getSFVec3f()
+                delta_x = curr_pos[0] - self.goal_location[0]
+                delta_y = curr_pos[2] - self.goal_location[1]
+
+                if delta_x >= 0:
+                    theta = tf.math.atan(abs(delta_y), abs(delta_x))
+                    desired = np.pi * 2 - theta if delta_y >= 0 else np.pi + theta
+                elif delta_y >= 0:
+                    theta = tf.math.atan(abs(delta_y), abs(delta_x))
+                    desired = np.pi / 2 - theta
+                else:
+                    theta = tf.math.atan(abs(delta_x), abs(delta_y))
+                    desired = np.pi - theta
+                self.turn(-(desired - np.deg2rad(self.current_heading_deg)))
+                self.sense()
+                self.compute_pcn_activations()
+                self.update_hmaps()
+                self.forward()
+                step += 1
+            
+            # Replay activations
+            if self.enable_multiscale:
+                self.rcn_small.update_reward_cell_activations(
+                    self.pcn_small.place_cell_activations,
+                    visit=True
+                )
+                self.rcn_large.update_reward_cell_activations(
+                    self.pcn_large.place_cell_activations,
+                    visit=True
+                )
+                print("Replay called for RCN Small")
+                self.rcn_small.replay(pcn=self.pcn_small)
+                print(f"small scale RCN activations: {self.rcn_small.reward_cell_activations}")
+                print("Replay called for RCN Large")
+                self.rcn_large.replay(pcn=self.pcn_large)
+                print(f"large scale RCN activations: {self.rcn_large.reward_cell_activations}")
+            else:
+                self.rcn_small.update_reward_cell_activations(
+                    self.pcn_small.place_cell_activations,
+                    visit=True
+                )                
+                self.rcn_small.replay(pcn=self.pcn_small)
+
+            # Continue exploration
+            print("Resuming exploration after replay.")
+            if self.getTime() >= 60 * self.dmtp_run_time_minutes:
+                self.save()
+        
+        # For EXPLOIT mode, stop and perform auto_pilot when the goal is reached
+        elif self.mode == RobotMode.EXPLOIT and np.allclose(
+            self.goal_location, curr_pos_2d, atol=self.goal_r["exploit"]
+        ):
+            self.auto_pilot()  # Navigate to the goal and replay activations
+            print("Goal reached.")
             print(f"Total distance traveled: {self.compute_path_length()}")
             print(f"Started at: {np.array([self.hmap_x[0], self.hmap_y[0]])}")
-            print(f"Current position: {np.array([curr_pos[0], curr_pos[2]])}")
+            print(f"Current position: {np.array(curr_pos_2d)}")
             distance_to_goal = (
                 np.linalg.norm(
                     np.array([self.hmap_x[0], self.hmap_y[0]]) - self.goal_location
@@ -959,13 +1075,11 @@ class Driver(Supervisor):
             print(f"Distance to goal: {distance_to_goal}")
             print(f"Time taken: {self.getTime()}")
 
-            # Don't save any of the layers during exploit mode
+            # Save layers if not in Exploit mode
             self.save(
                 include_rcn=(self.mode != RobotMode.EXPLOIT),
                 include_pcn=(self.mode != RobotMode.EXPLOIT),
             )
-        elif self.getTime() >= 60 * self.run_time_minutes:
-            self.save()
 
     ########################################### AUTO PILOT ###########################################
 
@@ -996,14 +1110,30 @@ class Driver(Supervisor):
             self.forward()
             step += 1
 
-        # Replay the place cell activations
-        self.rcn.replay(pcn=self.pcn_small)
+        # Replay the place cell activations once the goal is reached
+        print("Goal reached! Replaying activations...")
+        if self.enable_multiscale:
+            self.rcn_small.replay(pcn=self.pcn_small)
+            self.rcn_large.replay(pcn=self.pcn_large)
+        else:
+            self.rcn_small.replay(pcn=self.pcn_small)
 
     ########################################### ENVIRONMENTAL COMPLEXITY ###########################################
     
     def compute_visual_density(self, lidar_data, heading_angle):
+        """
+        Computes the visual density based on LiDAR data and adds a gradient effect
+        with a max value at the goal location.
+
+        Args:
+            lidar_data (array): LiDAR readings indicating distances to obstacles.
+            heading_angle (float): Current heading angle of the agent in degrees.
+
+        Returns:
+            float: The computed visual density, incorporating proximity to the goal.
+        """
         # Threshold distance for 'near' obstacles
-        threshold_distance = 0.5
+        threshold_distance = 0.75
 
         # Count the number of readings below the threshold
         near_obstacle_count = np.sum(lidar_data < threshold_distance)
@@ -1014,9 +1144,23 @@ class Driver(Supervisor):
         k = 2.5  # Adjust k for the steepness of the gradient
         vis_density = 1 - np.exp(-k * proportion_near_obstacles)
 
+        # Directional weight adjustment based on heading angle
         heading_angle_rad = np.deg2rad(heading_angle)
         directional_weight = 1 + 0.5 * np.cos(heading_angle_rad)
         vis_density *= directional_weight
+
+        # Add radial gradient centered at the goal
+        curr_pos = self.robot.getField("translation").getSFVec3f()
+        distance_to_goal = np.linalg.norm(
+            [curr_pos[0] - self.goal_location[0], curr_pos[2] - self.goal_location[1]]
+        )
+
+        # Define a maximum influence radius for the goal
+        max_influence_radius = 0.75  # Adjust based on environment size
+        goal_weight = np.exp(-distance_to_goal / max_influence_radius)  # Exponential decay
+
+        # Combine wall density and goal gradient
+        vis_density += goal_weight
 
         # Clamp between 0 and 1
         vis_density = np.clip(vis_density, 0, 1)
