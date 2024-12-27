@@ -1,3 +1,4 @@
+# %%
 import numpy as np
 import matplotlib.pyplot as plt
 import pickle
@@ -102,24 +103,24 @@ if __name__ == "__main__":
     os.makedirs(output_dir, exist_ok=True)
 
     # Load the colors list
-    with open("colors.json", "r") as f:
+    with open("visualizations/colors.json", "r") as f:
         colors = json.load(f)
 
     # Convert hex colors to RGB format
     colors_rgb = [mcolors.to_rgb(c) for c in colors]
 
     # Load hmap data
-    with open("../hmap_x.pkl", "rb") as f:
+    with open("hmap_x.pkl", "rb") as f:
         hmap_x = np.array(pickle.load(f))
-    with open("../hmap_y.pkl", "rb") as f:
+    with open("hmap_y.pkl", "rb") as f:
         hmap_y = np.array(pickle.load(f))
-    with open("../hmap_z.pkl", "rb") as f:
+    with open("hmap_z.pkl", "rb") as f:
         hmap_z = np.asarray(pickle.load(f))
 
     # Option to provide a list of specific place cells
     specific_cells = (
         # Replace with list of specific cell indices if needed, e.g., [0, 5, 10]
-        [5]
+        [5, 0]
     )
 
     # If no specific cells are provided, select the top 100 cells based on total activation
