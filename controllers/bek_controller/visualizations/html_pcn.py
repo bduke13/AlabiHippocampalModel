@@ -158,9 +158,13 @@ if __name__ == "__main__":
     with open("hmap_z.pkl", "rb") as f:
         hmap_z = np.asarray(pickle.load(f))
 
-    # Use sequential indices without sorting
-    cell_indices = np.arange(hmap_z.shape[1])
-
+    # Try to read cells.csv if it exists, otherwise use all cells
+    if os.path.exists("cells.csv"):
+        cell_indices = np.loadtxt("cells.csv", dtype=int)
+        print(f"Loaded {len(cell_indices)} cell indices from cells.csv")
+    else:
+        print("cells.csv not found, using all cells")
+        cell_indices = np.arange(hmap_z.shape[1])
     # Generate and save plots in groups of 5
     for i in range(0, len(cell_indices), 5):
         group = cell_indices[i : i + 5]
