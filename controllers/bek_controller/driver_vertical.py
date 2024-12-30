@@ -23,15 +23,15 @@ PI = tf.constant(np.pi)
 rng = default_rng()  # random number generator
 cmap = get_cmap("plasma")
 
-from threaded_window import TrackingPlotWindow, GenericPlotProcess
+# from threaded_window import TrackingPlotWindow, GenericPlotProcess
 
 # Create plot windows and processes
-tracking_window = TrackingPlotWindow(
-    history_buffer_len=1000,
-    xlim=(-5, 5),
-    ylim=(-5, 5),
-)
-tracking_process = GenericPlotProcess(tracking_window, update_interval=50)
+# tracking_window = TrackingPlotWindow(
+#    history_buffer_len=1000,
+#    xlim=(-5, 5),
+#    ylim=(-5, 5),
+# )
+# tracking_process = GenericPlotProcess(tracking_window, update_interval=50)
 
 
 class RobotMode(Enum):
@@ -143,7 +143,7 @@ class Driver(Supervisor):
         self.mode = mode
 
         # Model parameters
-        self.num_place_cells = 200
+        self.num_place_cells = 600
         self.num_reward_cells = 1
         self.n_hd = 8
         self.timestep = 32 * 3
@@ -151,11 +151,11 @@ class Driver(Supervisor):
 
         # Parameters for 3D BVC
         # Define preferred vertical angles and corresponding sigma values
-        self.preferred_vertical_angles = [0]
-        self.sigma_d_list = [0.1]
-        self.sigma_ang_list = [0.2]
-        self.sigma_vert_list = [0.01]
-        self.scaling_factors = [1.0]
+        self.preferred_vertical_angles = [0.0, 0.2, 0.4]
+        self.sigma_d_list = [0.5] * len(self.preferred_vertical_angles)
+        self.sigma_ang_list = [0.2] * len(self.preferred_vertical_angles)
+        self.sigma_vert_list = [0.02] * len(self.preferred_vertical_angles)
+        self.scaling_factors = [1.0] * len(self.preferred_vertical_angles)
         self.num_bvc_per_dir = 50
 
         if sigma_d:
@@ -412,9 +412,9 @@ class Driver(Supervisor):
             if self.done:
                 break
 
-            curr_pos = self.robot.getField("translation").getSFVec3f()
+    #            curr_pos = self.robot.getField("translation").getSFVec3f()
 
-            tracking_process.add_data((curr_pos[0], curr_pos[2]))
+    #            tracking_process.add_data((curr_pos[0], curr_pos[2]))
 
     ########################################### EXPLORE ###########################################
 
@@ -431,8 +431,7 @@ class Driver(Supervisor):
         Returns:
             None
         """
-
-        for s in range(self.tau_w):
+        for _ in range(self.tau_w):
             self.sense()
 
             # Update the reward cell activations
@@ -452,13 +451,6 @@ class Driver(Supervisor):
                 )  # Random angle between -180 and 180 degrees (in radians)
                 self.turn(random_angle)
                 break
-
-            if (
-                self.mode == RobotMode.DMTP
-                or self.mode == RobotMode.LEARN_HEBB
-                or self.mode == RobotMode.EXPLOIT
-            ):
-                self.check_goal_reached()
 
             self.compute()
             self.forward()
