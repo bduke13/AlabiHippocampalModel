@@ -44,7 +44,7 @@ def plot_overlayed_cells(
     # Total number of place cells based on hmap_z's shape
     num_cells_to_plot = hmap_z.shape[1]
 
-    # Calculate total activation per cell
+    # Calculate total activation per cell for cell selection
     total_activation_per_cell = np.sum(hmap_z, axis=0)
 
     # Get indices of cells with non-zero activation
@@ -168,14 +168,21 @@ def plot_overlayed_cells(
 
 
 if __name__ == "__main__":
-    # Default paths relative to script location
+    # Load data
+    with open("hmap_x.pkl", "rb") as f:
+        hmap_x = np.array(pickle.load(f))
+    with open("hmap_y.pkl", "rb") as f:
+        hmap_y = np.array(pickle.load(f))
+    with open("hmap_z.pkl", "rb") as f:
+        hmap_z = np.asarray(pickle.load(f))
 
+    # Create visualization
     plot_overlayed_cells(
         hmap_x_path="hmap_x.pkl",
         hmap_y_path="hmap_y.pkl",
         hmap_z_path="hmap_z.pkl",
         colors_path="visualizations/colors.json",
-        gridsize=50,
+        gridsize=100,
         save_plot=False,
         suffix="test",
     )
