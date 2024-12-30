@@ -10,7 +10,7 @@ WorldInfo {
 }
 Viewpoint {
   orientation 1 0 0 4.71238898038469
-  position 6.176887106309842e-05 26.144258986436746 1.477319981418963e-07
+  position 1.9242776959334068e-16 25.116126171045778 -3.605990211917443e-15
   near 0.1
   follow "Create"
   followType "None"
@@ -25,8 +25,18 @@ DirectionalLight {
   direction 0 -1 0
 }
 DEF agent Create {
-  translation 1 0.042985 1
-  rotation 0.0005780983762818881 0.9999995813385393 -0.0007093130574921395 1.7732797145942794
+  hidden linearVelocity_0 0.4491594557695157 5.9052422847505765e-05 0.2099062997459193
+  hidden angularVelocity_0 0.0031228887023730294 0.012032537523835657 0.006666843107474474
+  hidden linearVelocity_6 0.44922006912621487 3.818063114660772e-06 0.2099137968994291
+  hidden angularVelocity_6 6.772308126274309 -0.011937522682153532 -14.490835160673049
+  hidden linearVelocity_7 0.44919203103865896 -1.5300963000360297e-05 0.20995123552480086
+  hidden angularVelocity_7 6.772347156039062 -0.01186487377584863 -14.490816395942336
+  hidden linearVelocity_11 0.4486619110779231 0.0010121856088456047 0.20838454821343708
+  hidden angularVelocity_11 0.0031228869569842185 0.012032538977478966 0.006666843324186076
+  hidden linearVelocity_12 0.44866190653883836 0.00101226150268273 0.20838441450827405
+  hidden angularVelocity_12 0.0031228869569842107 0.01203253897747626 0.006666843324186647
+  translation -3.559508222213554 0.04420015998436299 0.4571123278629839
+  rotation 0.00043032685320199324 0.9999995876798031 -0.0007996618179486224 -2.007551517646256
   controller "bek_controller"
   supervisor TRUE
   bodySlot [
@@ -47,36 +57,14 @@ DEF agent Create {
           maxRange 10
         }
         DEF vertical-range-finder RangeFinder {
-          rotation 1 0 0 -0.785398  # Rotated 45 degrees around X axis
-          fieldOfView 6.28  # 360 degrees horizontal
-          verticalFieldOfView 0.785398  # 45 degrees vertical FOV
-          width 720  # horizontal resolution
-          height 360  # vertical resolution to get good sampling of the vertical space
+          translation 0 0.1 0
+          rotation 1 0 0 0
+          name "vertical-range-finder"
+          fieldOfView 6.28
+          width 180
+          height 90
           spherical TRUE
-          maxRange 10
-          name "vertical-range-finder"  # Added name field to match controller
-        }
-        Camera {
-          translation -0.002 0.02 0
-          rotation 0 1 0 1.57
-          name "lefteye"
-          fieldOfView 3.14
-          width 720
-          height 360
-          spherical TRUE
-          recognition Recognition {
-          }
-        }
-        Camera {
-          translation 0.002 0.02 0
-          rotation 0 1 0 -1.57
-          name "righteye"
-          fieldOfView 3.14
-          width 720
-          height 360
-          spherical TRUE
-          recognition Recognition {
-          }
+          maxRange 20
         }
         Shape {
           appearance PBRAppearance {
@@ -136,7 +124,67 @@ Wall {
   }
 }
 Wall {
-  rotation 0 1 0 1.5708
+  translation 4.87 2.36 3.4503e-07
+  rotation 0.5773489358556708 -0.5773509358554485 -0.5773509358554485 -2.094395307179586
+  name "wall(6)"
+  size 9.7 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 2.4
+    }
+  }
+}
+Wall {
+  translation -2.7 2.36 1.87227e-05
+  rotation 0.5773489358556708 -0.5773509358554485 -0.5773509358554485 -2.094395307179586
+  name "wall(10)"
+  size 9.7 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 2.4
+    }
+  }
+}
+Wall {
+  translation 2.55 2.36 5.97724e-06
+  rotation 0.5773489358556708 -0.5773509358554485 -0.5773509358554485 -2.094395307179586
+  name "wall(7)"
+  size 9.7 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 2.4
+    }
+  }
+}
+Wall {
+  translation 0.21 2.36 1.16582e-05
+  rotation 0.5773489358556708 -0.5773509358554485 -0.5773509358554485 -2.094395307179586
+  name "wall(8)"
+  size 9.7 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 2.4
+    }
+  }
+}
+Wall {
+  translation -1.65 2.36 1.61727e-05
+  rotation 0.5773489358556708 -0.5773509358554485 -0.5773509358554485 -2.094395307179586
+  name "wall(9)"
+  size 9.7 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 2.4
+    }
+  }
+}
+Wall {
+  rotation 0.3574040741052406 0.8628571789074145 -0.35740707410586264 1.71778
   name "wall(5)"
   size 5 2.4 0.3
   appearance Roughcast {
@@ -147,6 +195,7 @@ Wall {
   }
 }
 Wall {
+  rotation 1 0 0 -0.7854053071795866
   name "wall(1)"
   size 5 2.4 0.3
   appearance Roughcast {
