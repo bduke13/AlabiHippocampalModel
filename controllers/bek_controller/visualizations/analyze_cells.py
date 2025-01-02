@@ -105,6 +105,11 @@ def analyze_place_cells(hmap_x, hmap_y, hmap_z, distance_threshold=2.0):
     print(f"\nTotal far-field activation across all cells: {total_far_field:.2f}")
     print(f"Average far-field activation per cell: {avg_far_field:.2f}")
 
+    # Sort distance_stats by total_far_activation
+    sorted_distance_stats = sorted(
+        distance_stats, key=lambda x: x["total_far_activation"], reverse=True
+    )
+
     return {
         "basic_stats": {
             "total": total_activation_per_cell,
@@ -112,20 +117,157 @@ def analyze_place_cells(hmap_x, hmap_y, hmap_z, distance_threshold=2.0):
             "max": max_activation_per_cell,
             "min": min_activation_per_cell,
         },
-        "distance_stats": distance_stats,
+        "distance_stats": sorted_distance_stats,
     }
 
 
-if __name__ == "__main__":
-    # Load data
-    with open("hmap_x.pkl", "rb") as f:
-        hmap_x = np.array(pickle.load(f))
-    with open("hmap_y.pkl", "rb") as f:
-        hmap_y = np.array(pickle.load(f))
-    with open("hmap_z.pkl", "rb") as f:
-        hmap_z = np.asarray(pickle.load(f))
+# %%
+prefix = "three_dim/"
+# Load data
+with open(f"{prefix}hmap_x.pkl", "rb") as f:
+    hmap_x = np.array(pickle.load(f))
+with open(f"{prefix}hmap_y.pkl", "rb") as f:
+    hmap_y = np.array(pickle.load(f))
+with open(f"{prefix}hmap_z.pkl", "rb") as f:
+    hmap_z = np.asarray(pickle.load(f))
 
-    # Run analysis
-    analysis_results = analyze_place_cells(
-        hmap_x, hmap_y, hmap_z, distance_threshold=2.0
+# Run analysis
+analysis_results = analyze_place_cells(hmap_x, hmap_y, hmap_z, distance_threshold=2.0)
+
+
+# %%
+# Plot the top 5 cells with highest far field activation
+import matplotlib.pyplot as plt
+
+# Create a figure with 2x3 subplots
+fig, axs = plt.subplots(3, 7, figsize=(40, 12))
+axs = axs.ravel()
+
+# Get the top 5 cells from our sorted results
+top_5_cells = [stat["cell_idx"] for stat in analysis_results["distance_stats"][:22]]
+
+for idx, cell_idx in enumerate(top_5_cells):
+    # Get activation data for this cell
+    cell_data = hmap_z[:, cell_idx]
+
+    # Create scatter plot
+    scatter = axs[idx].scatter(
+        hmap_x, hmap_y, c=cell_data, cmap="viridis", s=50, alpha=0.6
     )
+
+    # Add colorbar
+    plt.colorbar(scatter, ax=axs[idx])
+
+    # Add title with cell info
+    cell_stats = analysis_results["distance_stats"][idx]
+    axs[idx].set_title(
+        f"Cell {cell_idx}\nFar Field Act: {cell_stats['total_far_activation']:.2f}"
+    )
+
+    # Add labels
+    axs[idx].set_xlabel("X Position")
+    axs[idx].set_ylabel("Y Position")
+
+
+# Adjust layout
+plt.tight_layout()
+plt.show()
+
+# %%
+# Create a new figure for the histogram
+plt.figure(figsize=(10, 6))
+
+# Get total far field activations for all cells
+total_activations = [
+    stat["total_far_activation"] for stat in analysis_results["distance_stats"]
+]
+# Filter out zeros
+non_zero_activations = [act for act in total_activations if act > 0]
+
+# Create histogram
+plt.hist(non_zero_activations, bins=30, edgecolor="black")
+plt.title("Distribution of Non-Zero Total Far Field Activations")
+plt.xlabel("Total Far Field Activation")
+plt.ylabel("Count")
+
+# Add grid for better readability
+plt.grid(True, alpha=0.3)
+
+# Show the plot
+plt.show()
+
+# %%
+# Create combined heatmaps of top 10% cells
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
+
+# Calculate number of cells for top 10%
+num_cells = hmap_z.shape[1]
+top_n = int(np.ceil(num_cells * 0.1))  # top 10%
+top_cells = [stat["cell_idx"] for stat in analysis_results["distance_stats"][:top_n]]
+
+# Create a combined activation map
+combined_activation = np.zeros_like(hmap_x)
+for cell_idx in top_cells:
+    # Add each cell's activation to the combined map
+    combined_activation += hmap_z[:, cell_idx]
+
+# Plot raw sum
+scatter1 = ax1.scatter(
+    hmap_x, hmap_y, c=combined_activation, cmap="viridis", s=50, alpha=0.6
+)
+plt.colorbar(scatter1, ax=ax1, label="Raw Combined Activation")
+ax1.set_title(f"Raw Sum of Top {top_n} Cells\nBefore Normalization")
+ax1.set_xlabel("X Position")
+ax1.set_ylabel("Y Position")
+ax1.grid(True, alpha=0.3)
+
+# Plot normalized version
+normalized_activation = combined_activation / combined_activation.max()
+scatter2 = (
+    ax2.scatter(
+        hmap_x, hmap_y, c=normalized_activation, cmap="viridis", s=50, alpha=0.6
+    )
+    * 2
+)
+plt.colorbar(scatter2, ax=ax2, label="Normalized Combined Activation")
+ax2.set_title(f"Normalized Sum of Top {top_n} Cells\nDivided by Maximum")
+ax2.set_xlabel("X Position")
+ax2.set_ylabel("Y Position")
+ax2.grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+
+
+# %%
+# Create histogram of all activation values
+plt.figure(figsize=(12, 6))
+
+# Flatten all activation values into 1D array
+all_activations = hmap_z.flatten()
+
+# Filter out zeros for better visualization (optional)
+non_zero_activations = all_activations[all_activations > 0]
+
+# Create histogram
+plt.hist(non_zero_activations, bins=50, edgecolor="black")
+plt.title("Distribution of All Non-Zero Activation Values")
+plt.xlabel("Activation Value")
+plt.ylabel("Count")
+plt.grid(True, alpha=0.3)
+
+# Add some statistics as text
+plt.text(
+    0.98,
+    0.95,
+    f"Total points: {len(all_activations):,}\n"
+    f"Non-zero points: {len(non_zero_activations):,}\n"
+    f"Mean: {np.mean(non_zero_activations):.3f}\n"
+    f"Max: {np.max(non_zero_activations):.3f}",
+    transform=plt.gca().transAxes,
+    verticalalignment="top",
+    horizontalalignment="right",
+    bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+)
+
+plt.show()
