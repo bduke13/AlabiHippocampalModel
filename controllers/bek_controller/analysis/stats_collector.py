@@ -27,6 +27,32 @@ class stats_collector:
         """Update a specific stat."""
         if key in self.stats:
             self.stats[key] = value
+        else:
+            raise KeyError(f"Key '{key}' does not exist in stats.")
+
+    def get_stat(self, key):
+        """
+        Retrieve the value of a specific stat.
+
+        Args:
+            key (str): The key of the stat to retrieve.
+
+        Returns:
+            The value of the stat if it exists, or raises a KeyError.
+        """
+        if key in self.stats:
+            return self.stats[key]
+        else:
+            raise KeyError(f"Key '{key}' does not exist in stats.")
+
+    def get_all_stats(self):
+        """
+        Retrieve the entire stats dictionary.
+
+        Returns:
+            dict: The stats dictionary.
+        """
+        return self.stats
 
     def save_stats(self, trial_id):
         """
@@ -37,5 +63,5 @@ class stats_collector:
         """
         filename = os.path.join(self.output_dir, f"{trial_id}.json")
         with open(filename, "w") as f:
-            json.dump(self.stats, f, indent=4)
+            json.dump(self.stats, f, indent=1)
         print(f"Saved stats for {trial_id} to {filename}")
