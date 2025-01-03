@@ -78,7 +78,7 @@ DEF agent Create {
     }
   ]
 }
-Wall {
+Wall { name "Side_Wall_1"
   translation 0 0 -5
   size 10.3 2.4 0.3
   appearance Roughcast {
@@ -88,10 +88,10 @@ Wall {
     }
   }
 }
-Wall {
+Wall { name "Side_Wall_2"
   translation -5 0 0
   rotation 0 1 0 1.5708
-  name "wall(2)"
+
   size 9.7 2.4 0.3
   appearance Roughcast {
     colorOverride 0.8 0.45 0.25
@@ -100,9 +100,8 @@ Wall {
     }
   }
 }
-Wall {
+Wall { name "Side_Wall_3"
   translation 0 0 5
-  name "wall(3)"
   size 10.3 2.4 0.3
   appearance Roughcast {
     colorOverride 0.8 0.45 0.25
@@ -111,10 +110,9 @@ Wall {
     }
   }
 }
-Wall {
+Wall { name "Side_Wall_4"
   translation 5 0 0
   rotation 0 1 0 1.5708
-  name "wall(4)"
   size 9.7 2.4 0.3
   appearance Roughcast {
     colorOverride 0.8 0.45 0.25
@@ -123,85 +121,13 @@ Wall {
     }
   }
 }
-Wall {
-  translation 4.87 2.36 3.4503e-07
-  rotation 0.5773489358556708 -0.5773509358554485 -0.5773509358554485 -2.094395307179586
-  name "wall(6)"
-  size 9.7 2.4 0.3
-  appearance Roughcast {
-    colorOverride 0.8 0.45 0.25
-    textureTransform TextureTransform {
-      scale 1 2.4
-    }
-  }
-}
-Wall {
-  translation -2.7 2.36 1.87227e-05
-  rotation 0.5773489358556708 -0.5773509358554485 -0.5773509358554485 -2.094395307179586
-  name "wall(10)"
-  size 9.7 2.4 0.3
-  appearance Roughcast {
-    colorOverride 0.8 0.45 0.25
-    textureTransform TextureTransform {
-      scale 1 2.4
-    }
-  }
-}
-Wall {
-  translation 2.55 2.36 5.97724e-06
-  rotation 0.5773489358556708 -0.5773509358554485 -0.5773509358554485 -2.094395307179586
-  name "wall(7)"
-  size 9.7 2.4 0.3
-  appearance Roughcast {
-    colorOverride 0.8 0.45 0.25
-    textureTransform TextureTransform {
-      scale 1 2.4
-    }
-  }
-}
-Wall {
-  translation 0.21 2.36 1.16582e-05
-  rotation 0.5773489358556708 -0.5773509358554485 -0.5773509358554485 -2.094395307179586
-  name "wall(8)"
-  size 9.7 2.4 0.3
-  appearance Roughcast {
-    colorOverride 0.8 0.45 0.25
-    textureTransform TextureTransform {
-      scale 1 2.4
-    }
-  }
-}
-Wall {
-  translation -1.65 2.36 1.61727e-05
-  rotation 0.5773489358556708 -0.5773509358554485 -0.5773509358554485 -2.094395307179586
-  name "wall(9)"
-  size 9.7 2.4 0.3
-  appearance Roughcast {
-    colorOverride 0.8 0.45 0.25
-    textureTransform TextureTransform {
-      scale 1 2.4
-    }
-  }
-}
-Wall {
-  rotation 0.3574040741052406 0.8628571789074145 -0.35740707410586264 1.71778
-  name "wall(5)"
-  size 5 2.4 0.3
-  appearance Roughcast {
-    colorOverride 0.8 0.45 0.25
-    textureTransform TextureTransform {
-      scale 1 2.4
-    }
-  }
-}
-Wall {
-  rotation 1 0 0 -0.7854053071795866
-  name "wall(1)"
-  size 5 2.4 0.3
-  appearance Roughcast {
-    colorOverride 0.8 0.45 0.25
-    textureTransform TextureTransform {
-      scale 1 2.4
-    }
+Wall { name "Main_Ceiling"
+  translation 0 2.4 5
+  rotation 1 0 0 -1.5708
+  size 10 10 0.3
+  appearance PBRAppearance {
+    transparency 1
+    metalness 0
+    roughness 1
   }
 }
