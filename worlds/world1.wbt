@@ -1,0 +1,93 @@
+#VRML_SIM R2021a utf8
+WorldInfo {
+  info [
+    "1 obstacle"
+  ]
+  title "world1"
+  coordinateSystem "NUE"
+}
+Viewpoint {
+  orientation 1 0 0 4.71238898038469
+  position 6.176886881231866e-05 8.266143426126266 1.4772974857259536e-07
+  near 0.1
+  follow "Create"
+  followType "None"
+}
+TexturedBackground {
+}
+RectangleArena {
+  floorSize 5 5
+  floorAppearance NULL
+  wallAppearance BrushedAluminium {
+    colorOverride 0 1 1
+    IBLStrength 11
+  }
+}
+Transform {
+  translation -1 0.0001 1
+  children [
+    Shape {
+      appearance Appearance {
+        material Material {
+          diffuseColor 1 0 0
+        }
+      }
+      geometry Cylinder {
+        height 0.0001
+        radius 0.0762
+      }
+    }
+  ]
+}
+Wall {
+  translation 1.59 0 1.34
+  rotation 0 1 0 3.2647
+  name "wall3.2647"
+  size 1.0 1.2 0.15
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 1.2
+    }
+  }
+}
+DEF agent Create {
+  hidden position_0_0 45249.17206706551
+  hidden position_0_1 41597.76782541959
+  hidden rotation_8 -1 0 0 3.0810918907300775
+  hidden translation_12 -6.9630044556845405e-06 -5.603289767057429e-06 -7.3141562086931344e-06
+  hidden rotation_12 -7.097505350068368e-11 0.9999999999999999 -1.473530977373584e-10 0.7269319989228774
+  hidden translation_13 -3.1769309627449616e-07 -6.2142113273974675e-06 6.965599044228554e-07
+  hidden rotation_13 1.0737594881207881e-07 0.9999999999999902 8.831825317408958e-08 -0.7269304932988185
+  translation 0 0 0
+  rotation -0.0007384019371796149 0.999998101604535 -0.001803205452893127 -2.2756754662412746
+  controller "bek_controller"
+  supervisor TRUE
+  bodySlot [
+    Solid {
+      translation 0 0.04 0
+      children [
+        Compass {
+        }
+        DEF range-finder RangeFinder {
+          fieldOfView 6.28
+          width 720
+          height 1
+          spherical TRUE
+          maxRange 10
+        }
+        Shape {
+          appearance PBRAppearance {
+          }
+          geometry Cylinder {
+            height 0.04
+            radius 0.05
+          }
+        }
+      ]
+    }
+  ]
+}
+DirectionalLight {
+  direction 0.75 -1 0
+}
