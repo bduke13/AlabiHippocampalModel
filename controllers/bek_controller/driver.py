@@ -73,7 +73,8 @@ class Driver(Supervisor):
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
         enable_multiscale: Optional[bool] = False,
-        stats_collector: Optional[stats_collector] = None,  # Pass a Stats object
+        stats_collector: Optional[stats_collector] = None,
+        trial_id: Optional[str] = None,
     ):
         """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
@@ -94,6 +95,7 @@ class Driver(Supervisor):
             None
         """
         self.mode = mode
+        self.done = False
 
         # Model parameters
         self.num_place_cells = 200
@@ -149,6 +151,7 @@ class Driver(Supervisor):
 
         self.start_loc = start_loc
         self.stats_collector = stats_collector
+        self.trial_id = trial_id
 
         if self.mode == RobotMode.LEARN_OJAS:
             self.clear()
@@ -423,6 +426,9 @@ class Driver(Supervisor):
             if self.mode == RobotMode.MANUAL_CONTROL:
                 self.manual_control()
 
+            if self.done:
+                break
+
             elif (
                 self.mode == RobotMode.LEARN_OJAS
                 or self.mode == RobotMode.LEARN_HEBB
@@ -577,7 +583,6 @@ class Driver(Supervisor):
 
                 # If the reward is too low, switch to exploration
                 if max_reward_activation <= 1e-6:
-                    print("Reward too low. Switching to exploration.")
                     self.explore()
                     return
 
@@ -641,6 +646,11 @@ class Driver(Supervisor):
             # -------------------------------------------------
             # 3) DETERMINE ACTION ANGLE
             # -------------------------------------------------
+            # Fixing the NaN issue during EXPLOIT
+            if np.sum(self.directional_reward_estimates) < 1e-6:
+                self.explore()
+                return
+
             action_angle = circmean(angles, weights=self.directional_reward_estimates)
             index = int(action_angle // (2 * np.pi / self.n_hd))
             max_reward = self.directional_reward_estimates[index]
@@ -963,42 +973,17 @@ class Driver(Supervisor):
         curr_pos = self.robot.getField("translation").getSFVec3f()
         curr_pos_2d = [curr_pos[0], curr_pos[2]]  # Use only x and z coordinates
 
-        # In LEARN_OJAS mode, save the layers after runtime is reached
-        if self.mode == RobotMode.LEARN_OJAS or self.mode == RobotMode.PLOTTING and self.getTime() >= 60 * self.run_time_minutes:
+        # In LEARN_OJAS or PLOTTING mode, save only after run_time is reached:
+        if (self.mode == RobotMode.LEARN_OJAS or self.mode == RobotMode.PLOTTING) \
+        and self.getTime() >= 60 * self.run_time_minutes:
             self.save()
 
-        # In DMTP mode, continue running even after finding the goal
+        # In DMTP mode, save immediately after the goal is reached
         elif self.mode == RobotMode.DMTP and np.allclose(
             self.goal_location, curr_pos_2d, atol=self.goal_r["explore"]
         ):
-            print("Goal found in DMTP mode. Adjusting position and replaying activations.")
+            self.auto_pilot()
             
-            step = 0
-            # Ensure precise positioning if needed
-            while not np.allclose(
-                self.goal_location, [curr_pos[0], curr_pos[2]], 0, self.goal_r["explore"]
-            ):
-                curr_pos = self.robot.getField("translation").getSFVec3f()
-                delta_x = curr_pos[0] - self.goal_location[0]
-                delta_y = curr_pos[2] - self.goal_location[1]
-
-                if delta_x >= 0:
-                    theta = tf.math.atan(abs(delta_y), abs(delta_x))
-                    desired = np.pi * 2 - theta if delta_y >= 0 else np.pi + theta
-                elif delta_y >= 0:
-                    theta = tf.math.atan(abs(delta_y), abs(delta_x))
-                    desired = np.pi / 2 - theta
-                else:
-                    theta = tf.math.atan(abs(delta_x), abs(delta_y))
-                    desired = np.pi - theta
-                self.turn(-(desired - np.deg2rad(self.current_heading_deg)))
-                self.sense()
-                self.compute_pcn_activations()
-                self.update_hmaps()
-                self.forward()
-                step += 1
-            
-            # Replay activations
             if self.enable_multiscale:
                 self.rcn_small.update_reward_cell_activations(
                     self.pcn_small.place_cell_activations,
@@ -1020,57 +1005,58 @@ class Driver(Supervisor):
                     visit=True
                 )                
                 self.rcn_small.replay(pcn=self.pcn_small)
+            self.save()
 
-            # Continue exploration
-            print("Resuming exploration after replay.")
-            if self.getTime() >= 60 * self.dmtp_run_time_minutes:
-                self.save()
-        
         # For EXPLOIT mode, stop and perform auto_pilot when the goal is reached
+        elif self.mode == RobotMode.EXPLOIT and (self.getTime() >= 5 * 60):
+            if self.stats_collector:
+                # Update stats and save JSON
+                self.stats_collector.update_stat("trial_id", self.trial_id)
+                self.stats_collector.update_stat("start_location", self.start_loc)
+                self.stats_collector.update_stat("goal_location", self.goal_location)
+                self.stats_collector.update_stat("total_distance_traveled", round(self.compute_path_length(), 2))
+                self.stats_collector.update_stat("total_time_secs", round(self.getTime(), 2))
+                self.stats_collector.update_stat("success", self.getTime() <= 5 * 60)  # Success if goal reached in under 5 minutes
+                self.stats_collector.save_stats(self.trial_id)
+
+                print(f"Trial {self.trial_id} completed.")
+                print(f"Start location: {self.start_loc}")
+                print(f"Goal location: {self.goal_location}")
+                print(f"Total distance traveled: {round(self.compute_path_length(), 2)} meters.")
+                print(f"Total time taken: {round(self.getTime(), 2)} seconds.")
+                print(f"Success: {self.getTime() <= 5 * 60}")
+
+                self.stop()
+                self.done = True
+
+                return
+            
         elif self.mode == RobotMode.EXPLOIT and np.allclose(
             self.goal_location, curr_pos_2d, atol=self.goal_r["exploit"]
         ):
             self.auto_pilot()  # Navigate to the goal and replay activations
-            print("Goal reached.")
-            print(f"Total distance traveled: {self.compute_path_length()}")
-            print(f"Started at: {np.array([self.hmap_x[0], self.hmap_y[0]])}")
-            print(f"Current position: {np.array(curr_pos_2d)}")
-            distance_to_goal = (
-                np.linalg.norm(
-                    np.array([self.hmap_x[0], self.hmap_y[0]]) - self.goal_location
-                )
-                - self.goal_r["exploit"]
-            )
-            print(f"Distance to goal: {distance_to_goal}")
-            print(f"Time taken: {self.getTime()}")
 
             if self.stats_collector:
-                # Generate trial name based on existing JSON files
-                stats_folder = os.path.join("controllers", "bek_controller", "analysis", "stats")
-                os.makedirs(stats_folder, exist_ok=True)
-                existing_files = [f for f in os.listdir(stats_folder) if f.endswith(".json")]
-                trial_index = len(existing_files) + 1
-                trial_id = f"trial_{trial_index}_corner_{self.start_loc[0]}_{self.start_loc[1]}"
-                
                 # Update stats and save JSON
-                self.stats_collector.update_stat("trial_id", trial_id)
+                self.stats_collector.update_stat("trial_id", self.trial_id)
                 self.stats_collector.update_stat("start_location", self.start_loc)
                 self.stats_collector.update_stat("goal_location", self.goal_location)
-                self.stats_collector.update_stat("total_distance_traveled", round(self.compute_path_length(),2))
+                self.stats_collector.update_stat("total_distance_traveled", round(self.compute_path_length(), 2))
                 self.stats_collector.update_stat("total_time_secs", round(self.getTime(), 2))
                 self.stats_collector.update_stat("success", self.getTime() <= 5 * 60)  # Success if goal reached in under 5 minutes
-                self.stats_collector.save_stats(trial_id)
+                self.stats_collector.save_stats(self.trial_id)
 
-            root = tk.Tk()
-            root.withdraw()  # Hide the main window
-            root.attributes("-topmost", True)  # Keep the dialog on top
-            root.update()
-            messagebox.showinfo("Information", "Trial Saved! Press OK to exit.")
-            root.destroy()
+                print(f"Trial {self.trial_id} completed.")
+                print(f"Start location: {self.start_loc}")
+                print(f"Goal location: {self.goal_location}")
+                print(f"Total distance traveled: {round(self.compute_path_length(), 2)} meters.")
+                print(f"Total time taken: {round(self.getTime(), 2)} seconds.")
+                print(f"Success: {self.getTime() <= 5 * 60}")
 
-            # Pause the simulation
-            time.sleep(2)
-            self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
+                self.stop()
+                self.done = True
+
+                return
 
     ########################################### AUTO PILOT ###########################################
 
@@ -1100,14 +1086,6 @@ class Driver(Supervisor):
             self.update_hmaps()
             self.forward()
             step += 1
-
-        # Replay the place cell activations once the goal is reached
-        print("Goal reached! Replaying activations...")
-        if self.enable_multiscale:
-            self.rcn_small.replay(pcn=self.pcn_small)
-            self.rcn_large.replay(pcn=self.pcn_large)
-        else:
-            self.rcn_small.replay(pcn=self.pcn_small)
 
     ########################################### ENVIRONMENTAL COMPLEXITY ###########################################
     
@@ -1324,7 +1302,7 @@ class Driver(Supervisor):
                         files_saved.append("rcn_large.pkl")
             else:
                 with open("rcn_small.pkl", "wb") as output:
-                    pickle.dump(self.rcn, output)
+                    pickle.dump(self.rcn_small, output)
                     files_saved.append("rcn_small.pkl")
 
         # Save history maps
