@@ -1,76 +1,93 @@
 """my_controller_iCreate controller."""
 
-# from driver import Driver, RobotMode
-# from analysis.stats_collector import stats_collector
-
-# # 1. LEARN_OJAS
-# # 2. DMTP
-# # 3. EXPLOIT
-# # 4. (optional) PLOTTING
-
-# bot = Driver()
-# stats_collector = stats_collector(output_dir="controllers\\bek_controller\\analysis\\stats")
-
-# bot.initialization(
-#     mode=RobotMode.EXPLOIT,
-#     randomize_start_loc=False,
-#     run_time_hours=1,
-#     dmtp_run_time_hours=0.2,
-#     start_loc=[2, 2],
-#     enable_multiscale=True,
-#     stats_collector=stats_collector
-# )
-
-# bot.run()
-
 import os
 from driver import Driver, RobotMode
 from analysis.stats_collector import stats_collector
 
-# Define the corners
-corners = [[2, -2], [-2, -2], [2, 2], [-2, 2]]
+# Define the mode to run
+SELECTED_MODE = "EXPLOIT_SAVE"  # Options: LEARN_OJAS, DMTP, EXPLOIT, EXPLOIT_SAVE, PLOTTING
 
-# Create one Driver instance for the robot
-bot = Driver()
-bot.trial_indices = {}
+# Function to detect the current world name dynamically
+def get_world_name(bot):
+    world_name = bot.getWorldPath()  # This returns the full path
+    world_name = world_name.split('/')[-1].replace('.wbt', '')  # Extract just the world name
+    return world_name
 
-# Path to stats folder
-current_dir = os.path.dirname(os.path.abspath(__file__))
-stats_folder = os.path.join(current_dir, "analysis", "stats")
+# Function to handle LEARN_OJAS or DMTP modes
+def run_learn_or_dmtp(mode, start_loc, run_time_hours=1, dmtp_run_time_hours=0.2, enable_multiscale=False):
+    print(f"Running in mode: {mode.name}")
+    bot = Driver()
 
-# Initialize trial indices for all corners
-for corner in corners:
-    corner_tuple = tuple(corner)  # Use tuple as key for immutability
-    bot.trial_indices[corner_tuple] = 0
+    stats_collector_instance = stats_collector(output_dir="controllers\\bek_controller\\analysis\\stats")
+    bot.initialization(
+        mode=mode,
+        randomize_start_loc=False,
+        run_time_hours=run_time_hours,
+        dmtp_run_time_hours=dmtp_run_time_hours,
+        start_loc=start_loc,
+        enable_multiscale=enable_multiscale,
+        stats_collector=stats_collector_instance
+    )
+    bot.run()
 
-# Loop over corners
-for corner in corners:
-    corner_tuple = tuple(corner)  # Convert to tuple for lookup
-    for run in range(10):
-        print(f"Running trial at corner {corner}, run {run + 1}...")
+# Function to handle EXPLOIT modes
+def run_exploit(corners, save_data=False):
+    bot = Driver()
+    bot.trial_indices = {}
 
-        # Update trial index before starting the trial
-        bot.trial_indices[corner_tuple] = run + 1
+    # Dynamically determine the world name
+    world_name = get_world_name(bot)
+    print(f"Current world: {world_name}")
 
-        # Construct trial ID
-        trial_id = f"trial_{run + 1}_corner_{corner[0]}_{corner[1]}"
+    # Define the stats folder path based on the world name
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    stats_folder = os.path.join(current_dir, "analysis", "stats", world_name)
+    os.makedirs(stats_folder, exist_ok=True)
 
-        # Reinitialize the same bot each time
-        bot.initialization(
-            mode=RobotMode.EXPLOIT,
-            run_time_hours=1,
-            start_loc=corner,  # Keep as list for initialization
-            randomize_start_loc=False,
-            stats_collector=stats_collector(output_dir=stats_folder)
-        )
+    for corner in corners:
+        corner_tuple = tuple(corner)
+        bot.trial_indices[corner_tuple] = 0
 
-        # Set the trial ID in the driver
-        bot.trial_id = trial_id
+    for corner in corners:
+        corner_tuple = tuple(corner)
+        for run in range(10):
+            print(f"Running trial at corner {corner}, run {run + 1}...")
+            bot.trial_indices[corner_tuple] = run + 1
+            trial_id = f"trial_{run + 1}_corner_{corner[0]}_{corner[1]}"
 
-        # Run until the goal is reached and stats are saved
-        bot.run()
+            # Initialize stats collector only if saving is enabled
+            stats_collector_instance = None
+            if save_data:
+                stats_collector_instance = stats_collector(output_dir=stats_folder)
 
-        # Reset the simulation environment for the next trial
-        bot.simulationReset()
+            bot.initialization(
+                mode=RobotMode.EXPLOIT,
+                run_time_hours=1,
+                start_loc=corner,
+                randomize_start_loc=False,
+                stats_collector=stats_collector_instance,
+            )
+            bot.trial_id = trial_id
 
-print("All trials completed.")
+            bot.run()
+            bot.simulationReset()
+
+# Main function
+if __name__ == "__main__":
+
+    if SELECTED_MODE == "LEARN_OJAS":  # LEARN_OJAS
+        run_learn_or_dmtp(mode=RobotMode.LEARN_OJAS, start_loc=[2, 2])
+    elif SELECTED_MODE == "DMTP":  # DMTP
+        run_learn_or_dmtp(mode=RobotMode.DMTP, start_loc=[2, 2], dmtp_run_time_hours=0.2, enable_multiscale=True)
+    elif SELECTED_MODE == "EXPLOIT":  # Non-data-saving EXPLOIT
+        # Define the corners
+        corners = [[2, -2], [-2, -2], [2, 2], [-2, 2]]
+        run_exploit(corners, save_data=False)
+    elif SELECTED_MODE == "EXPLOIT_SAVE":  # Data-saving EXPLOIT
+        # Define the corners
+        corners = [[2, -2], [-2, -2], [2, 2], [-2, 2]]
+        run_exploit(corners, save_data=True)
+    elif SELECTED_MODE == "PLOTTING":  # PLOTTING
+        run_learn_or_dmtp(mode=RobotMode.PLOTTING, start_loc=[2, 2])
+    else:
+        print("Invalid mode selected.")
