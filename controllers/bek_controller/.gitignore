@@ -29,3 +29,5 @@ main.py
 *.html
 cell_names.txt
 
+three_dim*
+two_dim*
