@@ -1,48 +1,76 @@
 """my_controller_iCreate controller."""
 
+
+def create_cross_walls(bot, center1_angle, center2_angle):
+    """Create walls in a cross pattern programmatically."""
+    # Delete existing walls first
+    delete_walls(bot)
+
+    # Get the root node of the scene tree
+    root_node = bot.getRoot()
+    children_field = root_node.getField("children")
+
+    # Create horizontal wall (Center1)
+    children_field.importMFNodeFromString(
+        -1,
+        """
+        Wall {
+          rotation 0 -1 0 %f
+          name "wall(Center1)"
+          size 5 2.4 0.3
+          appearance Roughcast {
+            colorOverride 0.8 0.45 0.25
+            textureTransform TextureTransform {
+              scale 1 2.4
+            }
+          }
+        }
+        """
+        % (center1_angle),
+    )
+
+    # Create vertical wall (Center2)
+    children_field.importMFNodeFromString(
+        -1,
+        """
+        Wall {
+          rotation 0 1 0 %f
+          name "wall(Center2)"
+          size 5 2.4 0.3
+          appearance Roughcast {
+            colorOverride 0.8 0.45 0.25
+            textureTransform TextureTransform {
+              scale 1 2.4
+            }
+          }
+        }
+        """
+        % (center2_angle),
+    )
+
+
 if __name__ == "__main__":
     import tensorflow as tf
-    from driver_vertical import Driver, RobotMode
-    from visualizations.overlayed_cells import plot_overlayed_cells
+    from robot_mode import RobotMode
+    from driver_vertical import DriverVertical
+    from driver import Driver
 
-    bot = Driver()
-    # 1. LEARN_OJAS
-    # 2. DMTP
-    # 3. EXPLOIT
-    # 4. (optional) PLOTTING
+    # Define the angles for each trial (in radians)
+    center1_angles = [-1.57081, 1.58784, 1.63784, 1.71778]
+    center2_angles = [0, -0.261805, -0.523605, -0.785405]
+    bot = DriverVertical()
+    for test_index in range(4):
 
-    sigma_distances = [x / 50 for x in range(1, 51, 1)]
-    sigma_angles = [y / 50 for y in range(1, 51, 1)]
+        # Create walls with angles for this trial
+        create_cross_walls(bot, center1_angles[test_index], center2_angles[test_index])
 
-    for test_index in range(1):
         bot.initialization(
             mode=RobotMode.LEARN_OJAS,
             randomize_start_loc=True,
-            run_time_hours=2,
+            run_time_hours=0.005,
             start_loc=[4, -4],
-            # sigma_d=[sigma_distances[test_index]],
-            # sigma_a=[sigma_angles[test_index]],
         )
         bot.run()
-        plot_overlayed_cells(
-            hmap_x_path="hmap_x.pkl",
-            hmap_y_path="hmap_y.pkl",
-            hmap_z_path="hmap_z.pkl",
-            colors_path="visualizations/colors.json",
-            gridsize=50,
-            save_plot=False,
-            suffix=f"_{str(test_index)}_50",
-        )
-
-        plot_overlayed_cells(
-            hmap_x_path="hmap_x.pkl",
-            hmap_y_path="hmap_y.pkl",
-            hmap_z_path="hmap_z.pkl",
-            colors_path="visualizations/colors.json",
-            gridsize=100,
-            save_plot=False,
-            suffix=f"_{str(test_index)}_100",
-        )
         bot.simulationReset()
 
     bot.simulationSetMode(bot.SIMULATION_MODE_PAUSE)
