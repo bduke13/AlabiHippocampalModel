@@ -35,6 +35,11 @@ class RewardCellLayer:
         self.w_in_effective = tf.Variable(tf.identity(self.w_in), dtype=tf.float32)
 
     def update_reward_cell_activations(self, input_data, visit=False):
+        """Compute the activations of reward cells based on input data.
+        Args:
+            input_data: array-like, the input data for the reward cells.
+            visit: Flag indicating if the cell is being visited. Defaults to False.
+        """
         # Calculate the norm of the input data
         input_norm = tf.linalg.norm(input_data, ord=1)
         # Add a small epsilon to prevent division by zero
@@ -43,40 +48,30 @@ class RewardCellLayer:
         activations = (
             tf.tensordot(self.w_in_effective, input_data, axes=1) / safe_denominator
         )
-        # Clip activations to prevent extreme values
-        self.reward_cell_activations = tf.clip_by_value(activations, -1.0, 1.0)  # Adjust range as needed
-
-        # Replace NaNs in activations
-        self.reward_cell_activations = tf.where(
-            tf.math.is_nan(self.reward_cell_activations),
-            tf.zeros_like(self.reward_cell_activations),
-            self.reward_cell_activations,
-        )
+        # Clip values to prevent extreme values
+        self.reward_cell_activations = tf.clip_by_value(activations, -1e6, 1e6)
 
         if visit:
-            # Apply weight decay to limit growth
-            weight_decay_factor = 0.99  # Adjust for desired decay rate
-            self.w_in_effective.assign(self.w_in_effective * weight_decay_factor)
-
             # Update weights directly based on input data
             learning_rate = 0.1  # Adjust as needed
             updated_weights = self.w_in_effective + learning_rate * input_data
             self.w_in_effective.assign(updated_weights)
 
     def replay(self, pcn):
+        """Replay the place cell activations and update reward cell weights.
+        Args:
+            pcn: PlaceCellNetwork instance for replay processing.
+        """
         # Create a copy of the place cell network
         pcn_copy = deepcopy(pcn)
         weight_update = tf.zeros_like(self.w_in)
-
         for time_step in range(10):
             # Exponential decay factor for the current time step
             exponential_decay_factor = tf.math.exp(-time_step / 6)
-
             # Normalize the place cell activations using L2 norm with added stability
             pc_activations = pcn_copy.place_cell_activations
             norm = tf.sqrt(tf.maximum(tf.reduce_sum(tf.square(pc_activations)), 1e-12))
             normalized_place_cell_activations = pc_activations / norm
-
             # Ensure no NaN values
             normalized_place_cell_activations = tf.where(
                 tf.math.is_nan(normalized_place_cell_activations),
@@ -84,13 +79,25 @@ class RewardCellLayer:
                 normalized_place_cell_activations,
             )
 
-            # Update weight_update cumulatively with normalization
+            # Update weight_update cumulatively
             weight_update += (
                 exponential_decay_factor * normalized_place_cell_activations
             )
 
-        # Normalize cumulative weight updates
-        normalized_weight_update = tf.linalg.normalize(weight_update, ord=1)[0]
+            # Update pcn_copy.place_cell_activations
+            recurrent_weights_max = tf.reduce_max(pcn_copy.w_rec_tripartite, axis=0)
+            updated_place_cell_activations = tf.nn.relu(
+                tf.tensordot(
+                    tf.cast(recurrent_weights_max, tf.float32),
+                    pcn_copy.place_cell_activations,
+                    axes=1,
+                )
+                + pcn_copy.place_cell_activations
+            )
+            pcn_copy.place_cell_activations = tf.tanh(updated_place_cell_activations)
+
+        # Normalize and update weights
+        normalized_weight_update = tf.linalg.normalize(weight_update, ord=np.inf)[0]
         self.w_in.assign_add(normalized_weight_update)
         self.w_in_effective.assign(self.w_in)
 
