@@ -68,8 +68,7 @@ class Driver(Supervisor):
         mode=RobotMode.PLOTTING,
         randomize_start_loc: bool = True,
         run_time_hours: int = 1,
-        dmtp_run_time_hours: int = 0.5,
-        start_loc: Optional[List[int]] = None,
+        start_loc: Optional[List[int]] = [2,2],
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
         enable_multiscale: Optional[bool] = False,
@@ -114,7 +113,6 @@ class Driver(Supervisor):
         self.wheel_radius = 0.031
         self.axle_length = 0.271756
         self.run_time_minutes = run_time_hours * 60
-        self.dmtp_run_time_minutes = dmtp_run_time_hours * 60
         self.step_count = 0
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
         self.goal_r = {"explore": 0.3, "exploit": 0.5}
@@ -976,7 +974,7 @@ class Driver(Supervisor):
         # In LEARN_OJAS or PLOTTING mode, save only after run_time is reached:
         if (self.mode == RobotMode.LEARN_OJAS or self.mode == RobotMode.PLOTTING) \
         and self.getTime() >= 60 * self.run_time_minutes:
-            self.save()
+            self.save(include_pcn=self.mode != RobotMode.PLOTTING, include_rcn=self.mode != RobotMode.PLOTTING)
 
         # In DMTP mode, save immediately after the goal is reached
         elif self.mode == RobotMode.DMTP and np.allclose(
