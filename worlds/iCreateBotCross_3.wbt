@@ -10,7 +10,7 @@ WorldInfo {
 }
 Viewpoint {
   orientation 1 0 0 4.71238898038469
-  position 1.9242776959334068e-16 25.116126171045778 -3.605990211917443e-15
+  position -1.973455945212876e-16 17.67176541848665 6.13112526668078e-17
   near 0.1
   follow "Create"
   followType "None"
@@ -136,7 +136,7 @@ Wall {
   }
 }
 Wall {
-  rotation 0 1 0 1.5708
+  rotation 0.3574058186283875 0.8628565621288802 -0.35740681862788 1.71777
   name "wall(Center1)"
   size 5 2.4 0.3
   appearance Roughcast {
@@ -147,7 +147,7 @@ Wall {
   }
 }
 Wall {
-  rotation 0 -1 0 0
+  rotation 1 0 0 0.785398
   name "wall(Center2)"
   size 5 2.4 0.3
   appearance Roughcast {
