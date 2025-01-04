@@ -132,7 +132,7 @@ class Driver(Supervisor):
         self.mode = mode
 
         # Model parameters
-        self.num_place_cells = 200
+        self.num_place_cells = 300
         self.num_reward_cells = 1
         self.n_hd = 8
         self.timestep = 32 * 3
