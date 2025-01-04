@@ -132,7 +132,7 @@ class Driver(Supervisor):
         self.mode = mode
 
         # Model parameters
-        self.num_place_cells = 300
+        self.num_place_cells = 1000
         self.num_reward_cells = 1
         self.n_hd = 8
         self.timestep = 32 * 3
@@ -639,12 +639,12 @@ class Driver(Supervisor):
         # Calculate bvc_scalar based on minimum distance from boundaries
         min_distance = np.min(self.boundaries)
         if min_distance <= 0.5:
-            self.bvc_scalar = 0.25
+            self.bvc_scalar = 0.3
         elif min_distance >= 1.0:
-            self.bvc_scalar = 0.8
+            self.bvc_scalar = 1
         else:
             # Linear interpolation between 0.25 and 0.8 for distances between 0.5 and 1.0
-            self.bvc_scalar = 0.25 + (0.8 - 0.25) * (min_distance - 0.5) / 0.5
+            self.bvc_scalar = 0.3 + (1.0 - 0.3) * (min_distance - 0.5) / 0.5
 
         # 4. Convert the current heading from degrees to radians.
         # Shape: scalar (float) - Current heading of the robot in radians.
