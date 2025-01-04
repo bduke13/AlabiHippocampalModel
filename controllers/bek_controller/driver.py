@@ -208,6 +208,7 @@ class Driver(Supervisor):
         self.directional_reward_estimates = tf.zeros(self.n_hd)
         self.step(self.timestep)
         self.step_count += 1
+        self.bvc_scalar = 0.5
 
         # Initialize goal
         self.goal_location = [-1, 1]
@@ -635,6 +636,16 @@ class Driver(Supervisor):
         # Shape: (720,) - LiDAR data remains 720 points, but shifted according to the robot's current heading.
         self.boundaries = np.roll(self.boundaries, 2 * self.current_heading_deg)
 
+        # Calculate bvc_scalar based on minimum distance from boundaries
+        min_distance = np.min(self.boundaries)
+        if min_distance <= 0.5:
+            self.bvc_scalar = 0.25
+        elif min_distance >= 1.0:
+            self.bvc_scalar = 0.8
+        else:
+            # Linear interpolation between 0.25 and 0.8 for distances between 0.5 and 1.0
+            self.bvc_scalar = 0.25 + (0.8 - 0.25) * (min_distance - 0.5) / 0.5
+
         # 4. Convert the current heading from degrees to radians.
         # Shape: scalar (float) - Current heading of the robot in radians.
         current_heading_rad = np.deg2rad(self.current_heading_deg)
@@ -689,6 +700,7 @@ class Driver(Supervisor):
             distances=self.boundaries,
             hd_activations=self.hd_activations,
             collided=np.any(self.collided),
+            bvc_scalar=self.bvc_scalar,
         )
 
         # Advance the timestep and update position

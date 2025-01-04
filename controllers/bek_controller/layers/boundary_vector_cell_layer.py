@@ -61,7 +61,7 @@ class BoundaryVectorCellLayer:
             / (2 * self.sigma_ang**2)
         ) / tf.sqrt(2 * self.PI * self.sigma_ang**2)
 
-    def get_bvc_activation(self, distances) -> tf.Tensor:
+    def get_bvc_activation(self, distances, bvc_scalar) -> tf.Tensor:
         """Calculate the activation of BVCs based on input distances and angles.
 
         Args:
@@ -72,10 +72,17 @@ class BoundaryVectorCellLayer:
             Activations of the BVC neurons, computed as the product of Gaussian functions for
             distance and angle tuning.
         """
+        # Convert inputs to float32 to match TensorFlow constants
+        distances = tf.cast(distances, tf.float32)
+        bvc_scalar = tf.cast(bvc_scalar, tf.float32)
+
+        # Convert input_indices to proper tensor format
+        distances_tensor = tf.gather(distances, self.input_indices[0], axis=0)
+
         # Compute Gaussian function for distance tuning
         distance_gaussian = tf.exp(
-            -((distances[self.input_indices] - self.d_i) ** 2) / (2 * self.sigma_d**2)
-        ) / tf.sqrt(2 * self.PI * self.sigma_d**2)
+            -((distances_tensor - self.d_i) ** 2) / (2 * bvc_scalar**2)
+        ) / tf.sqrt(2 * self.PI * bvc_scalar**2)
 
         # Return the product of distance and angular Gaussian functions for BVC activation
         bvc_activations = tf.reduce_sum((distance_gaussian * self.angular_gaussian), 0)

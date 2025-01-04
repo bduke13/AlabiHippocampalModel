@@ -5,7 +5,7 @@ import pickle
 import json
 import matplotlib.colors as mcolors
 
-gridsize = 100
+gridsize = 150
 
 # Load the colors list
 with open("visualizations/colors.json", "r") as f:
