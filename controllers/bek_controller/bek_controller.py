@@ -60,6 +60,7 @@ def run_exploit(corners, enable_multiscale, save_data=False):
                 mode=RobotMode.EXPLOIT,
                 run_time_hours=1,
                 start_loc=corner,
+                enable_multiscale=enable_multiscale,
                 randomize_start_loc=False,
                 stats_collector=stats_collector_instance,
             )
@@ -74,33 +75,38 @@ def run_exploit(corners, enable_multiscale, save_data=False):
     
 # Define the mode to run
 SELECTED_MODE = "EXPLOIT_SAVE"  # Options: LEARN_OJAS, DMTP, EXPLOIT, EXPLOIT_SAVE, PLOTTING
-run_time_hours = 1
+run_time_hours = 2
 start_loc = [2, 2]
 randomize_start_loc = True
 enable_multiscale = True
 
-corners = [[2, -2], [-2, -2], [2, 2], [-2, 2]]
+corners = [[4, -4], [-4, -4], [4, 4], [-4, 4]]
 
 # Main function
 if __name__ == "__main__":
 
     if SELECTED_MODE == "LEARN_OJAS":
         run_learn_or_dmtp(mode=RobotMode.LEARN_OJAS, 
-                    run_time_hours=run_time_hours,
-                    start_loc=corners[1], 
-                    randomize_start_loc=randomize_start_loc,
-                    enable_multiscale=enable_multiscale)
-    if SELECTED_MODE == "DMTP":  # LEARN_OJAS
+                          run_time_hours=run_time_hours,
+                          start_loc=corners[1], 
+                          randomize_start_loc=randomize_start_loc,
+                          enable_multiscale=enable_multiscale)
+    elif SELECTED_MODE == "DMTP":  # LEARN_OJAS
         run_learn_or_dmtp(mode=RobotMode.DMTP, 
                           run_time_hours=run_time_hours,
-                          start_loc=corners[3], 
-                          randomize_start_loc=False,
+                          start_loc=corners[0], 
+                          randomize_start_loc=True,
                           enable_multiscale=enable_multiscale)
     elif SELECTED_MODE == "EXPLOIT":  # Non-data-saving EXPLOIT
         run_exploit(corners, enable_multiscale, save_data=False)
     elif SELECTED_MODE == "EXPLOIT_SAVE":  # Data-saving EXPLOIT
         run_exploit(corners, enable_multiscale, save_data=True)
     elif SELECTED_MODE == "PLOTTING":  # PLOTTING
-        run_learn_or_dmtp(mode=RobotMode.PLOTTING, start_loc=start_loc, enable_multiscale=enable_multiscale)
+        # Added missing arguments to the function call
+        run_learn_or_dmtp(mode=RobotMode.PLOTTING, 
+                          run_time_hours=run_time_hours,
+                          start_loc=start_loc, 
+                          randomize_start_loc=randomize_start_loc,
+                          enable_multiscale=enable_multiscale)
     else:
         print("Invalid mode selected.")
