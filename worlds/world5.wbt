@@ -88,7 +88,7 @@ Wall {
   }
 }
 Wall {
-  translation -1.55 0 1.96
+  translation -1.77 0 1.37
   rotation 0 1 0 3.5065
   name "wall3.5065"
   size 1 1.2 0.15

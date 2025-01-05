@@ -1,11 +1,9 @@
 #VRML_SIM R2021a utf8
 WorldInfo {
   info [
-    "iRobot Create simulation"
-    "The vacuum cleaner robot goes randomly into the apartment while a supervisor tracks its position and alterates the ground texture."
-    "The robot can be stopped by the virtual walls emitting IR light."
+    "2 obstacles"
   ]
-  title "iRobot Create"
+  title "5x5"
   coordinateSystem "NUE"
 }
 Viewpoint {
@@ -41,32 +39,30 @@ Transform {
     }
   ]
 }
-#Transform {
-#  translation 0 0.25 0  # Center the cross and set it at 0.25m to position halfway up its height of 0.5m
-#  children [
-#    Shape {
-#      appearance Appearance {
-#        material Material {
-#          diffuseColor 0.5 0.5 0.5  # Light gray color for the walls
-#        }
-#      }
-#      geometry Box {
-#        size 0.1 0.5 2.0  # Adjusted wall thickness and height for one arm of the cross
-#      }
-#    }
-#    Shape {
-#      appearance Appearance {
-#        material Material {
-#          diffuseColor 0.5 0.5 0.5
-#        }
-#      }
-#      geometry Box {
-#        size 2.0 0.5 0.1  # Adjusted wall thickness and height for the other arm of the cross
-#      }
-#    }
-#  ]
-#}
-
+Wall {
+  translation 0.4 0 0.5
+  rotation 0 1 0 1.4
+  name "wall(6)"
+  size 1.2 1.2 0.15
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 1.2
+    }
+  }
+}
+Wall {
+  translation -1.4 0 -1.2
+  rotation 0 1 0 1
+  name "wall(7)"
+  size 1 1.2 0.15
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 1.2
+    }
+  }
+}
 DEF agent Create {
   hidden position_0_0 45249.17206706551
   hidden position_0_1 41597.76782541959
