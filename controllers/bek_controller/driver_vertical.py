@@ -420,16 +420,17 @@ class DriverVertical(Supervisor):
         for _ in range(self.tau_w):
             self.sense()
 
-            # Update the reward cell activations
-            self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations)
+            if self.pcn.enable_stdp:
+                # Update the reward cell activations
+                self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations)
 
-            # Determine the actual reward (you may need to define how to calculate this)
-            actual_reward = self.get_actual_reward()
+                # Determine the actual reward (you may need to define how to calculate this)
+                actual_reward = self.get_actual_reward()
 
-            # Perform TD update
-            self.rcn.td_update(
-                self.pcn.place_cell_activations, next_reward=actual_reward
-            )
+                # Perform TD update
+                self.rcn.td_update(
+                    self.pcn.place_cell_activations, next_reward=actual_reward
+                )
 
             if np.any(self.collided):
                 random_angle = np.random.uniform(
@@ -732,7 +733,9 @@ class DriverVertical(Supervisor):
             hd_activations=self.hd_activations,
             collided=np.any(self.collided),
         )
-        self.pcn.bvc_layer.plot_scan_3d_radial(self.vertical_boundaries)
+
+        # print(self.pcn.bvc_layer.horizontal_gaussian_precomputed)
+        # self.pcn.bvc_layer.plot_activation(self.vertical_boundaries)
 
         # Advance the timestep and update position
         self.step(self.timestep)
