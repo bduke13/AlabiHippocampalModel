@@ -6,6 +6,7 @@ import json
 import os
 import matplotlib.colors as mcolors
 import webbrowser
+from controllers.bek_controller.visualizations.analysis_utils import *
 
 
 def plot_place_cells_group(
@@ -138,25 +139,32 @@ def generate_html_report(cell_indices, output_dir):
     return html_path
 
 
+# %%
+hmap_x, hmap_y, hmap_z = load_hmaps(
+    "controllers/bek_controller/IJCNN/3D_1L_v1/world_outside/trial_0/"
+)
+
+
+# %%
 if __name__ == "__main__":
     # Create the output directory
     output_dir = "visualizations/outputs/"
     os.makedirs(output_dir, exist_ok=True)
 
     # Load the colors list
-    with open("visualizations/colors.json", "r") as f:
+    with open("controllers/bek_controller/visualizations/colors.json", "r") as f:
         colors = json.load(f)
 
     # Convert hex colors to RGB format
     colors_rgb = [mcolors.to_rgb(c) for c in colors]
 
     # Load hmap data
-    with open("hmap_x.pkl", "rb") as f:
-        hmap_x = np.array(pickle.load(f))
-    with open("hmap_y.pkl", "rb") as f:
-        hmap_y = np.array(pickle.load(f))
-    with open("hmap_z.pkl", "rb") as f:
-        hmap_z = np.asarray(pickle.load(f))
+    #    with open("hmap_x.pkl", "rb") as f:
+    #        hmap_x = np.array(pickle.load(f))
+    #    with open("hmap_y.pkl", "rb") as f:
+    #        hmap_y = np.array(pickle.load(f))
+    #    with open("hmap_z.pkl", "rb") as f:
+    #        hmap_z = np.asarray(pickle.load(f))
 
     # Try to read cells.csv if it exists, otherwise use all cells
     if os.path.exists("cells.csv"):

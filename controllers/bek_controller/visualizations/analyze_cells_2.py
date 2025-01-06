@@ -1,11 +1,10 @@
 # %%
 import numpy as np
 import matplotlib.pyplot as plt
-import pickle
 
 
 def calculate_far_cosine_metric(
-    positions_x, positions_y, activations, distance_threshold=2.0, n_samples=1000
+    hmap_x, hmap_y, hmap_z, distance_threshold=2.0, n_samples=1000
 ):
     """
     Calculate the far cosine metric for activation patterns at different locations.
@@ -16,10 +15,10 @@ def calculate_far_cosine_metric(
       - Accumulate the sum of these far-cosine similarities for location i (and for j).
 
     Args:
-        positions_x (np.array): Array of x coordinates of shape [n_points].
-        positions_y (np.array): Array of y coordinates of shape [n_points].
-        activations (np.array): Array of shape [n_points, n_cells] containing activation values.
-                               For each point i, activations[i] is the activation vector.
+        hmap_x (np.array): Array of x coordinates of shape [n_points].
+        hmap_y (np.array): Array of y coordinates of shape [n_points].
+        hmap_z (np.array): Array of shape [n_points, n_cells] containing activation values.
+                               For each point i, hmap_z[i] is the activation vector.
         distance_threshold (float): Minimum distance to consider points "far apart".
         n_samples (int): Number of random points to sample (if None, use all points).
 
@@ -33,7 +32,7 @@ def calculate_far_cosine_metric(
     """
 
     # Number of total points
-    total_points = len(positions_x)
+    total_points = len(hmap_x)
 
     # Decide whether to sample points
     if (n_samples is not None) and (n_samples < total_points):
@@ -43,9 +42,9 @@ def calculate_far_cosine_metric(
         n_samples = total_points  # If you're using all points, override n_samples to total_points
 
     # Subset the arrays
-    sub_x = positions_x[sampled_indices]
-    sub_y = positions_y[sampled_indices]
-    sub_acts = activations[sampled_indices]
+    sub_x = hmap_x[sampled_indices]
+    sub_y = hmap_y[sampled_indices]
+    sub_acts = hmap_z[sampled_indices]
 
     # Initialize outputs
     far_cosine_values = []
@@ -96,88 +95,87 @@ def calculate_far_cosine_metric(
 
 
 # %%
-# --- Load data ---
-prefix = "three_dim/"
-with open(f"{prefix}hmap_x.pkl", "rb") as f:
-    hmap_x = np.array(pickle.load(f))
-with open(f"{prefix}hmap_y.pkl", "rb") as f:
-    hmap_y = np.array(pickle.load(f))
-with open(f"{prefix}hmap_z.pkl", "rb") as f:
-    hmap_z = np.array(pickle.load(f))
+if __name__ == "__main__":
+    # --- Load data ---
+    from .analysis_utils import load_heatmap_data
 
-# %%
-# --- Parameters ---
-distance_threshold = 2.0
-n_samples = 5000
+    hmap_x, hmap_y, hmap_z = load_heatmap_data(prefix="three_dim/")
 
-# --- Analysis ---
-results = calculate_far_cosine_metric(
-    positions_x=hmap_x,
-    positions_y=hmap_y,
-    activations=hmap_z,
-    distance_threshold=distance_threshold,
-    n_samples=n_samples,
-)
+    # %%
+    # --- Parameters ---
+    distance_threshold = 2.0
+    n_samples = 5000
 
-# --- Extract results ---
-cosine_values = np.array(results["far_cosine_values"])
-distances = np.array(results["far_pair_distances"])
-location_cosine_sums = results["location_cosine_sums"]
-sampled_indices = results["sampled_indices"]
+    # --- Analysis ---
+    results = calculate_far_cosine_metric(
+        hmap_x=hmap_x,
+        hmap_y=hmap_y,
+        hmap_z=hmap_z,
+        distance_threshold=distance_threshold,
+        n_samples=n_samples,
+    )
 
-# --- Print summary statistics ---
-print("\nResults Summary:")
-print(f"Total pairs (distance > {distance_threshold}): {len(cosine_values)}")
-print(f"Average cosine similarity: {np.mean(cosine_values):.3f}")
-print(f"Max cosine similarity: {np.max(cosine_values):.3f}")
-print(f"Min cosine similarity: {np.min(cosine_values):.3f}")
-print(f"Average distance (for far pairs): {np.mean(distances):.3f}")
+    # --- Extract results ---
+    cosine_values = np.array(results["far_cosine_values"])
+    distances = np.array(results["far_pair_distances"])
+    location_cosine_sums = results["location_cosine_sums"]
+    sampled_indices = results["sampled_indices"]
 
-# --- Create plots ---
-plt.figure(figsize=(15, 5))
+    # --- Print summary statistics ---
+    print("\nResults Summary:")
+    print(f"Total pairs (distance > {distance_threshold}): {len(cosine_values)}")
+    print(f"Average cosine similarity: {np.mean(cosine_values):.3f}")
+    print(f"Max cosine similarity: {np.max(cosine_values):.3f}")
+    print(f"Min cosine similarity: {np.min(cosine_values):.3f}")
+    print(f"Average distance (for far pairs): {np.mean(distances):.3f}")
 
-# %%
-# 1) Histogram of non-zero cosine similarities
-plt.subplot(1, 2, 1)
-nonzero_cosine_values = cosine_values[cosine_values > 0]
-plt.hist(nonzero_cosine_values, bins=30, edgecolor="black")
-plt.title("Distribution of Non-Zero Far Cosine Similarities")
-plt.xlabel("Cosine Similarity")
-plt.ylabel("Count")
-plt.grid(True, alpha=0.3)
+    # --- Create plots ---
+    plt.figure(figsize=(15, 5))
 
-print("\nNon-zero cosine similarity statistics:")
-print(f"Number of non-zero far pairs: {len(nonzero_cosine_values)}")
-if len(nonzero_cosine_values) > 0:
-    print(f"Average non-zero cosine similarity: {np.mean(nonzero_cosine_values):.3f}")
+    # %%
+    # 1) Histogram of non-zero cosine similarities
+    plt.subplot(1, 2, 1)
+    nonzero_cosine_values = cosine_values[cosine_values > 0]
+    plt.hist(nonzero_cosine_values, bins=30, edgecolor="black")
+    plt.title("Distribution of Non-Zero Far Cosine Similarities")
+    plt.xlabel("Cosine Similarity")
+    plt.ylabel("Count")
+    plt.grid(True, alpha=0.3)
 
-# %%
-# 2) Scatter plot: distance vs cosine similarity
-plt.subplot(1, 2, 2)
-plt.scatter(distances, cosine_values, alpha=0.3)
-plt.title("Distance vs Cosine Similarity (Far Pairs)")
-plt.xlabel("Distance")
-plt.ylabel("Cosine Similarity")
-plt.grid(True, alpha=0.3)
+    print("\nNon-zero cosine similarity statistics:")
+    print(f"Number of non-zero far pairs: {len(nonzero_cosine_values)}")
+    if len(nonzero_cosine_values) > 0:
+        print(
+            f"Average non-zero cosine similarity: {np.mean(nonzero_cosine_values):.3f}"
+        )
 
-plt.tight_layout()
-plt.show()
+    # %%
+    # 2) Scatter plot: distance vs cosine similarity
+    plt.subplot(1, 2, 2)
+    plt.scatter(distances, cosine_values, alpha=0.3)
+    plt.title("Distance vs Cosine Similarity (Far Pairs)")
+    plt.xlabel("Distance")
+    plt.ylabel("Cosine Similarity")
+    plt.grid(True, alpha=0.3)
 
-# --- 3) Visualizing the sums as a heatmap over space ---
-# Note: We only have the sums for the sampled points. So let's create an array
-#       that can hold NaNs for all original points and fill in the sum for
-#       sampled points.
+    plt.tight_layout()
+    plt.show()
 
-# Initialize an array with NaNs to hold the sums for *all* points
-heatmap = np.full_like(hmap_x, np.nan, dtype=float)
-# Fill the sums for the sampled indices
-heatmap[sampled_indices] = location_cosine_sums
+    # --- 3) Visualizing the sums as a heatmap over space ---
+    # Note: We only have the sums for the sampled points. So let's create an array
+    #       that can hold NaNs for all original points and fill in the sum for
+    #       sampled points.
 
-plt.figure(figsize=(8, 6))
-sc = plt.scatter(hmap_x, hmap_y, c=heatmap, cmap="viridis")
-plt.colorbar(sc, label="Sum of Far-Cosine Similarities")
-plt.title(f"Heatmap of Total Far-Cosine Similarities")
-plt.xlabel("X Position")
-plt.ylabel("Y Position")
-plt.grid(True, alpha=0.3)
-plt.show()
+    # Initialize an array with NaNs to hold the sums for *all* points
+    heatmap = np.full_like(hmap_x, np.nan, dtype=float)
+    # Fill the sums for the sampled indices
+    heatmap[sampled_indices] = location_cosine_sums
+
+    plt.figure(figsize=(8, 6))
+    sc = plt.scatter(hmap_x, hmap_y, c=heatmap, cmap="viridis")
+    plt.colorbar(sc, label="Sum of Far-Cosine Similarities")
+    plt.title(f"Heatmap of Total Far-Cosine Similarities")
+    plt.xlabel("X Position")
+    plt.ylabel("Y Position")
+    plt.grid(True, alpha=0.3)
+    plt.show()

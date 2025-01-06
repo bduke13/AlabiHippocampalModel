@@ -76,9 +76,11 @@ class DriverVertical(Supervisor):
         mode=RobotMode.PLOTTING,
         randomize_start_loc: bool = True,
         run_time_hours: int = 1,
+        preferred_va: Optional[List[float]] = None,
         sigma_d: Optional[List[float]] = None,
         sigma_va: Optional[List[float]] = None,
         sigma_a: Optional[List[float]] = None,
+        num_bvc_per_dir: Optional[int] = None,
         start_loc: Optional[List[int]] = None,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
@@ -112,14 +114,33 @@ class DriverVertical(Supervisor):
         self.timestep = 32 * 3
         self.tau_w = 10  # time constant for the window function
 
+        #        sigma_d: Optional[List[float]] = None,
+        #        sigma_va: Optional[List[float]] = None,
+        #        sigma_a: Optional[List[float]] = None,
+
         # Parameters for 3D BVC
         # Define preferred vertical angles and corresponding sigma values
-        self.preferred_vertical_angles = sigma_va  # [0.0, 0.2, 0.4]
-        self.sigma_d_list = [0.5] * len(self.preferred_vertical_angles)
-        self.sigma_ang_list = [0.2] * len(self.preferred_vertical_angles)
-        self.sigma_vert_list = [0.02] * len(self.preferred_vertical_angles)
+        self.preferred_vertical_angles = preferred_va
+
+        self.sigma_d_list = (
+            sigma_d
+            if sigma_d is not None
+            else [0.5] * len(self.preferred_vertical_angles)
+        )
+        self.sigma_ang_list = (
+            sigma_a
+            if sigma_a is not None
+            else [0.2] * len(self.preferred_vertical_angles)
+        )
+        self.sigma_vert_list = (
+            sigma_va
+            if sigma_va is not None
+            else [0.02] * len(self.preferred_vertical_angles)
+        )
+
+        self.num_bvc_per_dir = num_bvc_per_dir if num_bvc_per_dir else 50
+
         self.scaling_factors = [1.0] * len(self.preferred_vertical_angles)
-        self.num_bvc_per_dir = 50
 
         if sigma_d:
             self.sigma_d_list = sigma_d
@@ -711,7 +732,7 @@ class DriverVertical(Supervisor):
             hd_activations=self.hd_activations,
             collided=np.any(self.collided),
         )
-        # self.pcn.bvc_layer.plot_scan_3d_radial(self.vertical_boundaries)
+        self.pcn.bvc_layer.plot_scan_3d_radial(self.vertical_boundaries)
 
         # Advance the timestep and update position
         self.step(self.timestep)
@@ -979,6 +1000,7 @@ class DriverVertical(Supervisor):
             f.write(f"sigma_vert_list: {self.sigma_vert_list}\n")
             f.write(f"scaling_factors: {self.scaling_factors}\n")
             f.write(f"num_bvc_per_dir: {self.num_bvc_per_dir}\n")
+            f.write(f"num_bvcs: {self.pcn.num_bvc}\n")
             f.write(f"num_place_cells: {self.num_place_cells}\n")
             f.write(f"n_hd: {self.n_hd}\n")
         files_saved.append("parameters.txt")

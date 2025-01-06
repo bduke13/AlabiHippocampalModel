@@ -5,13 +5,14 @@ import pickle
 import json
 import matplotlib.colors as mcolors
 from pathlib import Path
+from controllers.bek_controller.visualizations.analysis_utils import *
 
 
 def plot_overlayed_cells(
-    hmap_x_path="hmap_x.pkl",
-    hmap_y_path="hmap_y.pkl",
-    hmap_z_path="hmap_z.pkl",
-    colors_path="visualizations/colors.json",
+    hmap_x,
+    hmap_y,
+    hmap_z,
+    colors_path=None,
     gridsize=50,
     save_plot=False,
     suffix="",
@@ -26,23 +27,30 @@ def plot_overlayed_cells(
         colors_path (str): Path to the colors JSON file
         gridsize (int): Size of the grid for binning
     """
-    # Load the colors list
-    with open(colors_path, "r") as f:
-        colors = json.load(f)
-
-    # Convert hex colors to RGB format
-    colors_rgb = [mcolors.to_rgb(c) for c in colors]
-
-    # Load hmap data
-    with open(hmap_x_path, "rb") as f:
-        hmap_x = np.array(pickle.load(f))
-    with open(hmap_y_path, "rb") as f:
-        hmap_y = np.array(pickle.load(f))
-    with open(hmap_z_path, "rb") as f:
-        hmap_z = np.asarray(pickle.load(f))
-
-    # Total number of place cells based on hmap_z's shape
+    # Total number of place cells based on hmap_z's shape (dimension 1)
     num_cells_to_plot = hmap_z.shape[1]
+
+    # Generate or load colors
+    if colors_path is None:
+        # Generate random bright colors for better visibility
+        colors_rgb = [np.random.uniform(0.4, 1, 3) for _ in range(num_cells_to_plot)]
+    else:
+        # Load the colors list from file
+        with open(colors_path, "r") as f:
+            colors = json.load(f)
+        # Convert hex colors to RGB format
+        colors_rgb = [mcolors.to_rgb(c) for c in colors]
+
+    # Generate or load colors for all cells
+    if colors_path is None:
+        # Generate random bright colors for better visibility
+        colors_rgb = [np.random.uniform(0.4, 1, 3) for _ in range(num_cells_to_plot)]
+    else:
+        # Load the colors list from file
+        with open(colors_path, "r") as f:
+            colors = json.load(f)
+        # Convert hex colors to RGB format
+        colors_rgb = [mcolors.to_rgb(c) for c in colors]
 
     # Calculate total activation per cell for cell selection
     total_activation_per_cell = np.sum(hmap_z, axis=0)
@@ -167,22 +175,9 @@ def plot_overlayed_cells(
     return fig  # Return the figure object
 
 
-if __name__ == "__main__":
-    # Load data
-    with open("hmap_x.pkl", "rb") as f:
-        hmap_x = np.array(pickle.load(f))
-    with open("hmap_y.pkl", "rb") as f:
-        hmap_y = np.array(pickle.load(f))
-    with open("hmap_z.pkl", "rb") as f:
-        hmap_z = np.asarray(pickle.load(f))
-
-    # Create visualization
-    plot_overlayed_cells(
-        hmap_x_path="hmap_x.pkl",
-        hmap_y_path="hmap_y.pkl",
-        hmap_z_path="hmap_z.pkl",
-        colors_path="visualizations/colors.json",
-        gridsize=100,
-        save_plot=False,
-        suffix="test",
-    )
+# %%
+hmap_x, hmap_y, hmap_z = load_hmaps(
+    "controllers/bek_controller/IJCNN/3D_1L_v1/world_outside/trial_0/"
+)
+hmap_z.shape
+plot_overlayed_cells(hmap_x, hmap_y, hmap_z, gridsize=100)
