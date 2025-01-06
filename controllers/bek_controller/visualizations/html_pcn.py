@@ -16,7 +16,7 @@ def plot_place_cells_group(
     hmap_z,
     colors_rgb,
     group_index,
-    output_dir="visualizations/outputs/",
+    output_dir=None,
     save_plot=True,
     show_plot=False,
     return_plot=False,
@@ -83,8 +83,8 @@ def plot_place_cells_group(
 
     plt.tight_layout()
 
-    # Save the plot if save_plot flag is True
-    if save_plot:
+    # Save the plot if save_plot flag is True and output_dir is provided
+    if save_plot and output_dir is not None:
         os.makedirs(output_dir, exist_ok=True)
         file_path = os.path.join(output_dir, f"place_cells_group_{group_index}.jpg")
         plt.savefig(file_path, bbox_inches="tight", dpi=300)
@@ -140,15 +140,15 @@ def generate_html_report(cell_indices, output_dir):
 
 
 # %%
-hmap_x, hmap_y, hmap_z = load_hmaps(
-    "controllers/bek_controller/IJCNN/3D_1L_v1/world_outside/trial_0/"
-)
+# Define base directory for both input and output
+BASE_DIR = "controllers/bek_controller/IJCNN/3D_1L/center/"
+hmap_x, hmap_y, hmap_z = load_hmaps(BASE_DIR)
 
 
 # %%
 if __name__ == "__main__":
-    # Create the output directory
-    output_dir = "visualizations/outputs/"
+    # Create the output directory as a subdirectory of where hmaps are loaded from
+    output_dir = os.path.join(BASE_DIR, "visualizations")
     os.makedirs(output_dir, exist_ok=True)
 
     # Load the colors list
@@ -157,14 +157,6 @@ if __name__ == "__main__":
 
     # Convert hex colors to RGB format
     colors_rgb = [mcolors.to_rgb(c) for c in colors]
-
-    # Load hmap data
-    #    with open("hmap_x.pkl", "rb") as f:
-    #        hmap_x = np.array(pickle.load(f))
-    #    with open("hmap_y.pkl", "rb") as f:
-    #        hmap_y = np.array(pickle.load(f))
-    #    with open("hmap_z.pkl", "rb") as f:
-    #        hmap_z = np.asarray(pickle.load(f))
 
     # Try to read cells.csv if it exists, otherwise use all cells
     if os.path.exists("cells.csv"):
@@ -196,8 +188,17 @@ if __name__ == "__main__":
     # Generate HTML report
     html_path = generate_html_report(cell_indices, output_dir)
 
+    # Remove individual place cell group images
+    num_groups = (len(cell_indices) + 4) // 5  # Round up division by 5
+    for i in range(num_groups):
+        group_image = os.path.join(output_dir, f"place_cells_group_{i}.jpg")
+        if os.path.exists(group_image):
+            os.remove(group_image)
+            print(f"Removed: {group_image}")
+
     # Open in default browser
     webbrowser.open(f"file://{os.path.abspath(html_path)}")
 
     print(f"Processed plots for {len(cell_indices)} cell(s).")
     print(f"HTML report generated at: {html_path}")
+    print("Individual place cell group images have been cleaned up.")
