@@ -27,7 +27,10 @@ main.py
 *.npy
 *.keras
 *.html
-cell_names.txt
+*cell_names.txt
 
 three_dim*
 two_dim*
+*IJCNN*
+*paper_data*
+*outputs*
