@@ -13,6 +13,7 @@ class BoundaryVectorCellLayer:
         sigma_ang: float,
         sigma_d: float,
         lidar_angles: np.ndarray,
+        num_bvc_per_dir: int,
     ) -> None:
         """Initialize the boundary vector cell (BVC) layer.
 
@@ -28,10 +29,12 @@ class BoundaryVectorCellLayer:
             sigma_d: Standard deviation (tuning width) for the Gaussian function modeling distance tuning of BVCs.
         """
         # Compute the number of preferred distances per head direction
-        N_dist = len(np.arange(0, max_dist, sigma_d / 2))
+        N_dist = len(np.arange(0, max_dist, max_dist / num_bvc_per_dir))
 
         # Preferred distances for each BVC; determines how sensitive each BVC is to specific distances.
-        self.d_i = np.tile(np.arange(0, max_dist, sigma_d / 2), n_hd)[np.newaxis, :]
+        self.d_i = np.tile(np.arange(0, max_dist, max_dist / num_bvc_per_dir), n_hd)[
+            np.newaxis, :
+        ]
 
         self.n_hd = n_hd
 

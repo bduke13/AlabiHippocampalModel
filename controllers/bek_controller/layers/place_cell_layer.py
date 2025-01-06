@@ -50,7 +50,7 @@ class PlaceCellLayer:
         # Initialized with a 20% probability of connection
         # Shape: (num_pc, num_bvc)
         self.w_in = tf.Variable(
-            rng.binomial(n=1, p=0.2, size=(num_pc, self.num_bvc)), dtype=tf.float32
+            rng.binomial(n=1, p=0.3, size=(num_pc, self.num_bvc)), dtype=tf.float32
         )
 
         # Recurrent weight matrix for head direction and place cell interactions

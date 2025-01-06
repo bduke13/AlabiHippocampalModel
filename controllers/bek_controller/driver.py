@@ -71,6 +71,7 @@ class Driver(Supervisor):
         start_loc: Optional[List[int]] = None,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
+        file_prefix: str = "",
     ):
         """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
@@ -91,9 +92,12 @@ class Driver(Supervisor):
             None
         """
         self.mode = mode
+        self.done = False
+        self.file_prefix = file_prefix
 
         # Model parameters
-        self.num_place_cells = 200
+        self.num_place_cells = 400
+        self.num_bvc_per_dir = 50
         self.num_reward_cells = 1
         self.n_hd = 8
         self.timestep = 32 * 3
@@ -230,12 +234,16 @@ class Driver(Supervisor):
                 sigma_ang=90,
                 sigma_d=0.5,
                 lidar_angles=self.lidar_angles,
+                num_bvc_per_dir=self.num_bvc_per_dir,
             )
 
             self.pcn = PlaceCellLayer(
                 bvc_layer=bvc, num_pc=num_place_cells, timestep=timestep, n_hd=n_hd
             )
-            print("Initialized new Place Cell Network.")
+            print(
+                f"Initialized new Boundary Vector Cell Network with {self.pcn.num_bvc} cells"
+            )
+            print(f"Initialized new Place Cell Network with {self.pcn.num_pc} cells")
 
         if enable_ojas is not None:
             self.pcn.enable_ojas = enable_ojas
@@ -292,7 +300,7 @@ class Driver(Supervisor):
         print(f"Starting robot in stage {self.mode}")
         print(f"Goal at {self.goal_location}")
 
-        while True:
+        while not self.done:
             # Handle the robot's state
             if self.mode == RobotMode.MANUAL_CONTROL:
                 self.manual_control()
@@ -868,50 +876,49 @@ class Driver(Supervisor):
         Parameters:
             include_maps (bool): If True, saves the history of the agent's path and activations.
         """
+        # Create directory if it doesn't exist
+        if self.file_prefix:
+            directory = os.path.dirname(self.file_prefix)
+            if directory and not os.path.exists(directory):
+                os.makedirs(directory)
 
         files_saved = []
         # Save the Place Cell Network (PCN)
         if include_pcn:
-            with open("pcn.pkl", "wb") as output:
+            with open(f"{self.file_prefix}pcn.pkl", "wb") as output:
                 pickle.dump(self.pcn, output)
                 files_saved.append("pcn.pkl")
 
         # Save the Reward Cell Network (RCN)
         if include_rcn:
-            with open("rcn.pkl", "wb") as output:
+            with open(f"{self.file_prefix}rcn.pkl", "wb") as output:
                 pickle.dump(self.rcn, output)
                 files_saved.append("rcn.pkl")
 
         # Save the history maps if specified
         if include_hmaps:
-            with open("hmap_x.pkl", "wb") as output:
+            with open(f"{self.file_prefix}hmap_x.pkl", "wb") as output:
                 pickle.dump(self.hmap_x[: self.step_count], output)
                 files_saved.append("hmap_x.pkl")
-            with open("hmap_y.pkl", "wb") as output:
+            with open(f"{self.file_prefix}hmap_y.pkl", "wb") as output:
                 pickle.dump(self.hmap_y[: self.step_count], output)
                 files_saved.append("hmap_y.pkl")
-            with open("hmap_z.pkl", "wb") as output:
+            with open(f"{self.file_prefix}hmap_z.pkl", "wb") as output:
                 pickle.dump(self.hmap_z[: self.step_count], output)
                 files_saved.append("hmap_z.pkl")
-            with open("hmap_g.pkl", "wb") as output:
+            with open(f"{self.file_prefix}hmap_g.pkl", "wb") as output:
                 pickle.dump(self.hmap_g[: self.step_count], output)
                 files_saved.append("hmap_g.pkl")
-            with open("hmap_h.pkl", "wb") as output:
+            with open(f"{self.file_prefix}hmap_h.pkl", "wb") as output:
                 pickle.dump(self.hmap_h[: self.step_count], output)
                 files_saved.append("hmap_h.pkl")
-            with open("hmap_bvc.pkl", "wb") as output:
+            with open(f"{self.file_prefix}hmap_bvc.pkl", "wb") as output:
                 pickle.dump(self.hmap_bvc[: self.step_count], output)
                 files_saved.append("hmap_bvc.pkl")
 
-        root = tk.Tk()
-        root.withdraw()  # Hide the main window
-        root.attributes("-topmost", True)  # Always keep the window on top
-        root.update()
-        messagebox.showinfo("Information", "Press OK to save data")
-        root.destroy()  # Destroy the main window
-        self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
         print(f"Files Saved: {files_saved}")
         print("Saving Done!")
+        self.done = True
 
     def clear(self):
         """
