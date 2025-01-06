@@ -9,8 +9,8 @@ WorldInfo {
   coordinateSystem "NUE"
 }
 Viewpoint {
-  orientation 1 0 0 4.71238898038469
-  position 4.314623456868314e-15 23.97756142256217 0.31058240462074554
+  orientation 0.9999999999999999 1.2730908912436768e-18 4.332915192194267e-19 4.712822894472857
+  position -2.3648425775956184e-28 43.79645126660309 1.221673693400541e-13
   near 0.1
   follow "Create"
   followType "None"
@@ -79,9 +79,10 @@ DEF agent Create {
   ]
 }
 Wall {
-  translation 0 0 -5
+  translation 1.69 0 -5
+  rotation 1 0 0 0.785398
   name "Side_Wall_1"
-  size 10.3 2.4 0.3
+  size 15 4 0.3
   appearance Roughcast {
     colorOverride 0.8 0.45 0.25
     textureTransform TextureTransform {
@@ -90,10 +91,10 @@ Wall {
   }
 }
 Wall {
-  translation -5 0 0
-  rotation 0 1 0 1.5708
+  translation -5 1.85864e-06 1.34
+  rotation 0.3574058186283875 0.8628565621288802 -0.35740681862788 1.71777
   name "Side_Wall_2"
-  size 9.7 2.4 0.3
+  size 12 4 0.3
   appearance Roughcast {
     colorOverride 0.8 0.45 0.25
     textureTransform TextureTransform {
@@ -102,9 +103,10 @@ Wall {
   }
 }
 Wall {
-  translation 0 0 5
+  translation 1.36 0 5
+  rotation 1 0 0 0.785398
   name "Side_Wall_3"
-  size 10.3 2.4 0.3
+  size 13.5 4 0.3
   appearance Roughcast {
     colorOverride 0.8 0.45 0.25
     textureTransform TextureTransform {
@@ -113,10 +115,10 @@ Wall {
   }
 }
 Wall {
-  translation 5 0 0
-  rotation 0 1 0 1.5708
+  translation 5 1.85862e-06 1.34
+  rotation 0.3574058186283875 0.8628565621288802 -0.35740681862788 1.71777
   name "Side_Wall_4"
-  size 9.7 2.4 0.3
+  size 13.5 4 0.3
   appearance Roughcast {
     colorOverride 0.8 0.45 0.25
     textureTransform TextureTransform {
@@ -125,8 +127,8 @@ Wall {
   }
 }
 Wall {
-  translation 0 2.4 5
-  rotation 1 0 0 -1.5708
+  translation 2.64 2.4 7.41
+  rotation -1 0 0 1.5708
   name "Main_Ceiling"
   size 10 10 0.3
   appearance PBRAppearance {
@@ -136,7 +138,7 @@ Wall {
   }
 }
 Wall {
-  rotation 0.1294279597735375 0.9831056944488314 -0.1294279597735375 1.58784
+  rotation 0 1 0 1.5708
   name "wall(Center1)"
   size 5 2.4 0.3
   appearance Roughcast {
@@ -147,7 +149,7 @@ Wall {
   }
 }
 Wall {
-  rotation 1 0 0 0.261799
+  rotation 0 -1 0 0
   name "wall(Center2)"
   size 5 2.4 0.3
   appearance Roughcast {

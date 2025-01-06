@@ -8,5 +8,5 @@ orthographicViewHeight: 1
 textFiles: -1
 consoles: Console:All:All
 renderingDevicePerspectives: Create:display;1;1;0;0
-renderingDevicePerspectives: Create:range-finder;1;32;0;0
+renderingDevicePerspectives: Create:range-finder;1;1.91111;0;0
 renderingDevicePerspectives: Create:vertical-range-finder;1;1;0;0
