@@ -176,8 +176,9 @@ def plot_overlayed_cells(
 
 
 # %%
-hmap_x, hmap_y, hmap_z = load_hmaps(
-    "controllers/bek_controller/IJCNN/3D_1L_v1/world_outside/trial_0/"
-)
-hmap_z.shape
-plot_overlayed_cells(hmap_x, hmap_y, hmap_z, gridsize=100)
+if __name__ == "__main__":
+    hmap_x, hmap_y, hmap_z = load_hmaps(
+        "controllers/bek_controller/IJCNN/3D_1L_v1/world_outside/trial_0/"
+    )
+    hmap_z.shape
+    plot_overlayed_cells(hmap_x, hmap_y, hmap_z, gridsize=100)
