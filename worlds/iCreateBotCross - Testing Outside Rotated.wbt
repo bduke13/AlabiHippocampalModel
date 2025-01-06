@@ -54,7 +54,7 @@ DEF agent Create {
           width 720
           height 1
           spherical TRUE
-          maxRange 10
+          maxRange 20
         }
         DEF vertical-range-finder RangeFinder {
           translation 0 0.1 0
