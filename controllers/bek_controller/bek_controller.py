@@ -14,7 +14,7 @@ if __name__ == "__main__":
     world_index = "upright"
 
     preferred_va = [0.0]
-    sigma_va = [0.0]
+    sigma_va = [0.05]
 
     bot = DriverVertical()
     # Create walls with angles for this trial
