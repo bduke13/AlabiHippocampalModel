@@ -5,7 +5,7 @@ from copy import deepcopy
 tf.random.set_seed(5)
 
 class RewardCellLayer:
-    def __init__(self, num_reward_cells=1, input_dim=200, num_replay=3):
+    def __init__(self, num_reward_cells=1, input_dim=200, num_replay=3, learning_rate=0.1):
         """Initialize the Reward Cell Layer.
 
         Args:
@@ -22,6 +22,8 @@ class RewardCellLayer:
 
         # Number of replay iterations
         self.num_replay = num_replay
+
+        self.learning_rate = learning_rate
 
         # Initialize weights with small random values
         initializer = tf.keras.initializers.RandomNormal(mean=0.0, stddev=0.01)
@@ -53,8 +55,7 @@ class RewardCellLayer:
 
         if visit:
             # Update weights directly based on input data
-            learning_rate = 0.1  # Adjust as needed
-            updated_weights = self.w_in_effective + learning_rate * input_data
+            updated_weights = self.w_in_effective + self.learning_rate * input_data
             self.w_in_effective.assign(updated_weights)
 
     def replay(self, pcn):
