@@ -6,7 +6,6 @@ import json
 import os
 import matplotlib.colors as mcolors
 import webbrowser
-from controllers.bek_controller.visualizations.analysis_utils import *
 
 
 def plot_place_cells_group(
@@ -105,6 +104,7 @@ def plot_place_cells_group(
 def generate_html_report(cell_indices, output_dir):
     """Generate an HTML report of all place cell visualizations."""
     html_path = os.path.join(output_dir, "place_cells_report.html")
+    assets_path = "html_assets"  # Relative path for images in HTML
 
     with open(html_path, "w") as f:
         f.write(
@@ -129,7 +129,7 @@ def generate_html_report(cell_indices, output_dir):
                 f"""
             <div class="group-viz">
                 <h3>Group {i}</h3>
-                <img src="place_cells_group_{i}.jpg" style="max-width: 100%;">
+                <img src="html_assets/place_cells_group_{i}.jpg" style="max-width: 100%;">
             </div>
             """
             )
@@ -139,24 +139,46 @@ def generate_html_report(cell_indices, output_dir):
     return html_path
 
 
-# %%
-# Define base directory for both input and output
-BASE_DIR = "controllers/bek_controller/IJCNN/3D_1L/center/"
-hmap_x, hmap_y, hmap_z = load_hmaps(BASE_DIR)
+def generate_place_cells_report(
+    hmap_x, hmap_y, hmap_z, output_dir="visualizations/outputs/", open_browser=True
+):
+    # Create output directory and assets subdirectory
+    assets_dir = os.path.join(output_dir, "html_assets")
+    os.makedirs(assets_dir, exist_ok=True)
+    """
+    Generate an HTML report of place cell visualizations.
 
+    Args:
+        hmap_x: The x coordinates of the grid
+        hmap_y: The y coordinates of the grid
+        hmap_z: The activation data for the place cells (z-axis)
+        output_dir: Directory to save the visualizations (default: "visualizations/outputs/")
+        open_browser: Whether to automatically open the report in browser (default: True)
 
-# %%
-if __name__ == "__main__":
-    # Create the output directory as a subdirectory of where hmaps are loaded from
-    output_dir = os.path.join(BASE_DIR, "visualizations")
+    Returns:
+        str: Path to the generated HTML report
+    """
+    # Create output directory
     os.makedirs(output_dir, exist_ok=True)
 
-    # Load the colors list
-    with open("controllers/bek_controller/visualizations/colors.json", "r") as f:
-        colors = json.load(f)
+    # Generate vibrant colors programmatically using HSV color space
+    def generate_vibrant_colors(n):
+        colors_rgb = []
+        for i in range(n):
+            # Use HSV color space for more vibrant colors
+            hue = i / n
+            saturation = 0.9  # High saturation for vibrancy
+            value = 0.95  # High value for brightness
+            # Convert HSV to RGB
+            color = plt.cm.hsv(hue)[:3]  # Get RGB from HSV, exclude alpha
+            # Adjust for vibrancy
+            color = np.array(color) * saturation * value
+            colors_rgb.append(color)
+        return colors_rgb
 
-    # Convert hex colors to RGB format
-    colors_rgb = [mcolors.to_rgb(c) for c in colors]
+    # Generate colors for all possible cells
+    num_cells = hmap_z.shape[1]
+    colors_rgb = generate_vibrant_colors(num_cells)
 
     # Try to read cells.csv if it exists, otherwise use all cells
     if os.path.exists("cells.csv"):
@@ -165,6 +187,7 @@ if __name__ == "__main__":
     else:
         print("cells.csv not found, using all cells")
         cell_indices = np.arange(hmap_z.shape[1])
+
     # Generate and save plots in groups of 5
     for i in range(0, len(cell_indices), 5):
         group = cell_indices[i : i + 5]
@@ -180,7 +203,7 @@ if __name__ == "__main__":
             hmap_z,
             colors_rgb,
             group_index,
-            output_dir=output_dir,
+            output_dir=assets_dir,
             save_plot=True,
             show_plot=False,
         )
@@ -188,17 +211,24 @@ if __name__ == "__main__":
     # Generate HTML report
     html_path = generate_html_report(cell_indices, output_dir)
 
-    # Remove individual place cell group images
-    num_groups = (len(cell_indices) + 4) // 5  # Round up division by 5
-    for i in range(num_groups):
-        group_image = os.path.join(output_dir, f"place_cells_group_{i}.jpg")
-        if os.path.exists(group_image):
-            os.remove(group_image)
-            print(f"Removed: {group_image}")
-
-    # Open in default browser
-    webbrowser.open(f"file://{os.path.abspath(html_path)}")
+    # Let the browser start opening the file (if requested)
+    if open_browser:
+        webbrowser.open(f"file://{os.path.abspath(html_path)}")
 
     print(f"Processed plots for {len(cell_indices)} cell(s).")
     print(f"HTML report generated at: {html_path}")
-    print("Individual place cell group images have been cleaned up.")
+    print(f"Images saved in: {assets_dir}")
+
+    return html_path
+
+
+# %%
+if __name__ == "__main__":
+    from controllers.bek_controller.visualizations.analysis_utils import *
+
+    # Example usage
+    target_dir = "controllers/bek_controller/IJCNN/3D_1L_1/upright/"
+    hmap_x, hmap_y, hmap_z = load_hmaps(target_dir)
+
+    # %%
+    generate_place_cells_report(hmap_x, hmap_y, hmap_z, output_dir=target_dir)

@@ -13,7 +13,7 @@ def plot_overlayed_cells(
     hmap_z,
     colors_path=None,
     gridsize=50,
-    save_plot=False,
+    output_dir=None,
     suffix="",
 ):
     """
@@ -31,8 +31,15 @@ def plot_overlayed_cells(
 
     # Generate or load colors
     if colors_path is None:
-        # Generate random bright colors for better visibility
-        colors_rgb = [np.random.uniform(0.4, 1, 3) for _ in range(num_cells_to_plot)]
+        # Generate random vibrant colors with higher saturation
+        colors_rgb = []
+        for _ in range(num_cells_to_plot):
+            # Generate colors with higher minimum values for more vibrancy
+            color = np.random.uniform(0.6, 1, 3)
+            # Ensure at least one channel is very bright
+            bright_channel = np.random.randint(0, 3)
+            color[bright_channel] = np.random.uniform(0.9, 1.0)
+            colors_rgb.append(color)
     else:
         # Load the colors list from file
         with open(colors_path, "r") as f:
@@ -137,8 +144,14 @@ def plot_overlayed_cells(
             if activation_level > 0:
                 idx = cell_with_max_activation[i, j]
                 color_rgb = colors_rgb[cell_indices[idx]]
-                # Adjust color towards black based on activation level
-                adjusted_color = activation_level * np.array(color_rgb)
+                # Enhance color vibrancy:
+                # 1. Increase minimum brightness to 0.3
+                # 2. Apply power function to activation level to make mid-levels brighter
+                # 3. Scale the remaining range from 0.3 to 1.0
+                enhanced_activation = 0.3 + 0.7 * (activation_level**0.5)
+                adjusted_color = enhanced_activation * np.array(color_rgb)
+                # Ensure we don't exceed 1.0
+                adjusted_color = np.clip(adjusted_color, 0, 1)
                 image[i, j, :] = adjusted_color
             # else:
             # No activation in this bin, leave as black (0,0,0)
@@ -156,9 +169,9 @@ def plot_overlayed_cells(
 
     fig = plt.gcf()
 
-    if save_plot:
-        # Create output directory if it doesn't exist
-        output_dir = Path("visualizations/outputs")
+    if output_dir is not None:
+        # Convert to Path object and create directory if it doesn't exist
+        output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Construct filename with suffix
@@ -167,9 +180,10 @@ def plot_overlayed_cells(
 
         # Save the plot
         fig.savefig(output_path)
-        plt.close(fig)
-    else:
-        plt.show()
+
+    # Always show the plot
+    plt.show()
+    plt.close(fig)
 
     return fig  # Return the figure object
 
@@ -178,8 +192,7 @@ def plot_overlayed_cells(
 if __name__ == "__main__":
     from controllers.bek_controller.visualizations.analysis_utils import *
 
-    hmap_x, hmap_y, hmap_z = load_hmaps(
-        "controllers/bek_controller/IJCNN/3D_1L/center/"
-    )
+    data_path = "controllers/bek_controller/IJCNN/3D_1L_1/upright/"
+    hmap_x, hmap_y, hmap_z = load_hmaps(data_path)
     # %%
-    plot_overlayed_cells(hmap_x, hmap_y, hmap_z, gridsize=100)
+    plot_overlayed_cells(hmap_x, hmap_y, hmap_z, gridsize=100, output_dir=data_path)
