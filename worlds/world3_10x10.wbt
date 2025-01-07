@@ -1,14 +1,14 @@
 #VRML_SIM R2021a utf8
 WorldInfo {
   info [
-    "1 obstacle"
+    "3 obstacles"
   ]
-  title "world1"
+  title "world3"
   coordinateSystem "NUE"
 }
 Viewpoint {
   orientation 1 0 0 4.71238898038469
-  position 6.176886881231866e-05 12.042210096987738 1.4772974787896608e-07
+  position 6.176886881231866e-05 15.98299491613089 1.477297471550795e-07
   near 0.1
   follow "Create"
   followType "None"
@@ -16,7 +16,7 @@ Viewpoint {
 TexturedBackground {
 }
 RectangleArena {
-  floorSize 5 5
+  floorSize 10 10
   floorAppearance NULL
   wallAppearance BrushedAluminium {
     colorOverride 0 1 1
@@ -24,7 +24,7 @@ RectangleArena {
   }
 }
 Transform {
-  translation -1 0.0001 1
+  translation -2 0.0001 2
   children [
     Shape {
       appearance Appearance {
@@ -38,6 +38,42 @@ Transform {
       }
     }
   ]
+}
+Wall {
+  translation 1.85 0 3.31
+  rotation 0 1 0 3.2647
+  name "wall3.2647"
+  size 2 1.2 0.15
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 1.2
+    }
+  }
+}
+Wall {
+  translation 3.14 0 -0.94
+  rotation 0 1 0 4.7871
+  name "wall4.7871"
+  size 2 1.2 0.15
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 1.2
+    }
+  }
+}
+Wall {
+  translation -0.9 0 1.44
+  rotation 0 1 0 4.6473
+  name "wall4.6473"
+  size 2 1.2 0.15
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 1.2
+    }
+  }
 }
 DEF agent Create {
   hidden position_0_0 45249.17206706551

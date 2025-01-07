@@ -8,7 +8,7 @@ WorldInfo {
 }
 Viewpoint {
   orientation 1 0 0 4.71238898038469
-  position 6.176886881231866e-05 12.042210096987738 1.4772974787896608e-07
+  position 6.176886881231866e-05 39.47925972048688 1.477297428390283e-07
   near 0.1
   follow "Create"
   followType "None"
@@ -16,7 +16,7 @@ Viewpoint {
 TexturedBackground {
 }
 RectangleArena {
-  floorSize 5 5
+  floorSize 20 20
   floorAppearance NULL
   wallAppearance BrushedAluminium {
     colorOverride 0 1 1
@@ -24,7 +24,7 @@ RectangleArena {
   }
 }
 Transform {
-  translation -1 0.0001 1
+  translation -7 0 7
   children [
     Shape {
       appearance Appearance {
@@ -62,7 +62,7 @@ DEF agent Create {
           width 720
           height 1
           spherical TRUE
-          maxRange 10
+          maxRange 20
         }
         Shape {
           appearance PBRAppearance {
