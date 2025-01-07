@@ -137,8 +137,7 @@ class DriverVertical(Supervisor):
             if sigma_va is not None
             else [0.02] * len(self.preferred_vertical_angles)
         )
-
-        self.num_bvc_per_dir = num_bvc_per_dir if num_bvc_per_dir else 50
+        self.num_bvc_per_dir = num_bvc_per_dir if num_bvc_per_dir is not None else 50
 
         self.scaling_factors = [1.0] * len(self.preferred_vertical_angles)
 
@@ -734,7 +733,6 @@ class DriverVertical(Supervisor):
             collided=np.any(self.collided),
         )
 
-        # print(self.pcn.bvc_layer.horizontal_gaussian_precomputed)
         # self.pcn.bvc_layer.plot_activation(self.vertical_boundaries)
 
         # Advance the timestep and update position
@@ -1006,6 +1004,8 @@ class DriverVertical(Supervisor):
             f.write(f"num_bvcs: {self.pcn.num_bvc}\n")
             f.write(f"num_place_cells: {self.num_place_cells}\n")
             f.write(f"n_hd: {self.n_hd}\n")
+            f.write(f"run_time_hours: {self.run_time_minutes / 60}\n")
+            f.write(f"num_simulation_steps: {self.num_steps}\n")
         files_saved.append("parameters.txt")
 
         print(f"Files Saved: {files_saved}")
