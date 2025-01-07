@@ -20,6 +20,7 @@ from objects.RobotMode import RobotMode
 from analysis.stats_collector import stats_collector
 
 tf.random.set_seed(5)
+# tf.config.experimental.enable_op_determinism()
 np.set_printoptions(precision=2)
 PI = tf.constant(np.pi)
 rng = default_rng()  # random number generator
@@ -98,14 +99,14 @@ class Driver(Supervisor):
         self.done = False
 
         # Model parameters
-        self.num_small_place_cells = 300  # Adjust as needed
-        self.num_large_place_cells = 200  # Adjust as needed
+        self.num_small_place_cells = 600  # Adjust as needed
+        self.num_large_place_cells = 300  # Adjust as needed
         self.num_reward_cells = 1
         self.n_hd = 8
         self.timestep = 32 * 3
         self.tau_w = 10  # time constant for the window function
         if self.mode == RobotMode.EXPLOIT:
-            self.tau_w = 3
+            self.tau_w = 8
         self.enable_multiscale = enable_multiscale
 
         # Robot parameters
@@ -117,7 +118,7 @@ class Driver(Supervisor):
         self.run_time_minutes = run_time_hours * 60
         self.step_count = 0
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
-        self.goal_r = {"explore": 0.3, "exploit": 0.5}
+        self.goal_r = {"explore": 0.3, "exploit": 0.8}
 
         self.hmap_x = np.zeros(self.num_steps)  # x-coordinates
         self.hmap_y = np.zeros(self.num_steps)  # y-coordinate
@@ -193,7 +194,7 @@ class Driver(Supervisor):
         self.step_count += 1
 
         # Initialize goal
-        self.goal_location = [-1, 1]
+        self.goal_location = [-7, 7]
         self.expected_reward = 0
         self.last_reward = 0
 
@@ -228,130 +229,92 @@ class Driver(Supervisor):
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
     ):
-        """Loads the multi-scale or single-scale PCN(s), and conditionally enables Oja’s or STDP.
+        """Loads the multi-scale or single-scale PCN(s), and conditionally enables Oja’s or STDP."""
+        world_name = self.getWorldPath()  # This returns the full path
+        world_name = world_name.split('/')[-1].replace('.wbt', '')  # Extract just the world name
+        network_dir = f"pkl/networks/{world_name}"
 
-        If enable_multiscale == True:
-        - pcn_small and pcn_large are loaded or created
-        Else:
-        - Only pcn_small is loaded or created
-        Also toggles self.pcn_small.enable_ojas / enable_stdp depending on arguments or mode.
-        Same for self.pcn_large if multiscale is on.
-        """
+        os.makedirs(network_dir, exist_ok=True)
+
+        # Load Small PCN
+        try:
+            with open(f"{network_dir}/pcn_small.pkl", "rb") as f:
+                self.pcn_small = pickle.load(f)
+                self.pcn_small.reset_activations()
+                print("Loaded existing Small Place Cell Network.")
+        except FileNotFoundError:
+            # Initialize new Small PCN if not found
+            bvc = BoundaryVectorCellLayer(
+                max_dist=20,
+                input_dim=720,
+                n_hd=n_hd,
+                sigma_ang=90,
+                sigma_d=0.5,
+            )
+            self.pcn_small = PlaceCellLayer(
+                bvc_layer=bvc,
+                num_pc=num_small_place_cells,
+                timestep=timestep,
+                n_hd=n_hd,
+                enable_ojas=enable_ojas,
+                enable_stdp=enable_stdp,
+                modulate_by_vis_density=False,
+            )
+            print("Initialized new Small Place Cell Network.")
+
         if self.enable_multiscale:
-            # ------ SMALL PCN ------
+            # Load Large PCN
             try:
-                with open("pcn_small.pkl", "rb") as f:
-                    self.pcn_small = pickle.load(f)
-                    self.pcn_small.reset_activations()
-                    print("Loaded existing Small Place Cell Network.")
-            except FileNotFoundError:
-                bvc = BoundaryVectorCellLayer(
-                    max_dist=12,
-                    input_dim=720,
-                    n_hd=n_hd,
-                    sigma_ang=90,
-                    sigma_d=0.5,
-                )
-                self.pcn_small = PlaceCellLayer(
-                    bvc_layer=bvc,
-                    num_pc=num_small_place_cells,
-                    timestep=timestep,
-                    n_hd=n_hd,
-                    enable_ojas=enable_ojas,  # We'll set this below
-                    enable_stdp=enable_stdp,  # We'll set this below
-                    modulate_by_vis_density=False,
-                )
-                print("Initialized new Small Place Cell Network.")
-
-            # ------ LARGE PCN ------
-            try:
-                with open("pcn_large.pkl", "rb") as f:
+                with open(f"{network_dir}/pcn_large.pkl", "rb") as f:
                     self.pcn_large = pickle.load(f)
                     self.pcn_large.reset_activations()
                     print("Loaded existing Large Place Cell Network.")
             except FileNotFoundError:
+                # Initialize new Large PCN if not found
                 bvc = BoundaryVectorCellLayer(
-                    max_dist=12,
+                    max_dist=20,
                     input_dim=720,
                     n_hd=n_hd,
                     sigma_ang=90,
-                    sigma_d=1.5,
+                    sigma_d=3,
                 )
                 self.pcn_large = PlaceCellLayer(
                     bvc_layer=bvc,
                     num_pc=num_large_place_cells,
                     timestep=timestep,
                     n_hd=n_hd,
-                    enable_ojas=enable_ojas,  # set below
-                    enable_stdp=enable_stdp,  # set below
+                    enable_ojas=enable_ojas,
+                    enable_stdp=enable_stdp,
                     modulate_by_vis_density=False,
                 )
                 print("Initialized new Large Place Cell Network.")
 
+            # Set Oja’s rule and STDP for multi-scale mode
             if enable_ojas is not None:
                 self.pcn_small.enable_ojas = enable_ojas
                 self.pcn_large.enable_ojas = enable_ojas
-            else: # Default
-                if self.mode == RobotMode.LEARN_OJAS:
-                    self.pcn_small.enable_ojas = True
-                    self.pcn_large.enable_ojas = True
-                else:
-                    self.pcn_small.enable_ojas = False
-                    self.pcn_large.enable_ojas = False
+            else:
+                self.pcn_small.enable_ojas = self.mode == RobotMode.LEARN_OJAS
+                self.pcn_large.enable_ojas = self.mode == RobotMode.LEARN_OJAS
 
             if enable_stdp is not None:
                 self.pcn_small.enable_stdp = enable_stdp
                 self.pcn_large.enable_stdp = enable_stdp
-            else: # Default
-                if self.mode == RobotMode.LEARN_HEBB or self.mode == RobotMode.DMTP:
-                    self.pcn_small.enable_stdp = True
-                    self.pcn_large.enable_stdp = True
-                else:
-                    self.pcn_small.enable_stdp = False
-                    self.pcn_large.enable_stdp = False
+            else:
+                self.pcn_small.enable_stdp = self.mode in (RobotMode.LEARN_HEBB, RobotMode.DMTP)
+                self.pcn_large.enable_stdp = self.mode in (RobotMode.LEARN_HEBB, RobotMode.DMTP)
 
         else:
-            # SINGLE-SCALE: Just pcn_small
-            try:
-                with open("pcn_small.pkl", "rb") as f:
-                    self.pcn_small = pickle.load(f)
-                    self.pcn_small.reset_activations()
-                    print("Loaded existing Place Cell Network.")
-            except FileNotFoundError:
-                bvc = BoundaryVectorCellLayer(
-                    max_dist=12,
-                    input_dim=720,
-                    n_hd=n_hd,
-                    sigma_ang=90,
-                    sigma_d=0.5,
-                )
-                self.pcn_small = PlaceCellLayer(
-                    bvc_layer=bvc,
-                    num_pc=num_small_place_cells,
-                    timestep=timestep,
-                    n_hd=n_hd,
-                    enable_ojas=enable_ojas,  # We'll handle below
-                    enable_stdp=enable_stdp,  # We'll handle below
-                    modulate_by_vis_density=False,
-                )
-                print("Initialized new Place Cell Network.")
-
-            # Mirror the original logic for Oja’s / STDP
+            # Single-scale mode: Only Small PCN
             if enable_ojas is not None:
                 self.pcn_small.enable_ojas = enable_ojas
-            else: # Default
-                if self.mode == RobotMode.LEARN_OJAS:
-                    self.pcn_small.enable_ojas = True
-                else:
-                    self.pcn_small.enable_ojas = False
+            else:
+                self.pcn_small.enable_ojas = self.mode == RobotMode.LEARN_OJAS
 
             if enable_stdp is not None:
                 self.pcn_small.enable_stdp = enable_stdp
-            else: # Default
-                if self.mode == RobotMode.LEARN_HEBB or self.mode == RobotMode.DMTP:
-                    self.pcn_small.enable_stdp = True
-                else:
-                    self.pcn_small.enable_stdp = False
+            else:
+                self.pcn_small.enable_stdp = self.mode in (RobotMode.LEARN_HEBB, RobotMode.DMTP)
 
     def load_rcn(
         self,
@@ -361,57 +324,49 @@ class Driver(Supervisor):
         num_replay: int,
     ):
         """
-        Loads or initializes one or two Reward Cell Networks, depending on
-        enable_multiscale.
+        Loads or initializes one or two Reward Cell Networks, depending on enable_multiscale.
 
         If enable_multiscale is True:
             - Loads/initializes self.rcn_small (for small scale)
             - Loads/initializes self.rcn_large (for large scale)
         Else:
-            - Loads/initializes a single self.rcn
+            - Loads/initializes a single self.rcn_small
         """
+        world_name = self.getWorldPath()  # This returns the full path
+        world_name = world_name.split('/')[-1].replace('.wbt', '')  # Extract just the world name
+        network_dir = f"pkl/networks/{world_name}"
+
+        os.makedirs(network_dir, exist_ok=True)
+
+        # Load Small RCN
+        try:
+            with open(f"{network_dir}/rcn_small.pkl", "rb") as f:
+                self.rcn_small = pickle.load(f)
+                print("Loaded existing Small Reward Cell Network.")
+        except FileNotFoundError:
+            # Initialize new Small RCN if not found
+            self.rcn_small = RewardCellLayer(
+                num_reward_cells=num_reward_cells,
+                input_dim=num_small_place_cells,
+                num_replay=num_replay,
+                learning_rate=0.3,
+            )
+            print("Initialized new Small Reward Cell Network.")
 
         if self.enable_multiscale:
-            # --- RCN SMALL ---
+            # Load Large RCN
             try:
-                with open("rcn_small.pkl", "rb") as f:
-                    self.rcn_small = pickle.load(f)
-                    print("Loaded existing Small Reward Cell Network.")
-            except FileNotFoundError:
-                self.rcn_small = RewardCellLayer(
-                    num_reward_cells=num_reward_cells,
-                    input_dim=num_small_place_cells,
-                    num_replay=num_replay,
-                )
-                print("Initialized new Small Reward Cell Network.")
-
-            # --- RCN LARGE ---
-            try:
-                with open("rcn_large.pkl", "rb") as f:
+                with open(f"{network_dir}/rcn_large.pkl", "rb") as f:
                     self.rcn_large = pickle.load(f)
                     print("Loaded existing Large Reward Cell Network.")
             except FileNotFoundError:
+                # Initialize new Large RCN if not found
                 self.rcn_large = RewardCellLayer(
                     num_reward_cells=num_reward_cells,
                     input_dim=num_large_place_cells,
                     num_replay=num_replay,
                 )
                 print("Initialized new Large Reward Cell Network.")
-
-        else:
-            # Single-scale approach
-            try:
-                with open("rcn_small.pkl", "rb") as f:
-                    self.rcn_small = pickle.load(f)
-                    print("Loaded existing Reward Cell Network.")
-            except FileNotFoundError:
-                self.rcn_small = RewardCellLayer(
-                    num_reward_cells=num_reward_cells,
-                    input_dim=num_small_place_cells,  # Or whichever you prefer
-                    num_replay=num_replay,
-                )
-                print("Initialized new Reward Cell Network.")
-
 
     ########################################### RUN LOOP ###########################################
 
@@ -514,7 +469,7 @@ class Driver(Supervisor):
             self.check_goal_reached()
 
         # Possibly turn randomly after finishing the for-loop
-        self.turn(np.random.normal(0, np.deg2rad(30)))
+        self.turn(np.random.normal(0, np.deg2rad(60)))
     
     def get_actual_reward(self):
         """Determines the actual reward for the agent at the current state.
@@ -546,263 +501,193 @@ class Driver(Supervisor):
         Dynamically switches between small and large reward scales based on environmental context.
         """
 
-        # 1) Stop movement and update sensor readings
+        # Initial actions: stop movement, sense environment, and update place cell activations
         self.stop()
         self.sense()
-
-        # 2) Always compute place cell activations
         self.compute_pcn_activations()
-
-        # 3) Update history maps and check for goal reached
         self.update_hmaps()
         self.check_goal_reached()
 
-        # 4) Proceed only if enough steps have been taken
         if self.step_count <= self.tau_w:
             return  # Not enough steps for an 'exploit' action yet
 
-        # Number of steps to "preplay" or look ahead
-        num_steps_preplay = 2  
-
-        # Initialize directional reward estimates
+        # Initialize variables if not already set
         self.directional_reward_estimates = None
+        self.low_reward_state = False
 
-        # Initialize current scale if not set
         if not hasattr(self, "current_scale"):
-            self.current_scale = "None"  # Initialize with a placeholder scale
+            self.current_scale = "None"
 
         if not hasattr(self, "current_mode"):
             self.current_mode = "None"
 
-        self.low_reward_state = False
-
-        # -------------------------------------------------
-        #  MULTISCALE REWARD COMPUTATION
-        # -------------------------------------------------
+        # Multi-scale reward computation
         if self.enable_multiscale:
-            # --- SMALL LAYER RCN ---
-            self.rcn_small.update_reward_cell_activations(
-                self.pcn_small.place_cell_activations, visit=True
-            )
-            max_reward_activation_small = tf.reduce_max(
-                self.rcn_small.reward_cell_activations
-            )
-
-            # --- LARGE LAYER RCN ---
-            self.rcn_large.update_reward_cell_activations(
-                self.pcn_large.place_cell_activations, visit=True
-            )
-            max_reward_activation_large = tf.reduce_max(
-                self.rcn_large.reward_cell_activations
-            )
-
-            # Compute context
-            curr_pos = self.robot.getField("translation").getSFVec3f()
-            distance_to_goal = np.linalg.norm(
-                [curr_pos[0] - self.goal_location[0], curr_pos[2] - self.goal_location[1]]
-            )
-
+            # Calculate multiscale rewards and weighting factor
+            combined_pot_rew, alpha = self._calculate_multiscale_rewards()
+            
+            # Store directional estimates for both scales (for combination)
+            self.directional_reward_estimates_small = self._preplay_rewards(self.pcn_small, self.rcn_small)
+            self.directional_reward_estimates_large = self._preplay_rewards(self.pcn_large, self.rcn_large)
         else:
-            # Single-scale reward
-            self.rcn_small.update_reward_cell_activations(
-                self.pcn_small.place_cell_activations, visit=True
-            )
-            max_reward_activation = tf.reduce_max(
-                self.rcn_small.reward_cell_activations
-            )
+            combined_pot_rew = self._calculate_single_scale_rewards()
 
-        # Log the reward detection
-        if self.enable_multiscale:
-            max_small = max_reward_activation_small.numpy()
-            max_large = max_reward_activation_large.numpy()
+        self.directional_reward_estimates = gaussian_filter1d(combined_pot_rew, sigma=2.0)
 
-            # Check if they are both above some threshold
-            if self.low_reward_state and (max_small > 1e-4 or max_large > 1e-4):
-                print("Reward signals picked back up.")
-                self.low_reward_state = False
-
-        else:
-            max_single = max_reward_activation.numpy()
-            if self.low_reward_state and (max_single > 1e-4):
-                print("Reward signals picked back up.")
-                self.low_reward_state = False
-
-
-        # -------------------------------------------------
-        # TRIGGER EXPLORE() IF NECESSARY
-        # -------------------------------------------------
-        should_explore = False
-
-        if self.enable_multiscale:
-            # Condition 1: Both small and large activations are too low
-            if max_reward_activation_small <= 1e-6 and max_reward_activation_large <= 1e-6:
-                self.low_reward_state = True
-                should_explore = True
-
-        else:
-            # Condition 2: Single-scale reward is too low
-            if max_reward_activation <= 1e-6:
-                self.low_reward_state = True
-                should_explore = True
-
-        # Condition 3: Directional estimates are all near zero
-        if self.directional_reward_estimates is not None and np.sum(self.directional_reward_estimates) < 1e-6:
-            self.low_reward_state = True
-            should_explore = True
-
-        # Condition 4: Collision detected
-        if np.any(self.collided):
-            should_explore = True
-
-        # Execute exploration if any condition is met
-        if should_explore:
-            self.stop()
+        # Validate directional reward estimates
+        if not self._validate_directional_estimates():
             self.explore()
             return
 
-        # -------------------------------------------------
-        #  CALCULATE POTENTIAL REWARD FOR EACH DIRECTION
-        # -------------------------------------------------
-        angles = np.linspace(0, 2 * np.pi, self.n_hd, endpoint=False)
-        if self.enable_multiscale:
-            pot_rew_small = np.zeros(self.n_hd)
-            pot_rew_large = np.zeros(self.n_hd)
+        # Calculate action angle using weighted combination
+        action_angle = self._calculate_action_angle(alpha if self.enable_multiscale else 1.0)
 
-            # Compute directional rewards for small and large scale
-            for d in range(self.n_hd):
-                # Preplay or predict small PCN activations
-                pcn_small_future = self.pcn_small.preplay(d, num_steps=num_steps_preplay)
-                self.rcn_small.update_reward_cell_activations(pcn_small_future)
-                pot_rew_small[d] = tf.reduce_max(
-                    np.nan_to_num(self.rcn_small.reward_cell_activations)
-                )
+        if not self._validate_action_angle(action_angle):
+            self.explore()
+            return
 
-                # Similarly for large PCN
-                pcn_large_future = self.pcn_large.preplay(d, num_steps=num_steps_preplay)
-                self.rcn_large.update_reward_cell_activations(pcn_large_future)
-                pot_rew_large[d] = tf.reduce_max(
-                    np.nan_to_num(self.rcn_large.reward_cell_activations)
-                )
+        self._turn_and_move(action_angle)
 
-            # -------------------------------------------------
-            # Dynamic scale selection based on context
-            # -------------------------------------------------
-            pot_rew_small /= np.max(pot_rew_small) + 1e-6
-            pot_rew_large /= np.max(pot_rew_large) + 1e-6
+    # Helper Functions
 
-            grad_small = np.sum(np.abs(np.diff(pot_rew_small, append=pot_rew_small[0])))
-            grad_large = np.sum(np.abs(np.diff(pot_rew_large, append=pot_rew_large[0])))
+    def _compute_max_reward(self, pcn, rcn):
+        rcn.update_reward_cell_activations(pcn.place_cell_activations, visit=True)
+        return tf.reduce_max(rcn.reward_cell_activations)
 
-            if self.vis_density < 0.5 or distance_to_goal > 2.0:
-                selected_scale = "Large"
-                combined_pot_rew = pot_rew_large
-            elif grad_small > grad_large * 1.1:
-                selected_scale = "Small"
-                combined_pot_rew = pot_rew_small
-            else:
-                alpha = grad_small / (grad_small + grad_large + 1e-6)
-                selected_scale = "Blend"
-                combined_pot_rew = alpha * pot_rew_small + (1 - alpha) * pot_rew_large
+    def _compute_distance_to_goal(self):
+        curr_pos = self.robot.getField("translation").getSFVec3f()
+        return np.linalg.norm([curr_pos[0] - self.goal_location[0], curr_pos[2] - self.goal_location[1]])
 
-            # Print scale switch
-            if selected_scale != self.current_scale:
-                print(f"Switching scale: {self.current_scale} -> {selected_scale}")
-                self.current_scale = selected_scale
+    def _log_and_check_rewards(self, *max_activations):
+        for activation in max_activations:
+            if self.low_reward_state and activation.numpy() > 1e-4:
+                print("Reward signals picked back up.")
+                self.low_reward_state = False
 
-            self.directional_reward_estimates = combined_pot_rew
+    def _should_trigger_explore(self, max_reward_activation):
+        if max_reward_activation <= 1e-6 or np.any(self.collided):
+            self.low_reward_state = True
+            return True
+        if self.directional_reward_estimates is not None and np.sum(self.directional_reward_estimates) < 1e-6:
+            self.low_reward_state = True
+            return True
+        return False
 
-        else:
-            # Single-scale
-            pot_rew = np.zeros(self.n_hd)
-            for d in range(self.n_hd):
-                pcn_future = self.pcn_small.preplay(d, num_steps=num_steps_preplay)
-                self.rcn_small.update_reward_cell_activations(pcn_future)
-                pot_rew[d] = tf.reduce_max(
-                    np.nan_to_num(self.rcn_small.reward_cell_activations)
-                )
-            self.directional_reward_estimates = pot_rew
+    def _calculate_multiscale_rewards(self):
+        pot_rew_small = self._preplay_rewards(self.pcn_small, self.rcn_small)
+        pot_rew_large = self._preplay_rewards(self.pcn_large, self.rcn_large)
 
-        # -------------------------------------------------
-        #  3) DETERMINE ACTION ANGLE
-        # -------------------------------------------------
-        # Smooth the reward estimates
-        self.directional_reward_estimates = gaussian_filter1d(self.directional_reward_estimates, sigma=1.0)
+        # Normalize the reward potentials
+        pot_rew_small /= np.max(pot_rew_small) + 1e-6
+        pot_rew_large /= np.max(pot_rew_large) + 1e-6
 
-        # Validate directional reward estimates
+        # Compute gradients
+        grad_small = np.sum(np.abs(np.diff(pot_rew_small, append=pot_rew_small[0])))
+        grad_large = np.sum(np.abs(np.diff(pot_rew_large, append=pot_rew_large[0])))
+
+        # Weight based on gradients
+        alpha = grad_small / (grad_small + grad_large + 1e-6)  # Weight for small scale
+        return alpha * pot_rew_small + (1 - alpha) * pot_rew_large, alpha
+
+    def _calculate_single_scale_rewards(self):
+        return self._preplay_rewards(self.pcn_small, self.rcn_small)
+
+    def _preplay_rewards(self, pcn, rcn):
+        pot_rew = np.zeros(self.n_hd)
+        for d in range(self.n_hd):
+            pcn_future = pcn.preplay(d, num_steps=1)
+            rcn.update_reward_cell_activations(pcn_future)
+            pot_rew[d] = tf.reduce_max(np.nan_to_num(rcn.reward_cell_activations))
+        return pot_rew
+
+    def _log_scale_switch(self, selected_scale):
+        if selected_scale != self.current_scale:
+            print(f"Switching scale: {self.current_scale} -> {selected_scale}")
+            self.current_scale = selected_scale
+
+    def _validate_directional_estimates(self):
         if self.directional_reward_estimates is None or np.isnan(self.directional_reward_estimates).any() or np.sum(self.directional_reward_estimates) <= 1e-6:
             print("Directional reward estimates invalid. Triggering exploration.")
             self.low_reward_state = True
-            self.explore()
-            return
+            return False
+        return True
 
-        # Calculate the action angle
-        action_angle = circmean(angles, weights=self.directional_reward_estimates)
+    def _calculate_action_angle(self, alpha=1.0):
+        # Get angles corresponding to head directions
+        angles = np.linspace(0, 2 * np.pi, self.n_hd, endpoint=False)
 
-        # Handle NaN in action_angle
+        if self.enable_multiscale:
+            # Compute distance and visibility context
+            distance_to_goal = self._compute_distance_to_goal()
+
+            # Compute action angles and gradients for both scales
+            action_angle_small = circmean(angles, weights=self.directional_reward_estimates_small)
+            action_angle_large = circmean(angles, weights=self.directional_reward_estimates_large)
+
+            grad_small = np.sum(np.abs(np.diff(self.directional_reward_estimates_small, append=self.directional_reward_estimates_small[0])))
+            grad_large = np.sum(np.abs(np.diff(self.directional_reward_estimates_large, append=self.directional_reward_estimates_large[0])))
+
+            # Calculate gradient-based blending weight
+            total_gradient = grad_small + grad_large + 1e-6
+            weight_small = grad_small / total_gradient
+            weight_large = grad_large / total_gradient
+
+            # Blend action angles
+            blended_action_angle = circmean(
+                np.array([action_angle_small, action_angle_large]),
+                weights=np.array([weight_small, weight_large]),
+            )
+
+            # Return the blended angle
+            return blended_action_angle
+
+        else:
+            # Use single-scale reward estimates directly
+            return circmean(angles, weights=self.directional_reward_estimates)
+
+
+    def _validate_action_angle(self, action_angle):
         if np.isnan(action_angle):
             print("Circmean resulted in NaN. Triggering exploration.")
-            self.explore()
-            return
+            return False
+        return True
 
-        # Determine the index of the chosen direction
-        index = int(action_angle // (2 * np.pi / self.n_hd))
-
-        # Validate the reward for the chosen direction
-        max_reward = self.directional_reward_estimates[index]
-        if max_reward <= 1e-3:
-            print("Chosen direction reward too low. Triggering exploration.")
-            self.explore()
-            return
-
-        # Ensure action_angle is within valid range
-        if abs(action_angle) > np.pi:
-            action_angle -= np.sign(action_angle) * 2 * np.pi
-
-        # Calculate the angle to turn
-        angle_to_turn = -np.deg2rad(
-            np.rad2deg(action_angle) - self.current_heading_deg
-        )
-        # Normalize to [-π, π]
+    def _turn_and_move(self, action_angle):
+        angle_to_turn = -np.deg2rad(np.rad2deg(action_angle) - self.current_heading_deg)
         angle_to_turn = ((angle_to_turn + np.pi) % (2 * np.pi)) - np.pi
         self.turn(angle_to_turn)
 
-        # -------------------------------------------------
-        #  MOVE FORWARD
-        # -------------------------------------------------
-        for s in range(self.tau_w):
+        for _ in range(self.tau_w):
             self.sense()
             self.compute_pcn_activations()
             self.update_hmaps()
             self.forward()
             self.check_goal_reached()
-            if any(self.collided):
-                self.stop()
-                self.explore()
+
+            if np.any(self.collided):
+                print("Collision detected. Turning back and retrying.")
+                # Turn 180 degrees
+                self.turn(np.pi)  # Reverse direction
+                
+                # Move forward for tau_w steps
+                for _ in range(self.tau_w):
+                    self.sense()
+                    self.compute_pcn_activations()
+                    self.update_hmaps()
+                    self.forward()
+                    self.check_goal_reached()
+
+                    if np.any(self.collided):  # If it collides again, trigger explore
+                        print("Still stuck after retry. Switching to explore mode.")
+                        self.explore()
+                        return
+
+                # If no collision after reverse-and-retry, continue normal behavior
+                break
+
             if self.done:
                 return
 
-            actual_reward = self.get_actual_reward()
-            if self.enable_multiscale:
-                self.rcn_small.update_reward_cell_activations(
-                    self.pcn_small.place_cell_activations
-                )
-                self.rcn_small.td_update(
-                    self.pcn_small.place_cell_activations, next_reward=actual_reward
-                )
-
-                self.rcn_large.update_reward_cell_activations(
-                    self.pcn_large.place_cell_activations
-                )
-                self.rcn_large.td_update(
-                    self.pcn_large.place_cell_activations, next_reward=actual_reward
-                )
-            else:
-                self.rcn_small.update_reward_cell_activations(
-                    self.pcn_small.place_cell_activations
-                )
-                self.rcn_small.td_update(
-                    self.pcn_small.place_cell_activations, next_reward=actual_reward
-                )
 
     ########################################### RECORDING ###########################################
 
@@ -1088,6 +973,10 @@ class Driver(Supervisor):
                 self.stop()
                 self.done = True
                 return
+            else:
+                self.stop()
+                self.done = True
+                return
 
     ########################################### AUTO PILOT ###########################################
 
@@ -1133,7 +1022,7 @@ class Driver(Supervisor):
             float: The computed visual density, emphasizing proximity to walls and the goal.
         """
         # Threshold distance for influence (e.g., max effective wall influence)
-        max_influence_radius = 1.5  # Adjust based on environment size
+        max_influence_radius = 3  # Adjust based on environment size
 
         # Apply exponential decay to each LiDAR reading for wall density
         wall_densities = np.exp(-lidar_data / max_influence_radius)
@@ -1295,66 +1184,64 @@ class Driver(Supervisor):
             include_rcn (bool): If True, saves the Reward Cell Network (RCN).
             include_hmaps (bool): If True, saves the history of the agent's path and activations.
         """
+        world_name = self.getWorldPath()  # This returns the full path
+        world_name = world_name.split('/')[-1].replace('.wbt', '')  # Extract just the world name
+        network_dir = f"pkl/networks/{world_name}"
+        hmaps_dir = f"pkl/hmaps/{world_name}"
+
+        os.makedirs(network_dir, exist_ok=True)
+        os.makedirs(hmaps_dir, exist_ok=True)
+
         files_saved = []
 
         # Save PCNs
         if include_pcn:
-            with open("pcn_small.pkl", "wb") as output:
+            with open(f"{network_dir}/pcn_small.pkl", "wb") as output:
                 pickle.dump(self.pcn_small, output)
-                files_saved.append("pcn_small.pkl")
+                files_saved.append(f"{network_dir}/pcn_small.pkl")
             
-            # Save the large PCN only if it exists (multiscale mode)
             if self.enable_multiscale and hasattr(self, "pcn_large"):
-                with open("pcn_large.pkl", "wb") as output:
+                with open(f"{network_dir}/pcn_large.pkl", "wb") as output:
                     pickle.dump(self.pcn_large, output)
-                    files_saved.append("pcn_large.pkl")
+                    files_saved.append(f"{network_dir}/pcn_large.pkl")
 
         # Save RCNs
         if include_rcn:
             if self.enable_multiscale:
                 if hasattr(self, "rcn_small"):
-                    with open("rcn_small.pkl", "wb") as output:
+                    with open(f"{network_dir}/rcn_small.pkl", "wb") as output:
                         pickle.dump(self.rcn_small, output)
-                        files_saved.append("rcn_small.pkl")
+                        files_saved.append(f"{network_dir}/rcn_small.pkl")
                 if hasattr(self, "rcn_large"):
-                    with open("rcn_large.pkl", "wb") as output:
+                    with open(f"{network_dir}/rcn_large.pkl", "wb") as output:
                         pickle.dump(self.rcn_large, output)
-                        files_saved.append("rcn_large.pkl")
+                        files_saved.append(f"{network_dir}/rcn_large.pkl")
             else:
-                with open("rcn_small.pkl", "wb") as output:
+                with open(f"{network_dir}/rcn_small.pkl", "wb") as output:
                     pickle.dump(self.rcn_small, output)
-                    files_saved.append("rcn_small.pkl")
+                    files_saved.append(f"{network_dir}/rcn_small.pkl")
 
         # Save history maps
         if include_hmaps:
-            with open("hmap_x.pkl", "wb") as output:
-                pickle.dump(self.hmap_x[: self.step_count], output)
-                files_saved.append("hmap_x.pkl")
-
-            with open("hmap_y.pkl", "wb") as output:
-                pickle.dump(self.hmap_y[: self.step_count], output)
-                files_saved.append("hmap_y.pkl")
-
-            with open("hmap_z_small.pkl", "wb") as output:
-                pickle.dump(self.hmap_z_small[: self.step_count], output)
-                files_saved.append("hmap_z_small.pkl")
+            for attr, filename in [
+                ("hmap_x", "hmap_x.pkl"),
+                ("hmap_y", "hmap_y.pkl"),
+                ("hmap_z_small", "hmap_z_small.pkl"),
+                ("hmap_g", "hmap_g.pkl"),
+                ("hmap_h", "hmap_h.pkl"),
+                ("hmap_vis_density", "hmap_vis_density.pkl"),
+            ]:
+                with open(f"{hmaps_dir}/{filename}", "wb") as output:
+                    pickle.dump(getattr(self, attr)[: self.step_count], output)
+                    files_saved.append(f"{hmaps_dir}/{filename}")
 
             if self.enable_multiscale:
-                with open("hmap_z_large.pkl", "wb") as output:
+                with open(f"{hmaps_dir}/hmap_z_large.pkl", "wb") as output:
                     pickle.dump(self.hmap_z_large[: self.step_count], output)
-                    files_saved.append("hmap_z_large.pkl")
+                    files_saved.append(f"{hmaps_dir}/hmap_z_large.pkl")
 
-            with open("hmap_g.pkl", "wb") as output:
-                pickle.dump(self.hmap_g[: self.step_count], output)
-                files_saved.append("hmap_g.pkl")
-
-            with open("hmap_h.pkl", "wb") as output:
-                pickle.dump(self.hmap_h[: self.step_count], output)
-                files_saved.append("hmap_h.pkl")
-
-            with open("hmap_vis_density.pkl", "wb") as output:
-                pickle.dump(self.hmap_vis_density[: self.step_count], output)
-                files_saved.append("hmap_vis_density.pkl")
+        print(f"Files Saved: {files_saved}")
+        print("Saving Done!")
 
         # User confirmation dialog
         root = tk.Tk()
@@ -1371,24 +1258,36 @@ class Driver(Supervisor):
         print("Saving Done!")
 
     def clear(self):
-        files_to_remove = [
-            "pcn_small.pkl",
-            "pcn_large.pkl",
-            "rcn_small.pkl",
-            "rcn_large.pkl",
-            "hmap_x.pkl",
-            "hmap_y.pkl",
-            "hmap_g.pkl",
-            "hmap_h.pkl",
-            "hmap_vis_density.pkl",
-            "hmap_z_small.pkl",
-            "hmap_z_large.pkl",
+        """Clears all saved state files (PCNs, RCNs, and history maps) for the current world."""
+        world_name = self.getWorldPath()  # This returns the full path
+        world_name = world_name.split('/')[-1].replace('.wbt', '')  # Extract just the world name
+        network_dir = f"pkl/networks/{world_name}"
+        hmaps_dir = f"pkl/hmaps/{world_name}"
+
+        # List of files to remove
+        pkl_files = [
+            f"{network_dir}/pcn_small.pkl",
+            f"{network_dir}/pcn_large.pkl",
+            f"{network_dir}/rcn_small.pkl",
+            f"{network_dir}/rcn_large.pkl",
+        ]
+        hmap_files = [
+            f"{hmaps_dir}/hmap_x.pkl",
+            f"{hmaps_dir}/hmap_y.pkl",
+            f"{hmaps_dir}/hmap_g.pkl",
+            f"{hmaps_dir}/hmap_h.pkl",
+            f"{hmaps_dir}/hmap_vis_density.pkl",
+            f"{hmaps_dir}/hmap_z_small.pkl",
+            f"{hmaps_dir}/hmap_z_large.pkl",
         ]
 
+        # Remove all files
+        files_to_remove = pkl_files + hmap_files
         for file in files_to_remove:
             try:
                 os.remove(file)
+                print(f"Removed: {file}")
             except FileNotFoundError:
-                pass  # Ignore if the file does not exist
+                print(f"File not found (skipped): {file}")
 
         print("State files cleared.")
