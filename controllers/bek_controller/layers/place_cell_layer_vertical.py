@@ -37,7 +37,7 @@ class PlaceCellLayer:
 
         # Instead of NumPy rng.binomial, use TF random ops:
         # Create a mask of shape (num_pc, num_bvc) with True if <0.2, else False
-        w_init = tf.cast(tf.random.uniform([num_pc, self.num_bvc]) < 0.3, tf.float32)
+        w_init = tf.cast(tf.random.uniform([num_pc, self.num_bvc]) < 0.25, tf.float32)
 
         self.w_in = tf.Variable(w_init, dtype=tf.float32)
         self.w_rec_tripartite = tf.zeros(shape=(n_hd, num_pc, num_pc), dtype=tf.float32)

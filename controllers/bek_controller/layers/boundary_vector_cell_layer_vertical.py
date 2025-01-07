@@ -21,6 +21,12 @@ class BoundaryVectorCellLayer:
         top_cutoff_percentage: float = 0.0,
         bottom_cutoff_percentage: float = 0.5,
     ) -> None:
+        print(
+            f"""sigma_d_list {sigma_d_list}
+        sigma_ang_list {sigma_ang_list}
+        sigma_vert_list {sigma_vert_list}
+        num_bvc_per_dir {num_bvc_per_dir}"""
+        )
         # Store input parameters
         self.num_rows = num_rows
         self.num_cols = num_cols
