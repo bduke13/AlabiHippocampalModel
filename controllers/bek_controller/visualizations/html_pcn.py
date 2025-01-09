@@ -227,8 +227,8 @@ if __name__ == "__main__":
     from controllers.bek_controller.visualizations.analysis_utils import *
 
     # Example usage
-    target_dir = "controllers/bek_controller/IJCNN/3D_1L_1/upright/"
-    hmap_x, hmap_y, hmap_z = load_hmaps(target_dir)
+    data_path = "controllers/bek_controller/IJCNN/2D_250/upright/"
+    hmap_x, hmap_y, hmap_z = load_hmaps(data_path)
 
     # %%
-    generate_place_cells_report(hmap_x, hmap_y, hmap_z, output_dir=target_dir)
+    generate_place_cells_report(hmap_x, hmap_y, hmap_z, output_dir=data_path)

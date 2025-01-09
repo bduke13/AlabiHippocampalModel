@@ -9,8 +9,8 @@ WorldInfo {
   coordinateSystem "NUE"
 }
 Viewpoint {
-  orientation 1 0 0 4.71238898038469
-  position 6.494160748738406e-15 26.60869794358714 -1.1093664230217873e-15
+  orientation 0.4047141932911099 0.8769016456724171 0.25932590608293016 4.836375394244671
+  position -18.533750014913114 16.75885143281226 7.342171954808681
   near 0.1
   follow "Create"
   followType "None"
@@ -25,18 +25,26 @@ DirectionalLight {
   direction 0 -1 0
 }
 DEF agent Create {
-  hidden linearVelocity_0 0.4491594557695157 5.9052422847505765e-05 0.2099062997459193
-  hidden angularVelocity_0 0.0031228887023730294 0.012032537523835657 0.006666843107474474
-  hidden linearVelocity_6 0.44922006912621487 3.818063114660772e-06 0.2099137968994291
-  hidden angularVelocity_6 6.772308126274309 -0.011937522682153532 -14.490835160673049
-  hidden linearVelocity_7 0.44919203103865896 -1.5300963000360297e-05 0.20995123552480086
-  hidden angularVelocity_7 6.772347156039062 -0.01186487377584863 -14.490816395942336
-  hidden linearVelocity_11 0.4486619110779231 0.0010121856088456047 0.20838454821343708
-  hidden angularVelocity_11 0.0031228869569842185 0.012032538977478966 0.006666843324186076
-  hidden linearVelocity_12 0.44866190653883836 0.00101226150268273 0.20838441450827405
-  hidden angularVelocity_12 0.0031228869569842107 0.01203253897747626 0.006666843324186647
-  translation -3.559508222213554 0.04420015998436299 0.4571123278629839
-  rotation 0.00043032685320199324 0.9999995876798031 -0.0007996618179486224 -2.007551517646256
+  hidden position_0_0 753779.7211017093
+  hidden position_0_1 754450.5050253458
+  hidden linearVelocity_0 0.000336984281544305 0.003631402797368786 -0.0006732158512740892
+  hidden angularVelocity_0 -0.01853216159656843 0.043530901838667875 0.005414411256864897
+  hidden rotation_6 1 0 0 1.4538300113381926
+  hidden linearVelocity_6 -0.002322638277415815 -0.00019802001241023813 0.0011160518699336285
+  hidden angularVelocity_6 0.03503916100039045 -0.001904117155328037 0.07428434094832992
+  hidden rotation_7 -1 0 0 3.3124510641654803
+  hidden linearVelocity_7 0.001783389621822139 -0.00018301268871295475 -0.0044349827243393035
+  hidden angularVelocity_7 -0.06310652236173053 -0.016546416933558076 -0.05206885944902902
+  hidden translation_11 -0.001087233887295369 -7.298057778697825e-05 -0.002361877806424051
+  hidden rotation_11 3.1443779009399974e-08 0.9999999999997985 6.340114890013526e-07 0.7269315913741898
+  hidden linearVelocity_11 0.0026946253033010154 0.002561951619477775 0.005231305267889533
+  hidden angularVelocity_11 -0.018532164745900914 0.04353097151954363 0.005414411117072628
+  hidden translation_12 0.001245061864147523 -1.711084388888312e-05 -0.002162661297165247
+  hidden rotation_12 -1.2986006504573062e-07 0.9999999999967188 2.5583914900915657e-06 -0.7269312605295234
+  hidden linearVelocity_12 -0.005168438115380815 0.0012254621708488703 0.0023664878557716905
+  hidden angularVelocity_12 -0.01853216225821478 0.04353097192149222 0.005414411293419944
+  translation 4.639219267876229 0.04374763783704332 0.05204599047844013
+  rotation 0.005605412640368171 0.9999841846081118 -0.0004581296552865628 0.6619033785954324
   controller "bek_controller"
   supervisor TRUE
   bodySlot [
@@ -79,8 +87,8 @@ DEF agent Create {
   ]
 }
 Wall {
-  translation 1.69 0.13435 -5.13433
-  rotation -1 0 0 -0.523595307179586
+  translation 1.69 0.0543491 -5.27289
+  rotation 1 0 0 -5.307179586466759e-06
   name "Side_Wall_1"
   size 15 4 0.3
   appearance Roughcast {
@@ -91,8 +99,8 @@ Wall {
   }
 }
 Wall {
-  translation -5.14847 0.148494 1.34
-  rotation -0.25056206820525934 -0.9351132545462786 0.25056306820553154 -1.6378353071795866
+  translation -5.27837 -0.016506 0.9
+  rotation 7.69303e-07 -1 2.17518e-07 -1.5707953071795862
   name "Side_Wall_2"
   size 12 4 0.3
   appearance Roughcast {
@@ -103,8 +111,8 @@ Wall {
   }
 }
 Wall {
-  translation 1.36 0 5
-  rotation -1 0 0 -0.523595307179586
+  translation 1.36 -0.124852 5.15412
+  rotation 1 0 0 -5.307179586466759e-06
   name "Side_Wall_3"
   size 13.5 4 0.3
   appearance Roughcast {
@@ -115,10 +123,10 @@ Wall {
   }
 }
 Wall {
-  translation 5 1.85862e-06 1.34
-  rotation -0.25056206820525934 -0.9351132545462786 0.25056306820553154 -1.6378353071795866
+  translation 5.00017 -0.334911 1.2
+  rotation 1.70442e-06 -1 2.17518e-07 -1.5707953071795862
   name "Side_Wall_4"
-  size 13.5 4 0.3
+  size 15 6 0.3
   appearance Roughcast {
     colorOverride 0.8 0.45 0.25
     textureTransform TextureTransform {
@@ -127,10 +135,10 @@ Wall {
   }
 }
 Wall {
-  translation 2.64 2.4 6.36
+  translation 0.88 3.96 7.99
   rotation -1 0 0 1.5708
   name "Main_Ceiling"
-  size 10 10 0.3
+  size 15 15 0.3
   appearance PBRAppearance {
     transparency 1
     roughness 1
@@ -138,7 +146,7 @@ Wall {
   }
 }
 Wall {
-  rotation 0 1 0 1.5708
+  rotation -7.45006e-07 1 3.39932e-07 1.5708
   name "wall(Center1)"
   size 5 2.4 0.3
   appearance Roughcast {
@@ -149,9 +157,57 @@ Wall {
   }
 }
 Wall {
-  rotation 0 -1 0 0
+  rotation 1 0 0 0
   name "wall(Center2)"
   size 5 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 2.4
+    }
+  }
+}
+Wall {
+  translation -0.17 0.87 2.76
+  rotation 1 0 0 0
+  name "wall(Center2)(1)"
+  size 10 0.5 0.5
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 2.4
+    }
+  }
+}
+Wall {
+  translation 2.91 2.46572 -0.128701
+  rotation 1 0 0 -0.261795307179586
+  name "wall(Center2)(3)"
+  size 0.5 0.5 10
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 2.4
+    }
+  }
+}
+Wall {
+  translation -2.8 2.25 -0.02
+  rotation 1 0 0 -0.261795307179586
+  name "wall(Center2)(4)"
+  size 0.5 0.5 10
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 2.4
+    }
+  }
+}
+Wall {
+  translation 0.114692 1.86259 -2.91
+  rotation 0 0 1 -0.261795307179586
+  name "wall(Center2)(2)"
+  size 10 0.5 0.5
   appearance Roughcast {
     colorOverride 0.8 0.45 0.25
     textureTransform TextureTransform {

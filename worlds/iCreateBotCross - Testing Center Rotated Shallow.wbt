@@ -9,8 +9,8 @@ WorldInfo {
   coordinateSystem "NUE"
 }
 Viewpoint {
-  orientation 0.9981888371292928 -0.056293709007730494 -0.021214706140378826 5.56119174483013
-  position 0.5868427046368878 13.86056857172002 13.42243080253731
+  orientation 0.999998810834222 -0.0014098602658275884 -0.0006249993381513901 5.448638099221542
+  position -0.7189334798072522 11.371971027466623 11.320113120020608
   near 0.1
   follow "Create"
   followType "None"
@@ -136,7 +136,7 @@ Wall {
   }
 }
 Wall {
-  rotation 0 1 0 1.5708
+  rotation -0.25056206820525934 -0.9351132545462786 0.25056306820553154 -1.6378353071795866
   name "wall(Center1)"
   size 7 3 0.3
   appearance Roughcast {
@@ -147,7 +147,7 @@ Wall {
   }
 }
 Wall {
-  rotation 0 -1 0 0
+  rotation 1 0 0 0.523595
   name "wall(Center2)"
   size 7 3 0.3
   appearance Roughcast {

@@ -23,15 +23,15 @@ PI = tf.constant(np.pi)
 rng = default_rng()  # random number generator
 cmap = get_cmap("plasma")
 
-# from threaded_window import TrackingPlotWindow, GenericPlotProcess
+# from threaded_window import HexbinPlotWindow, GenericPlotProcess
 
 # Create plot windows and processes
-# tracking_window = TrackingPlotWindow(
-#    history_buffer_len=1000,
-#    xlim=(-5, 5),
-#    ylim=(-5, 5),
-# )
+# path = f"IJCNN/3D_2L_1/inside_2/processed_hexbins"
+# tracking_window = HexbinPlotWindow(hexbin_data_path=path, xlim=(-5, 5), ylim=(-5, 5))
+
+# Initialize the plotting process
 # tracking_process = GenericPlotProcess(tracking_window, update_interval=50)
+# print("tracking process made")
 
 
 class DriverVertical(Supervisor):
@@ -108,7 +108,7 @@ class DriverVertical(Supervisor):
         self.file_prefix = file_prefix
 
         # Model parameters
-        self.num_place_cells = 400
+        self.num_place_cells = 250
         self.num_reward_cells = 1
         self.n_hd = 8
         self.timestep = 32 * 3
@@ -396,10 +396,6 @@ class DriverVertical(Supervisor):
 
             if self.done:
                 break
-
-    #            curr_pos = self.robot.getField("translation").getSFVec3f()
-
-    #            tracking_process.add_data((curr_pos[0], curr_pos[2]))
 
     ########################################### EXPLORE ###########################################
 
@@ -951,6 +947,10 @@ class DriverVertical(Supervisor):
         Parameters:
             include_maps (bool): If True, saves the history of the agent's path and activations.
         """
+        # Clean up the tracking process before saving
+        if "tracking_process" in globals():
+            tracking_process.close()
+
         # Create directory if it doesn't exist
         if self.file_prefix:
             directory = os.path.dirname(self.file_prefix)

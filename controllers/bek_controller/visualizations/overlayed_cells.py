@@ -191,8 +191,14 @@ def plot_overlayed_cells(
 # %%
 if __name__ == "__main__":
     from controllers.bek_controller.visualizations.analysis_utils import *
+    from controllers.bek_controller.visualizations.path_view import plot_trajectory
 
-    data_path = "controllers/bek_controller/IJCNN/3D_1L_1/upright/"
+    data_path = "controllers/bek_controller/IJCNN/2D_250/inside_3/"
     hmap_x, hmap_y, hmap_z = load_hmaps(data_path)
     # %%
-    plot_overlayed_cells(hmap_x, hmap_y, hmap_z, gridsize=100, output_dir=data_path)
+    plot_trajectory(
+        hmap_x,
+        hmap_y,
+    )
+    # %%
+    plot_overlayed_cells(hmap_x, hmap_y, hmap_z, gridsize=80, output_dir=data_path)

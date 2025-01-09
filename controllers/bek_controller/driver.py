@@ -96,8 +96,8 @@ class Driver(Supervisor):
         self.file_prefix = file_prefix
 
         # Model parameters
-        self.num_place_cells = 400
-        self.num_bvc_per_dir = 50
+        self.num_place_cells = 250
+        self.num_bvc_per_dir = 120
         self.num_reward_cells = 1
         self.n_hd = 8
         self.timestep = 32 * 3
@@ -228,11 +228,11 @@ class Driver(Supervisor):
                 print("Loaded existing Place Cell Network.")
         except:
             bvc = BoundaryVectorCellLayer(
-                max_dist=10,
+                max_dist=12,
                 input_dim=self.lidar_resolution,
                 n_hd=n_hd,
                 sigma_ang=90,
-                sigma_d=0.5,
+                sigma_d=0.75,
                 lidar_angles=self.lidar_angles,
                 num_bvc_per_dir=self.num_bvc_per_dir,
             )
@@ -883,6 +883,22 @@ class Driver(Supervisor):
                 os.makedirs(directory)
 
         files_saved = []
+
+        # Save parameters to text file
+        params_file = f"{self.file_prefix}parameters.txt"
+        with open(params_file, "w") as f:
+            f.write("Model Parameters:\n")
+            f.write(f"sigma_d: {self.pcn.bvc_layer.sigma_d}\n")
+            f.write(f"sigma_ang: {self.pcn.bvc_layer.sigma_ang}\n")
+            f.write(f"num_place_cells: {self.pcn.num_pc}\n")
+            f.write(f"num_bvcs: {self.pcn.num_bvc}\n")
+            f.write(f"num_bvc_per_dir: {self.num_bvc_per_dir}\n")
+            f.write(f"n_hd: {self.n_hd}\n")
+            f.write(f"run_time_hours: {self.run_time_minutes / 60}\n")
+            f.write(f"num_simulation_steps: {self.num_steps}\n")
+
+        files_saved.append("parameters.txt")
+
         # Save the Place Cell Network (PCN)
         if include_pcn:
             with open(f"{self.file_prefix}pcn.pkl", "wb") as output:

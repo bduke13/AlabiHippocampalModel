@@ -63,18 +63,24 @@ def get_available_directories(root_path: str, max_dirs: int = 200) -> List[str]:
     return sorted(directories)
 
 
-def filter_trial_directories(directories: List[str]) -> List[str]:
+def filter_directories(directories: List[str], substrings: List[str]) -> List[str]:
     """
-    Filter directories to only include those with 'trial_X' pattern,
-    where X is a number.
+    Filter directories to only include those containing any of the given substrings.
 
     Args:
         directories (List[str]): List of directory paths to filter
+        substrings (List[str]): List of substrings to match against directory paths
 
     Returns:
-        List[str]: Filtered list containing only directories with 'trial_X' pattern
+        List[str]: Filtered list containing only directories that match any of the substrings
+
+    Example:
+        >>> dirs = ['/path/trial_1/', '/path/test/', '/path/trial_2/']
+        >>> filter_directories(dirs, ['trial'])
+        ['/path/trial_1/', '/path/trial_2/']
     """
-    trial_pattern = re.compile(r".*trial_\d+.*")
-    return sorted(
-        [directory for directory in directories if trial_pattern.match(directory)]
-    )
+    filtered_dirs = []
+    for directory in directories:
+        if any(substring in directory for substring in substrings):
+            filtered_dirs.append(directory)
+    return sorted(filtered_dirs)
