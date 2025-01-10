@@ -255,9 +255,10 @@ def plot_hexbin_clusters(
 
 def get_model_hexbin_metrics(hmap_x, hmap_y, hmap_z, verbose=False, show_plot=False):
     # Variables to track metrics and clusters
-    total_clusters = 0  # Total number of clusters across all cells
-    non_zero_cells = 0  # Number of cells with at least one cluster
-    clusters_per_cell = []  # List to track the number of clusters for each cell
+    total_clusters = 0
+    cells_with_multiple_clusters = 0
+    cells_with_non_zero_clusters = 0
+    clusters_per_cell = []
 
     # Loop through all cells and calculate clusters
     for cell_index in range(hmap_z.shape[1]):
@@ -282,25 +283,37 @@ def get_model_hexbin_metrics(hmap_x, hmap_y, hmap_z, verbose=False, show_plot=Fa
 
         # Update metrics
         total_clusters += num_clusters
-        clusters_per_cell.append(
-            num_clusters
-        )  # Store clusters for histogram and bar chart
+        clusters_per_cell.append(num_clusters)
         if num_clusters > 0:
-            non_zero_cells += 1
+            cells_with_non_zero_clusters += 1
+        if num_clusters > 1:
+            cells_with_multiple_clusters += 1
 
-    # Calculate average clusters per non-zero cell
-    if non_zero_cells > 0:
-        avg_clusters_per_non_zero_cell = total_clusters / non_zero_cells
-    else:
-        avg_clusters_per_non_zero_cell = 0
+    # Calculate averages
+    avg_clusters_per_non_zero_cell = (
+        total_clusters / cells_with_non_zero_clusters
+        if cells_with_non_zero_clusters > 0
+        else 0
+    )
+    avg_clusters_per_multi_cluster_cell = (
+        total_clusters / cells_with_multiple_clusters
+        if cells_with_multiple_clusters > 0
+        else 0
+    )
 
     if verbose:
         # Print the results
         print("\nSummary:")
         print(f"Total clusters (including zero-cluster cells): {total_clusters}")
-        print(f"Number of cells with non-zero clusters: {non_zero_cells}")
+        print(f"Number of cells with non-zero clusters: {cells_with_non_zero_clusters}")
+        print(
+            f"Number of cells with more than one cluster: {cells_with_multiple_clusters}"
+        )
         print(
             f"Average clusters per non-zero cell: {avg_clusters_per_non_zero_cell:.2f}"
+        )
+        print(
+            f"Average clusters per cell with more than one cluster: {avg_clusters_per_multi_cluster_cell:.2f}"
         )
 
     if show_plot:
@@ -315,8 +328,10 @@ def get_model_hexbin_metrics(hmap_x, hmap_y, hmap_z, verbose=False, show_plot=Fa
 
     return {
         "total_clusters": total_clusters,
-        "non_zero_cells": non_zero_cells,
-        "avg_clusters_per_cell": avg_clusters_per_non_zero_cell,
+        "non_zero_cells": cells_with_non_zero_clusters,
+        "cells_with_multiple_clusters": cells_with_multiple_clusters,
+        "avg_clusters_per_non_zero_cell": avg_clusters_per_non_zero_cell,
+        "avg_clusters_per_multi_cluster_cell": avg_clusters_per_multi_cluster_cell,
     }
 
 
@@ -426,35 +441,6 @@ if __name__ == "__main__":
 
     data_path = "controllers/bek_controller/IJCNN/3D_3L_250/inside_3/"
     hmap_x, hmap_y, hmap_z = load_hmaps(data_path)
-
-    # %%
-    # Example: Single place cell for DBSCAN
-
-    # Let's pick a cell index to visualize
-    cell_index = 1
-
-    # Attempt to see if we can separate it into multiple clusters
-    fig, ax, hb, labels = plot_hexbin_clusters(
-        hmap_x,
-        hmap_y,
-        hmap_z,
-        cell_index=cell_index,
-        eps=1,
-        min_samples=20,
-        normalize=True,
-        filter_bottom_ratio=0.90,
-        cmap_name="tab10",
-    )
-
-    # Print out how many clusters we found
-    num_clusters = len(set(labels) - {-1})
-    print(f"Found {num_clusters} clusters (excluding noise).")
-
-    print(data_path)
-
-    plt.show()
-
-    # %%
 
     # %%
     # B) Stacking + Cosine

@@ -45,7 +45,7 @@ for path in df["full_path"]:
     try:
         print(path)
         hmap_x, hmap_y, hmap_z = load_hmaps(path)
-        metrics = get_model_hexbin_metrics(hmap_x, hmap_y, hmap_z, verbose=True)
+        metrics = get_model_hexbin_metrics(hmap_x, hmap_y, hmap_z, verbose=False)
         metrics_list.append(metrics)
     except Exception as e:
         print(f"Error processing {path}: {str(e)}")
@@ -56,23 +56,12 @@ for path in df["full_path"]:
                 "avg_clusters_per_cell": None,
             }
         )
-
 # Add metrics to DataFrame
 metrics_df = pd.DataFrame(metrics_list)
 df = pd.concat([df, metrics_df], axis=1)
 # Display results
 print("\nModel Analysis Results:")
-print(
-    df[
-        [
-            "parent_dir",
-            "end_dir",
-            "total_clusters",
-            "non_zero_cells",
-            "avg_clusters_per_cell",
-        ]
-    ]
-)
+print(df)
 
 # %%
 # Plotting
@@ -83,35 +72,70 @@ import seaborn as sns
 order = ["upright", "inside_shallow", "inside_medium", "inside_steep"]
 
 # Set up the figure with subplots
-fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
-fig.suptitle("Model Metrics Comparison by Environment Type")
+fig, axes = plt.subplots(2, 3, figsize=(12, 8))
+fig.suptitle("Model Metrics Comparison by Environment Type", fontsize=16)
+
+# Flatten axes for easier indexing
+axes = axes.flatten()
 
 # Plot total clusters
 sns.barplot(
-    data=df, x="end_dir", y="total_clusters", hue="parent_dir", ax=ax1, order=order
+    data=df, x="end_dir", y="total_clusters", hue="parent_dir", ax=axes[0], order=order
 )
-ax1.set_title("Total Clusters")
-ax1.tick_params(axis="x", rotation=45)
+axes[0].set_title("Total Clusters")
+axes[0].tick_params(axis="x", rotation=45)
 
 # Plot non-zero cells
 sns.barplot(
-    data=df, x="end_dir", y="non_zero_cells", hue="parent_dir", ax=ax2, order=order
+    data=df,
+    x="end_dir",
+    y="non_zero_cells",
+    hue="parent_dir",
+    ax=axes[1],
+    order=order,
 )
-ax2.set_title("Non-zero Cells")
-ax2.tick_params(axis="x", rotation=45)
+axes[1].set_title("Non-Zero Cells")
+axes[1].tick_params(axis="x", rotation=45)
 
-# Plot average clusters per cell
+# Plot cells with more than 1 cluster
 sns.barplot(
     data=df,
     x="end_dir",
-    y="avg_clusters_per_cell",
+    y="cells_with_multiple_clusters",
     hue="parent_dir",
-    ax=ax3,
+    ax=axes[2],
     order=order,
 )
-ax3.set_title("Average Clusters per Cell")
-ax3.tick_params(axis="x", rotation=45)
-ax3.tick_params(axis="x", rotation=45)
+axes[2].set_title("Cells with More Than 1 Cluster")
+axes[2].tick_params(axis="x", rotation=45)
 
-plt.tight_layout()
+# Plot average clusters per non-zero cell
+sns.barplot(
+    data=df,
+    x="end_dir",
+    y="avg_clusters_per_non_zero_cell",
+    hue="parent_dir",
+    ax=axes[3],
+    order=order,
+)
+axes[3].set_title("Average Clusters Per Non-Zero Cell")
+axes[3].tick_params(axis="x", rotation=45)
+
+# Plot average clusters per multi-cluster cell
+sns.barplot(
+    data=df,
+    x="end_dir",
+    y="avg_clusters_per_multi_cluster_cell",
+    hue="parent_dir",
+    ax=axes[4],
+    order=order,
+)
+axes[4].set_title("Average Clusters Per Multi-Cluster Cell")
+axes[4].tick_params(axis="x", rotation=45)
+
+# Hide the sixth subplot if there are only 5 metrics
+axes[5].axis("off")
+
+# Adjust layout and display
+plt.tight_layout(rect=[0, 0, 1, 0.95])  # Leave space for the title
 plt.show()
