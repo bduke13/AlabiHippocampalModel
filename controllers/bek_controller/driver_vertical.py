@@ -14,7 +14,7 @@ from controller import Supervisor, Robot
 from robot_mode import RobotMode
 from layers.boundary_vector_cell_layer_vertical import BoundaryVectorCellLayer
 from layers.head_direction_layer import HeadDirectionLayer
-from layers.place_cell_layer_vertical import PlaceCellLayer
+from layers.place_cell_layer import PlaceCellLayer
 from layers.reward_cell_layer import RewardCellLayer
 
 tf.random.set_seed(5)
@@ -724,7 +724,7 @@ class DriverVertical(Supervisor):
         self.vertical_boundaries = tf.cast(self.vertical_boundaries, tf.float32)
 
         self.pcn.get_place_cell_activations(
-            input_data=self.vertical_boundaries,
+            self.vertical_boundaries,
             hd_activations=self.hd_activations,
             collided=np.any(self.collided),
         )
