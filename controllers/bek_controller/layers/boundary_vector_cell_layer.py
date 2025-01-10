@@ -17,7 +17,7 @@ class BoundaryVectorCellLayer:
     ) -> None:
         """Initialize the boundary vector cell (BVC) layer.
 
-        This layer models neurons that respond to obstacles at specific distances and angles. It creates
+        This layer models neurons that respond to obstacles at specific boundary_data and angles. It creates
         8 head directions with 48 neurons for each head direction based on the default parameters,
         resulting in 384 total neurons.
 
@@ -28,17 +28,17 @@ class BoundaryVectorCellLayer:
             sigma_ang: Standard deviation (tuning width) for the Gaussian function modeling angular tuning of BVCs (in degrees).
             sigma_d: Standard deviation (tuning width) for the Gaussian function modeling distance tuning of BVCs.
         """
-        # Compute the number of preferred distances per head direction
+        # Compute the number of preferred boundary_data per head direction
         N_dist = len(np.arange(0, max_dist, max_dist / num_bvc_per_dir))
 
-        # Preferred distances for each BVC; determines how sensitive each BVC is to specific distances.
+        # Preferred boundary_data for each BVC; determines how sensitive each BVC is to specific boundary_data.
         self.d_i = np.tile(np.arange(0, max_dist, max_dist / num_bvc_per_dir), n_hd)[
             np.newaxis, :
         ]
 
         self.n_hd = n_hd
 
-        # Total number of BVC neurons = 8 head directions * 48 preferred distances per head direction.
+        # Total number of BVC neurons = 8 head directions * 48 preferred boundary_data per head direction.
         self.num_bvc = self.d_i.size
 
         # Indices to map input LiDAR angles to BVC neurons
@@ -64,11 +64,11 @@ class BoundaryVectorCellLayer:
             / (2 * self.sigma_ang**2)
         ) / tf.sqrt(2 * self.PI * self.sigma_ang**2)
 
-    def get_bvc_activation(self, distances) -> tf.Tensor:
-        """Calculate the activation of BVCs based on input distances and angles.
+    def get_bvc_activation(self, boundary_data) -> tf.Tensor:
+        """Calculate the activation of BVCs based on input boundary_data and angles.
 
         Args:
-            distances: Array of distance readings, representing obstacles' distances from the sensor.
+            boundary_data: Array of distance readings, representing obstacles' boundary_data from the sensor.
             angles: Array of angles corresponding to the distance readings.
 
         Returns:
@@ -77,7 +77,8 @@ class BoundaryVectorCellLayer:
         """
         # Compute Gaussian function for distance tuning
         distance_gaussian = tf.exp(
-            -((distances[self.input_indices] - self.d_i) ** 2) / (2 * self.sigma_d**2)
+            -((boundary_data[self.input_indices] - self.d_i) ** 2)
+            / (2 * self.sigma_d**2)
         ) / tf.sqrt(2 * self.PI * self.sigma_d**2)
 
         # Return the product of distance and angular Gaussian functions for BVC activation
@@ -90,7 +91,7 @@ class BoundaryVectorCellLayer:
 
     def plot_activation(
         self,
-        distances: np.ndarray,
+        boundary_data: np.ndarray,
         return_plot: bool = False,
     ) -> Union[None, plt.Figure]:
         """Plot the BVC activation on a polar plot and overlay the raw data.
@@ -98,15 +99,15 @@ class BoundaryVectorCellLayer:
         This function will plot each BVC's activation and the synthetic boundary.
 
         Args:
-            distances: Input distances to the BVC layer (e.g., from a LiDAR).
+            boundary_data: Input boundary_data to the BVC layer (e.g., from a LiDAR).
             angles: Input angles corresponding to the distance measurements.
             return_plot: If True, returns the plot object instead of showing it.
 
         Returns:
             The matplotlib Figure object if return_plot is True, otherwise None.
         """
-        # Get BVC activations based on distances and angles
-        activations = self.get_bvc_activation(distances, angles).numpy()
+        # Get BVC activations based on boundary_data and angles
+        activations = self.get_bvc_activation(boundary_data, angles).numpy()
 
         # Create a polar plot
         fig = plt.figure(figsize=(8, 8))
@@ -133,12 +134,12 @@ class BoundaryVectorCellLayer:
             ax.scatter(theta, r, s=size, c=[color], alpha=0.7, edgecolor="black")
 
         # Plot the boundary for reference
-        ax.plot(angles, distances, "r-", linewidth=2, label="Boundary")
+        ax.plot(angles, boundary_data, "r-", linewidth=2, label="Boundary")
 
         # Set the radial limits dynamically based on max_dist
         ax.set_ylim(
             0, self.d_i.max()
-        )  # Ensures plot scales with BVC preferred distances
+        )  # Ensures plot scales with BVC preferred boundary_data
 
         # Add a legend and show the plot
         plt.legend()
@@ -158,7 +159,7 @@ if __name__ == "__main__":
     n_star_peaks: int = 5
 
     angles: np.ndarray = np.linspace(0, 2 * np.pi, n_points, endpoint=False)
-    distances: np.ndarray = np.ones(n_points) * min_r  # Start with min_r
+    boundary_data: np.ndarray = np.ones(n_points) * min_r  # Start with min_r
 
     # Create star peaks by alternating between max_r and min_r
     star_interval: int = n_points // (
@@ -166,7 +167,7 @@ if __name__ == "__main__":
     )  # Each peak consists of a far and near point
     for i in range(0, n_star_peaks * 2, 2):
         start_idx = i * star_interval
-        distances[start_idx : start_idx + star_interval] = max_r
+        boundary_data[start_idx : start_idx + star_interval] = max_r
 
     # Initialize BVC layer
     bvc_layer_with_activation = BoundaryVectorCellLayer(
@@ -174,4 +175,4 @@ if __name__ == "__main__":
     )
 
     # Plot BVC activation with the star-shaped boundary
-    bvc_layer_with_activation.plot_activation(distances, angles)
+    bvc_layer_with_activation.plot_activation(boundary_data, angles)

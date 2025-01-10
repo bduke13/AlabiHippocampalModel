@@ -50,7 +50,7 @@ class PlaceCellLayer:
         # Initialized with a 20% probability of connection
         # Shape: (num_pc, num_bvc)
         self.w_in = tf.Variable(
-            rng.binomial(n=1, p=0.3, size=(num_pc, self.num_bvc)), dtype=tf.float32
+            rng.binomial(n=1, p=0.25, size=(num_pc, self.num_bvc)), dtype=tf.float32
         )
 
         # Recurrent weight matrix for head direction and place cell interactions
@@ -127,7 +127,7 @@ class PlaceCellLayer:
         self.prev_place_cell_activations = tf.identity(self.place_cell_activations)
 
         # Compute BVC activations based on the input distances and angles
-        self.bvc_activations = self.bvc_layer.get_bvc_activation(distances=distances)
+        self.bvc_activations = self.bvc_layer.get_bvc_activation(distances)
 
         # Compute the input to place cells by taking the dot product of the input weights and BVC activations
         # Afferent excitation term: ∑_j W_ij^{pb} v_j^b (Equation 3.2a)
