@@ -10,7 +10,7 @@ if __name__ == "__main__":
     run_time_hours = 4
     start_locations = [[4, 4], [-4, 4], [4, -4], [-4, -4]]
     model_type = "2D_250"
-    world_name = "inside_steep"
+    world_name = "upright"
 
     print(f"Running model {model_type} in world {world_name}")
 
