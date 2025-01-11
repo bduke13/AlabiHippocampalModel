@@ -190,3 +190,10 @@ ax.set_title("Total Far-Distance Cosine Sum by Environment & Parent")
 ax.tick_params(axis="x", rotation=45)
 plt.tight_layout()
 plt.show()
+
+
+# %%
+# Save the updated DataFrame to a CSV file
+output_csv_path = os.path.join(root_path, "model_metrics_analysis_results.csv")
+df.to_csv(output_csv_path, index=False)
+print(f"\nResults saved to {output_csv_path}")
