@@ -99,14 +99,14 @@ class Driver(Supervisor):
         self.done = False
 
         # Model parameters
-        self.num_small_place_cells = 600  # Adjust as needed
-        self.num_large_place_cells = 300  # Adjust as needed
+        self.num_small_place_cells = 2000  # world0_20x20
+        self.num_large_place_cells = 200  # world0_20x20
         self.num_reward_cells = 1
         self.n_hd = 8
         self.timestep = 32 * 3
         self.tau_w = 10  # time constant for the window function
         if self.mode == RobotMode.EXPLOIT:
-            self.tau_w = 8
+            self.tau_w = 10
         self.enable_multiscale = enable_multiscale
 
         # Robot parameters
@@ -118,8 +118,9 @@ class Driver(Supervisor):
         self.run_time_minutes = run_time_hours * 60
         self.step_count = 0
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
-        self.goal_r = {"explore": 0.3, "exploit": 0.8}
-
+        self.goal_r = {"explore": 0.3, "exploit": 0.5}
+        self.goal_location = [-7, 7]
+        
         self.hmap_x = np.zeros(self.num_steps)  # x-coordinates
         self.hmap_y = np.zeros(self.num_steps)  # y-coordinate
 
@@ -176,7 +177,7 @@ class Driver(Supervisor):
             num_reward_cells=self.num_reward_cells,
             num_small_place_cells=self.num_small_place_cells,
             num_large_place_cells=self.num_large_place_cells,
-            num_replay=1,
+            num_replay=5,
         )
 
         print(f"SMALL: Oja's: {self.pcn_small.enable_ojas}, STDP: {self.pcn_small.enable_stdp}")
@@ -193,8 +194,6 @@ class Driver(Supervisor):
         self.step(self.timestep)
         self.step_count += 1
 
-        # Initialize goal
-        self.goal_location = [-7, 7]
         self.expected_reward = 0
         self.last_reward = 0
 
@@ -245,7 +244,7 @@ class Driver(Supervisor):
         except FileNotFoundError:
             # Initialize new Small PCN if not found
             bvc = BoundaryVectorCellLayer(
-                max_dist=20,
+                max_dist=30,
                 input_dim=720,
                 n_hd=n_hd,
                 sigma_ang=90,
@@ -272,7 +271,7 @@ class Driver(Supervisor):
             except FileNotFoundError:
                 # Initialize new Large PCN if not found
                 bvc = BoundaryVectorCellLayer(
-                    max_dist=20,
+                    max_dist=30,
                     input_dim=720,
                     n_hd=n_hd,
                     sigma_ang=90,
@@ -365,6 +364,7 @@ class Driver(Supervisor):
                     num_reward_cells=num_reward_cells,
                     input_dim=num_large_place_cells,
                     num_replay=num_replay,
+                    learning_rate=0.05,
                 )
                 print("Initialized new Large Reward Cell Network.")
 
@@ -501,150 +501,133 @@ class Driver(Supervisor):
         Dynamically switches between small and large reward scales based on environmental context.
         """
 
-        # Initial actions: stop movement, sense environment, and update place cell activations
+        # 1. Initial actions and checks
+        self._perform_initial_actions()
+        if self.step_count <= self.tau_w:
+            return  # Not enough steps for an 'exploit' action yet
+
+        # 2. Compute potential rewards (multiscale or single-scale)
+        combined_pot_rew, alpha = self._compute_potential_rewards()
+
+        # 3. Final directional reward estimates
+        self.directional_reward_estimates = gaussian_filter1d(combined_pot_rew, sigma=3)
+        print()
+
+        # 4. Validate reward estimates and decide whether to explore
+        if not self._validate_and_maybe_explore():
+            return
+
+        # 5. Compute action angle
+        action_angle = self._compute_action_angle(alpha)
+
+        # 6. Validate action angle and move
+        if not self._validate_action_angle(action_angle):
+            self.explore()
+            return
+
+        # 7. Execute movement
+        self._turn_and_move(action_angle)
+
+    # --------------------------------------------------------------------------
+    # Consolidated / Refactored Helpers
+    # --------------------------------------------------------------------------
+
+    def _perform_initial_actions(self):
+        """Stops, senses, updates PCNs/hmaps, and checks if goal is reached."""
         self.stop()
         self.sense()
         self.compute_pcn_activations()
         self.update_hmaps()
         self.check_goal_reached()
 
-        if self.step_count <= self.tau_w:
-            return  # Not enough steps for an 'exploit' action yet
-
-        # Initialize variables if not already set
+        # Initialize some variables if not set
+        if not hasattr(self, "current_scale"):
+            self.current_scale = "None"
+        if not hasattr(self, "current_mode"):
+            self.current_mode = "None"
         self.directional_reward_estimates = None
         self.low_reward_state = False
 
-        if not hasattr(self, "current_scale"):
-            self.current_scale = "None"
-
-        if not hasattr(self, "current_mode"):
-            self.current_mode = "None"
-
-        # Multi-scale reward computation
+    def _compute_potential_rewards(self):
+        """
+        Depending on whether multiscale is enabled, compute a single-scale or 
+        combined multi-scale reward map. Returns (combined_pot_rew, alpha).
+        If single-scale, alpha is returned as 1.0 (unused).
+        """
         if self.enable_multiscale:
-            # Calculate multiscale rewards and weighting factor
+            # Compute multi-scale
             combined_pot_rew, alpha = self._calculate_multiscale_rewards()
-            
-            # Store directional estimates for both scales (for combination)
+            # Also store directional estimates for angle-blending
             self.directional_reward_estimates_small = self._preplay_rewards(self.pcn_small, self.rcn_small)
             self.directional_reward_estimates_large = self._preplay_rewards(self.pcn_large, self.rcn_large)
         else:
+            # Single-scale only
             combined_pot_rew = self._calculate_single_scale_rewards()
+            alpha = 1.0  # Not used in single-scale
+            # Provide placeholders
+            self.directional_reward_estimates_small = np.copy(combined_pot_rew)
+            self.directional_reward_estimates_large = np.copy(combined_pot_rew)
+        return combined_pot_rew, alpha
 
-        self.directional_reward_estimates = gaussian_filter1d(combined_pot_rew, sigma=2.0)
-
-        # Validate directional reward estimates
-        if not self._validate_directional_estimates():
-            self.explore()
-            return
-
-        # Calculate action angle using weighted combination
-        action_angle = self._calculate_action_angle(alpha if self.enable_multiscale else 1.0)
-
-        if not self._validate_action_angle(action_angle):
-            self.explore()
-            return
-
-        self._turn_and_move(action_angle)
-
-    # Helper Functions
-
-    def _compute_max_reward(self, pcn, rcn):
-        rcn.update_reward_cell_activations(pcn.place_cell_activations, visit=True)
-        return tf.reduce_max(rcn.reward_cell_activations)
-
-    def _compute_distance_to_goal(self):
-        curr_pos = self.robot.getField("translation").getSFVec3f()
-        return np.linalg.norm([curr_pos[0] - self.goal_location[0], curr_pos[2] - self.goal_location[1]])
-
-    def _log_and_check_rewards(self, *max_activations):
-        for activation in max_activations:
-            if self.low_reward_state and activation.numpy() > 1e-4:
-                print("Reward signals picked back up.")
-                self.low_reward_state = False
-
-    def _should_trigger_explore(self, max_reward_activation):
-        if max_reward_activation <= 1e-6 or np.any(self.collided):
-            self.low_reward_state = True
-            return True
-        if self.directional_reward_estimates is not None and np.sum(self.directional_reward_estimates) < 1e-6:
-            self.low_reward_state = True
-            return True
-        return False
-
-    def _calculate_multiscale_rewards(self):
-        pot_rew_small = self._preplay_rewards(self.pcn_small, self.rcn_small)
-        pot_rew_large = self._preplay_rewards(self.pcn_large, self.rcn_large)
-
-        # Normalize the reward potentials
-        pot_rew_small /= np.max(pot_rew_small) + 1e-6
-        pot_rew_large /= np.max(pot_rew_large) + 1e-6
-
-        # Compute gradients
-        grad_small = np.sum(np.abs(np.diff(pot_rew_small, append=pot_rew_small[0])))
-        grad_large = np.sum(np.abs(np.diff(pot_rew_large, append=pot_rew_large[0])))
-
-        # Weight based on gradients
-        alpha = grad_small / (grad_small + grad_large + 1e-6)  # Weight for small scale
-        return alpha * pot_rew_small + (1 - alpha) * pot_rew_large, alpha
-
-    def _calculate_single_scale_rewards(self):
-        return self._preplay_rewards(self.pcn_small, self.rcn_small)
-
-    def _preplay_rewards(self, pcn, rcn):
-        pot_rew = np.zeros(self.n_hd)
-        for d in range(self.n_hd):
-            pcn_future = pcn.preplay(d, num_steps=1)
-            rcn.update_reward_cell_activations(pcn_future)
-            pot_rew[d] = tf.reduce_max(np.nan_to_num(rcn.reward_cell_activations))
-        return pot_rew
-
-    def _log_scale_switch(self, selected_scale):
-        if selected_scale != self.current_scale:
-            print(f"Switching scale: {self.current_scale} -> {selected_scale}")
-            self.current_scale = selected_scale
-
-    def _validate_directional_estimates(self):
-        if self.directional_reward_estimates is None or np.isnan(self.directional_reward_estimates).any() or np.sum(self.directional_reward_estimates) <= 1e-6:
+    def _validate_and_maybe_explore(self):
+        """
+        Checks if directional_reward_estimates is valid. If invalid, trigger explore mode.
+        Returns True if valid, False if exploration triggered.
+        """
+        # Check NaNs, zero-sum, or missing reward estimates
+        if (self.directional_reward_estimates is None
+            or np.isnan(self.directional_reward_estimates).any()
+            or np.sum(self.directional_reward_estimates) <= 1e-6):
             print("Directional reward estimates invalid. Triggering exploration.")
             self.low_reward_state = True
+            self.explore()
             return False
         return True
 
-    def _calculate_action_angle(self, alpha=1.0):
-        # Get angles corresponding to head directions
+    def _compute_action_angle(self, alpha=1.0, k=50.0):
+        """
+        Compute the action angle using single-scale or multiscale logic.
+        """
         angles = np.linspace(0, 2 * np.pi, self.n_hd, endpoint=False)
 
-        if self.enable_multiscale:
-            # Compute distance and visibility context
-            distance_to_goal = self._compute_distance_to_goal()
-
-            # Compute action angles and gradients for both scales
-            action_angle_small = circmean(angles, weights=self.directional_reward_estimates_small)
-            action_angle_large = circmean(angles, weights=self.directional_reward_estimates_large)
-
-            grad_small = np.sum(np.abs(np.diff(self.directional_reward_estimates_small, append=self.directional_reward_estimates_small[0])))
-            grad_large = np.sum(np.abs(np.diff(self.directional_reward_estimates_large, append=self.directional_reward_estimates_large[0])))
-
-            # Calculate gradient-based blending weight
-            total_gradient = grad_small + grad_large + 1e-6
-            weight_small = grad_small / total_gradient
-            weight_large = grad_large / total_gradient
-
-            # Blend action angles
-            blended_action_angle = circmean(
-                np.array([action_angle_small, action_angle_large]),
-                weights=np.array([weight_small, weight_large]),
-            )
-
-            # Return the blended angle
-            return blended_action_angle
-
-        else:
-            # Use single-scale reward estimates directly
+        # Single-scale fallback
+        if not self.enable_multiscale:
             return circmean(angles, weights=self.directional_reward_estimates)
 
+        # Multiscale blending
+        single_scale_angle = circmean(angles, weights=self.directional_reward_estimates_small)
+        single_scale_conf  = np.sum(self.directional_reward_estimates_small)
+
+        action_angle_small = circmean(angles, weights=self.directional_reward_estimates_small)
+        action_angle_large = circmean(angles, weights=self.directional_reward_estimates_large)
+
+        grad_small = np.sum(np.abs(np.diff(self.directional_reward_estimates_small, append=self.directional_reward_estimates_small[0])))
+        grad_large = np.sum(np.abs(np.diff(self.directional_reward_estimates_large, append=self.directional_reward_estimates_large[0])))
+
+        total_grad = grad_small + grad_large + 1e-6
+        weight_small = grad_small / total_grad
+        weight_large = grad_large / total_grad
+
+        angles = np.array([action_angle_small, action_angle_large])
+        weights = np.array([weight_small, weight_large])
+
+        # Validate shapes
+        if angles.shape != weights.shape:
+            raise ValueError("Angles and weights must have the same shape for circmean.")
+
+        multiscale_angle = circmean(angles, weights=weights)
+        multiscale_conf = np.sum(self.directional_reward_estimates)
+
+        # Advantage-based blending
+        advantage = multiscale_conf - single_scale_conf
+        beta = 1.0 / (1.0 + np.exp(-1 * advantage))
+
+        blended_angle = circmean(
+            np.array([single_scale_angle, multiscale_angle]),
+            weights=np.array([1.0 - beta, beta])
+        )
+
+        return blended_angle
 
     def _validate_action_angle(self, action_angle):
         if np.isnan(action_angle):
@@ -653,10 +636,13 @@ class Driver(Supervisor):
         return True
 
     def _turn_and_move(self, action_angle):
+        """Turns the robot to 'action_angle' and then moves forward."""
+        # Turn
         angle_to_turn = -np.deg2rad(np.rad2deg(action_angle) - self.current_heading_deg)
         angle_to_turn = ((angle_to_turn + np.pi) % (2 * np.pi)) - np.pi
         self.turn(angle_to_turn)
 
+        # Move
         for _ in range(self.tau_w):
             self.sense()
             self.compute_pcn_activations()
@@ -664,29 +650,62 @@ class Driver(Supervisor):
             self.forward()
             self.check_goal_reached()
 
+            # Collision logic
             if np.any(self.collided):
                 print("Collision detected. Turning back and retrying.")
-                # Turn 180 degrees
-                self.turn(np.pi)  # Reverse direction
-                
-                # Move forward for tau_w steps
+                self.turn(np.pi)  # reverse direction
                 for _ in range(self.tau_w):
                     self.sense()
                     self.compute_pcn_activations()
                     self.update_hmaps()
                     self.forward()
                     self.check_goal_reached()
-
-                    if np.any(self.collided):  # If it collides again, trigger explore
+                    if np.any(self.collided):
                         print("Still stuck after retry. Switching to explore mode.")
                         self.explore()
                         return
-
-                # If no collision after reverse-and-retry, continue normal behavior
-                break
-
+                break  # End collision retry
             if self.done:
                 return
+
+    # --------------------------------------------------------------------------
+    # Lower-level Utilities (unchanged or slightly merged)
+    # --------------------------------------------------------------------------
+
+    def _calculate_multiscale_rewards(self):
+        pot_rew_small = self._preplay_rewards(self.pcn_small, self.rcn_small)
+        pot_rew_large = self._preplay_rewards(self.pcn_large, self.rcn_large)
+
+        # Normalize
+        pot_rew_small /= (np.max(pot_rew_small) + 1e-6)
+        pot_rew_large /= (np.max(pot_rew_large) + 1e-6)
+
+        # Gradient-based weighting
+        grad_small = np.sum(np.abs(np.diff(pot_rew_small, append=pot_rew_small[0])))
+        grad_large = np.sum(np.abs(np.diff(pot_rew_large, append=pot_rew_large[0])))
+
+        alpha = grad_small / (grad_small + grad_large + 1e-6)
+        combined = alpha * pot_rew_small + (1 - alpha) * pot_rew_large
+        return combined, alpha
+
+    def _calculate_single_scale_rewards(self):
+        return self._preplay_rewards(self.pcn_small, self.rcn_small)
+
+    def _preplay_rewards(self, pcn, rcn):
+        """
+        For each heading direction d, "simulate" stepping in that direction
+        and measure reward cell activations.
+        """
+        pot_rew = np.zeros(self.n_hd)
+        for d in range(self.n_hd):
+            pcn_future = pcn.preplay(d, num_steps_preplay=1)
+            rcn.update_reward_cell_activations(pcn_future)
+            pot_rew[d] = tf.reduce_max(np.nan_to_num(rcn.reward_cell_activations))
+        return pot_rew
+
+    # Other methods that may remain: sense(), compute_pcn_activations(),
+    # update_hmaps(), check_goal_reached(), etc. 
+    # (Not shown here but presumably are part of the larger class.)
 
 
     ########################################### RECORDING ###########################################
@@ -912,7 +931,7 @@ class Driver(Supervisor):
         """
         curr_pos = self.robot.getField("translation").getSFVec3f()
         curr_pos_2d = [curr_pos[0], curr_pos[2]]  # Use only x and z coordinates
-        time_limit = 5 # minutes
+        time_limit = 15 # minutes
 
         # In LEARN_OJAS or PLOTTING mode, save only after run_time is reached:
         if (self.mode == RobotMode.LEARN_OJAS or self.mode == RobotMode.LEARN_HEBB or self.mode == RobotMode.PLOTTING) \
@@ -972,6 +991,7 @@ class Driver(Supervisor):
                 
                 self.stop()
                 self.done = True
+                self.save(include_hmaps=False, save_path=True)
                 return
             else:
                 self.stop()
@@ -1174,6 +1194,7 @@ class Driver(Supervisor):
         include_pcn: bool = True,
         include_rcn: bool = True,
         include_hmaps: bool = True,
+        save_path: bool = False,
     ):
         """
         Saves the state of the PCN (Place Cell Network), RCN (Reward Cell Network), 
@@ -1239,9 +1260,32 @@ class Driver(Supervisor):
                 with open(f"{hmaps_dir}/hmap_z_large.pkl", "wb") as output:
                     pickle.dump(self.hmap_z_large[: self.step_count], output)
                     files_saved.append(f"{hmaps_dir}/hmap_z_large.pkl")
+        
+        if save_path:
+            # Determine the base directory based on multiscale or vanilla mode
+            base_stats_dir = os.path.join(
+                "analysis", "stats",
+                "multiscale" if self.enable_multiscale else "vanilla",
+                world_name
+            )
+            hmaps_path_dir = os.path.join(base_stats_dir, "hmaps")
+            os.makedirs(hmaps_path_dir, exist_ok=True)
 
-        print(f"Files Saved: {files_saved}")
-        print("Saving Done!")
+            # Trial ID-based filenames
+            trial_id = getattr(self, "trial_id", "default")
+            hmap_x_file = os.path.join(hmaps_path_dir, f"{trial_id}_hmap_x.pkl")
+            hmap_y_file = os.path.join(hmaps_path_dir, f"{trial_id}_hmap_y.pkl")
+
+            # Save only up to the current step count
+            with open(hmap_x_file, "wb") as fx:
+                pickle.dump(self.hmap_x[:self.step_count], fx)
+                files_saved.append(hmap_x_file)
+            with open(hmap_y_file, "wb") as fy:
+                pickle.dump(self.hmap_y[:self.step_count], fy)
+                files_saved.append(hmap_y_file)
+
+            print(f"Saved hmap_x and hmap_y for {trial_id} to {hmaps_path_dir}")
+            return
 
         # User confirmation dialog
         root = tk.Tk()
