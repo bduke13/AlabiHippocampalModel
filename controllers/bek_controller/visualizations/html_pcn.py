@@ -120,6 +120,10 @@ def generate_html_report(cell_indices, output_dir):
         </head>
         <body>
             <h1>Place Cell Visualizations</h1>
+            <p><strong>Report Location:</strong> <code id="report-path"></code></p>
+            <script>
+                document.getElementById('report-path').textContent = window.location.pathname;
+            </script>
         """
         )
 
@@ -227,7 +231,7 @@ if __name__ == "__main__":
     from controllers.bek_controller.visualizations.analysis_utils import *
 
     # Example usage
-    data_path = "controllers/bek_controller/IJCNN/2D_250/upright/"
+    data_path = "controllers/bek_controller/IJCNN/3D_3L_250/upright/"
     hmap_x, hmap_y, hmap_z = load_hmaps(data_path)
 
     # %%

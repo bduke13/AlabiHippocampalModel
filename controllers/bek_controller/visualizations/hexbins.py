@@ -69,7 +69,6 @@ def create_hexbin(
         y_centers = verts[:, 1]
 
     if filter_bottom_ratio > 0.0:
-        # Ensure counts is a regular numpy array
         counts_array = np.asarray(counts)  # Convert to a standard ndarray
         threshold = np.percentile(counts_array, filter_bottom_ratio * 100)
         counts[counts < threshold] = 0.0
@@ -81,7 +80,7 @@ def create_hexbin(
             counts /= max_count
 
     # Create RGBA colors
-    rgba_colors = np.zeros((len(counts), 4))  # Initialize with zeros
+    rgba_colors = np.zeros((len(counts), 4))
     rgba_colors[:, 0] = 1.0  # Red channel (example, adjust as needed)
     rgba_colors[:, 3] = counts  # Alpha channel reflects activations
 
@@ -92,12 +91,15 @@ def create_hexbin(
         plt.close(fig)  # Release memory for the figure if requested
 
     if analyze:
-        # Prepare binned data for analysis
         binned_data = [
             (x, y, activation) for x, y, activation in zip(x_centers, y_centers, counts)
         ]
+        if close_plot:
+            plt.close(fig)  # Ensure the figure is closed
         return fig, ax, hb, binned_data
 
+    if close_plot:
+        plt.close(fig)  # Ensure the figure is closed
     return fig, ax, hb
 
 
@@ -336,132 +338,276 @@ def get_model_hexbin_metrics(hmap_x, hmap_y, hmap_z, verbose=False, show_plot=Fa
 
 
 # -------------- Experiment B: Stacking + Cosine --------------
-def stack_binned_data(list_of_binned_data):
-    stacked = defaultdict(list)
-    for bdata in list_of_binned_data:
-        for x, y, act in bdata:
-            stacked[(x, y)].append(act)
-    return stacked
 
 
-def compute_cosine_similarity(vecA, vecB):
-    if norm(vecA) == 0.0 or norm(vecB) == 0.0:
-        return 0.0
-    return np.dot(vecA, vecB) / (norm(vecA) * norm(vecB))
-
-
-def compute_cosine_sums(stacked_dict, distance_threshold=1.0):
-    coords = list(stacked_dict.keys())
-    results = {}
-    for i, coord_i in enumerate(coords):
-        x_i, y_i = coord_i
-        vec_i = np.array(stacked_dict[coord_i])
-
-        cos_sum = 0.0
-        for j, coord_j in enumerate(coords):
-            if i == j:
-                continue
-            x_j, y_j = coord_j
-            dist = np.sqrt((x_i - x_j) ** 2 + (y_i - y_j) ** 2)
-            if dist > distance_threshold:
-                vec_j = np.array(stacked_dict[coord_j])
-                cos_sum += compute_cosine_similarity(vec_i, vec_j)
-
-        results[coord_i] = cos_sum
-
-    return results
-
-
-# -------------- Saving Data --------------
-
-
-def save_all_hexbins(
-    hmap_x, hmap_y, hmap_z, output_dir, normalize=True, filter_bottom_ratio=0.1
-):
+def stack_binned_data_by_location(list_of_binned_data):
     """
-    Creates and saves hexbin data for all cells in the dataset.
+    Stack binned data from all place cells into a dictionary where bins
+    are identified by their center coordinates.
 
     Args:
-    - hmap_x, hmap_y, hmap_z: The coordinate and activation data
-    - output_dir: Directory to save the hexbin data
-    - normalize: Whether to normalize activations
-    - filter_bottom_ratio: Ratio for filtering low activations
+    - list_of_binned_data: List of binned data from multiple place cells.
 
     Returns:
-    - Dictionary containing all processed hexbin data
+    - stacked_dict: A dictionary with keys as (x, y) coordinates and values as lists of activations.
     """
-    os.makedirs(output_dir, exist_ok=True)
+    stacked_dict = defaultdict(list)
+    for bdata in list_of_binned_data:
+        for x, y, act in bdata:
+            stacked_dict[(x, y)].append(act)
+    return stacked_dict
 
-    # Dictionary to store all hexbin data
-    all_hexbins = {}
 
-    print(f"Processing {hmap_z.shape[1]} cells...")
+def compute_cosine_similarity_sums(stacked_dict, distance_threshold=2.0):
+    """
+    Compute the sum of cosine similarities between bins in the environment, considering
+    only bins that are more than a specified distance apart.
 
+    Args:
+    - stacked_dict: Dictionary of binned data with keys as (x, y) coordinates.
+    - distance_threshold: Minimum distance (in meters) to consider for similarity calculation.
+
+    Returns:
+    - similarity_sums: A dictionary with keys as (x, y) and values as the sum of cosine similarities.
+    """
+    coords = np.array(list(stacked_dict.keys()))  # Extract all bin coordinates
+    similarity_sums = {}
+
+    # Iterate over each bin
+    for i, (x_i, y_i) in enumerate(coords):
+        vec_i = np.array(stacked_dict[(x_i, y_i)])
+        sum_similarity = 0.0
+
+        # Compare to all other bins
+        for j, (x_j, y_j) in enumerate(coords):
+            if i == j:
+                continue
+
+            # Calculate Euclidean distance
+            distance = np.sqrt((x_i - x_j) ** 2 + (y_i - y_j) ** 2)
+            if distance > distance_threshold:
+                vec_j = np.array(stacked_dict[(x_j, y_j)])
+
+                # Compute cosine similarity
+                if norm(vec_i) > 0 and norm(vec_j) > 0:
+                    cos_sim = np.dot(vec_i, vec_j) / (norm(vec_i) * norm(vec_j))
+                    sum_similarity += cos_sim
+
+        # Store the sum of similarities for this bin
+        similarity_sums[(x_i, y_i)] = sum_similarity
+
+    return similarity_sums
+
+
+def analyze_cosine_similarity(
+    hmap_x, hmap_y, hmap_z, gridsize=50, filter_bottom_ratio=0.1, distance_threshold=2.0
+):
+    """
+    Full analysis pipeline for cosine similarity in discretized activation space.
+
+    Args:
+    - hmap_x, hmap_y, hmap_z: The coordinate and activation data.
+    - gridsize: The size of the hexbin grid.
+    - filter_bottom_ratio: Ratio for filtering low activations.
+    - distance_threshold: Minimum distance (in meters) to consider for similarity calculation.
+
+    Returns:
+    - similarity_sums: Dictionary of cosine similarity sums for each bin.
+    """
+    all_binned_data = []
+
+    # Create hexbins for all cells
     for cell_index in range(hmap_z.shape[1]):
-        # Create hexbin and get data
-        _, _, hb, binned_data = create_hexbin(
-            cell_index,
-            hmap_x,
-            hmap_y,
-            hmap_z,
-            normalize=normalize,
+        _, _, _, binned_data = create_hexbin(
+            cell_index=cell_index,
+            hmap_x=hmap_x,
+            hmap_y=hmap_y,
+            hmap_z=hmap_z,
+            normalize=True,
             filter_bottom_ratio=filter_bottom_ratio,
             analyze=True,
+            close_plot=True,
         )
+        all_binned_data.append(binned_data)
 
-        # Extract and store the important data
-        hexbin_data = {
-            "coordinates": np.array([(x, y) for x, y, _ in binned_data]),
-            "activations": np.array([act for _, _, act in binned_data]),
-            "gridsize": 50,  # This matches the gridsize in create_hexbin
-        }
+    # Stack binned data by location
+    stacked_dict = stack_binned_data_by_location(all_binned_data)
 
-        # Save to numpy file
-        save_path = os.path.join(output_dir, f"hexbin_cell_{cell_index}.npz")
-        np.savez(
-            save_path,
-            coordinates=hexbin_data["coordinates"],
-            activations=hexbin_data["activations"],
-            gridsize=np.array([hexbin_data["gridsize"]]),
-        )
+    # Compute cosine similarity sums
+    similarity_sums = compute_cosine_similarity_sums(stacked_dict, distance_threshold)
 
-        all_hexbins[cell_index] = hexbin_data
+    return similarity_sums
 
-        if (cell_index + 1) % 100 == 0:
-            print(f"Processed {cell_index + 1} cells...")
 
-    print("Finished processing all cells!")
-    return all_hexbins
+def plot_cosine_similarity_heatmap(
+    hmap_x,
+    hmap_y,
+    hmap_z,
+    stacked_dict,
+    similarity_sums,
+    cell_index=0,
+    gridsize=50,
+    cmap="viridis",
+):
+    """
+    Plot a heatmap of cosine similarities for a specific place cell overlaid on the hexbin grid.
+
+    Args:
+    - hmap_x, hmap_y, hmap_z: The coordinate and activation data.
+    - stacked_dict: Dictionary of stacked binned data with keys as (x, y).
+    - similarity_sums: Dictionary of cosine similarity sums for each bin.
+    - cell_index: The index of the place cell to visualize.
+    - gridsize: The hexbin grid size.
+    - cmap: The colormap for the heatmap.
+
+    Returns:
+    - fig, ax: The figure and axis of the plot.
+    """
+    # Generate hexbin plot for the place cell
+    fig, ax, hb, binned_data = create_hexbin(
+        cell_index=cell_index,
+        hmap_x=hmap_x,
+        hmap_y=hmap_y,
+        hmap_z=hmap_z,
+        normalize=True,
+        analyze=True,
+        close_plot=False,
+    )
+
+    # Extract bin centers from hexbin plot
+    bin_centers = hb.get_offsets()
+
+    # Map similarity sums to bin centers
+    bin_colors = []
+    for x, y in bin_centers:
+        # Find the similarity sum for this bin, default to 0 if not found
+        bin_colors.append(similarity_sums.get((x, y), 0.0))
+
+    # Normalize bin colors for visualization
+    bin_colors = np.array(bin_colors)
+    bin_colors_normalized = (bin_colors - bin_colors.min()) / (
+        bin_colors.max() - bin_colors.min()
+    )
+
+    # Apply the normalized colors to the hexbin facecolors
+    rgba_colors = plt.cm.get_cmap(cmap)(bin_colors_normalized)
+    hb.set_facecolors(rgba_colors)
+
+    # Add colorbar
+    cbar = plt.colorbar(hb, ax=ax, orientation="vertical")
+    cbar.set_label("Cosine Similarity Sum")
+
+    # Adjust plot title and labels
+    ax.set_title(f"Cosine Similarity Heatmap - Cell {cell_index}")
+    ax.set_xlabel("X Coordinate")
+    ax.set_ylabel("Y Coordinate")
+
+    return fig, ax
+
+
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+
+
+def plot_similarity_sums(
+    similarity_sums,
+    title="Far-Cosine Similarity Sums",
+    output_path=None,
+    close_plot=False,
+):
+    """
+    Plots the similarity sums as a scatter plot, where each point (x,y)
+    is colored by its cosine similarity sum. Optionally saves the figure
+    to disk and can close the figure to free memory.
+
+    Args:
+        similarity_sums (dict):
+            Keys are (x, y) tuples, values are float similarity sums.
+        title (str):
+            Title for the plot.
+        output_path (str or None):
+            File path to save the plot image (e.g., '/path/to/plot.png').
+            If None, no image is saved. Default is None.
+        close_plot (bool):
+            If True, close the figure after saving/showing.
+            Default is False.
+
+    Returns:
+        fig (matplotlib Figure):
+            The figure object.
+        ax (matplotlib Axes):
+            The axis object.
+        total_similarity_sum (float):
+            The sum of all the similarity_sums values (sum of all bins).
+    """
+    # Extract coordinates (x, y) and their sums into arrays
+    coords = np.array(list(similarity_sums.keys()))
+    sums = np.array(list(similarity_sums.values()))
+
+    # Calculate the total sum of all bins
+    total_similarity_sum = float(np.sum(sums))
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    # Scatter the points with sums as colors
+    sc = ax.scatter(coords[:, 0], coords[:, 1], c=sums, cmap="viridis")
+    cbar = plt.colorbar(sc, ax=ax, label="Cosine Similarity Sum")
+
+    ax.set_xlabel("X Coordinate")
+    ax.set_ylabel("Y Coordinate")
+    ax.set_title(title)
+
+    # If an output path is provided, save the figure
+    if output_path is not None:
+        # Make sure the directory exists
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        plt.savefig(output_path)
+        print(f"Plot saved to: {output_path}")
+
+    # Optionally close the figure
+    if close_plot:
+        plt.close(fig)
+
+    return fig, ax, total_similarity_sum
 
 
 # -------------- Usage Example --------------
+# %%
 if __name__ == "__main__":
-    # This is your data loading function
-    from controllers.bek_controller.visualizations.analysis_utils import load_hmaps
+    from controllers.bek_controller.visualizations.analysis_utils import *
 
-    data_path = "controllers/bek_controller/IJCNN/3D_3L_250/inside_3/"
+    data_path = "controllers/bek_controller/IJCNN/3D_3L_250/upright/"
     hmap_x, hmap_y, hmap_z = load_hmaps(data_path)
 
+    fig, ax, hb, binned_data = create_hexbin(
+        cell_index=0,
+        hmap_x=hmap_x,
+        hmap_y=hmap_y,
+        hmap_z=hmap_z,
+        normalize=True,
+        filter_bottom_ratio=0.2,
+        analyze=True,
+        close_plot=True,
+    )
     # %%
-    # B) Stacking + Cosine
-    # Let's assume you have multiple cells:
-    all_binned_data = []
-    for c_idx in [0, 1, 2]:  # just an example
-        _, _, _, bd = create_hexbin(
-            c_idx, hmap_x, hmap_y, hmap_z, normalize=True, analyze=True
-        )
-        all_binned_data.append(bd)
 
-    # 1) Stack them
-    stacked_dict = stack_binned_data(all_binned_data)
+    # Perform cosine similarity analysis
+    similarity_sums = analyze_cosine_similarity(
+        hmap_x,
+        hmap_y,
+        hmap_z,
+        gridsize=50,
+        filter_bottom_ratio=0.1,
+        distance_threshold=2.0,
+    )
 
-    # 2) Compute cos-sums
-    distance_thresh = 1.0
-    cos_sums = compute_cosine_sums(stacked_dict, distance_threshold=distance_thresh)
-
-    # Print out the results
-    for coord, sum_val in cos_sums.items():
-        print(f"Coordinate {coord} -> Sum of cos sims: {sum_val:.4f}")
-
-    # Plot your original place cell, if desired
-    plot_place_cell(cell_index, hmap_x, hmap_y, hmap_z, show_plot=True)
+    # %%
+    # Plot cosine similarity heatmap for a specific cell
+    fig, ax, total_sum = plot_similarity_sums(
+        similarity_sums,
+        title="My Cosine Similarity Plot",
+        output_path=data_path,
+        close_plot=True,
+    )
+    fig.show()

@@ -193,7 +193,7 @@ if __name__ == "__main__":
     from controllers.bek_controller.visualizations.analysis_utils import *
     from controllers.bek_controller.visualizations.path_view import plot_trajectory
 
-    data_path = "controllers/bek_controller/IJCNN/2D_250/inside_3/"
+    data_path = "controllers/bek_controller/IJCNN/2D_250/upright/"
     hmap_x, hmap_y, hmap_z = load_hmaps(data_path)
     # %%
     plot_trajectory(
