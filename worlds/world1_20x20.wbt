@@ -8,7 +8,7 @@ WorldInfo {
 }
 Viewpoint {
   orientation 1 0 0 4.71238898038469
-  position 6.176886881231866e-05 50.90743473048083 1.4772974073977602e-07
+  position 6.176886881231866e-05 39.43190355634028 1.4772974284772723e-07
   near 0.1
   follow "Create"
   followType "None"
@@ -38,6 +38,29 @@ Transform {
       }
     }
   ]
+}
+Wall {
+  translation 0 0 6
+  rotation 0 1 0 1.5708
+  name "wall2"
+  size 8 1 0.5
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 1.2
+    }
+  }
+}
+Wall {
+  translation -6 0 0
+  name "wall3"
+  size 8 1 0.5
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 1.2
+    }
+  }
 }
 DEF agent Create {
   hidden position_0_0 45249.17206706551
