@@ -158,10 +158,10 @@ class PlaceCellLayer:
         self.activation_update = tf.zeros_like(self.activation_update, dtype=tf.float32)
         self.place_cell_trace = None
 
-    def preplay(self, direction, num_steps=1):
+    def preplay(self, direction, num_steps_preplay=1):
         """Simulate preplay of place cell activations using recurrent weights."""
         place_cell_activations = tf.identity(self.place_cell_activations)
-        for _ in range(num_steps):
+        for _ in range(num_steps_preplay):
             previous_activations = tf.identity(place_cell_activations)
             place_cell_activations = tf.tanh(
                 tf.nn.relu(
