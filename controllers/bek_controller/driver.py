@@ -99,14 +99,14 @@ class Driver(Supervisor):
         self.done = False
 
         # Model parameters
-        self.num_small_place_cells = 2000  # world0_20x20
+        self.num_small_place_cells = 1000  # world0_20x20
         self.num_large_place_cells = 200  # world0_20x20
         self.num_reward_cells = 1
         self.n_hd = 8
         self.timestep = 32 * 3
         self.tau_w = 10  # time constant for the window function
         if self.mode == RobotMode.EXPLOIT:
-            self.tau_w = 10
+            self.tau_w = 12
         self.enable_multiscale = enable_multiscale
 
         # Robot parameters
@@ -118,8 +118,8 @@ class Driver(Supervisor):
         self.run_time_minutes = run_time_hours * 60
         self.step_count = 0
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
-        self.goal_r = {"explore": 0.3, "exploit": 0.5}
-        self.goal_location = [-7, 7]
+        self.goal_r = {"explore": 0.3, "exploit": 1.2}
+        self.goal_location = [-6.5, 6.5]
         
         self.hmap_x = np.zeros(self.num_steps)  # x-coordinates
         self.hmap_y = np.zeros(self.num_steps)  # y-coordinate
@@ -348,7 +348,7 @@ class Driver(Supervisor):
                 num_reward_cells=num_reward_cells,
                 input_dim=num_small_place_cells,
                 num_replay=num_replay,
-                learning_rate=0.3,
+                learning_rate=0.5,
             )
             print("Initialized new Small Reward Cell Network.")
 
@@ -364,7 +364,7 @@ class Driver(Supervisor):
                     num_reward_cells=num_reward_cells,
                     input_dim=num_large_place_cells,
                     num_replay=num_replay,
-                    learning_rate=0.05,
+                    learning_rate=0.1,
                 )
                 print("Initialized new Large Reward Cell Network.")
 
@@ -510,8 +510,8 @@ class Driver(Supervisor):
         combined_pot_rew, alpha = self._compute_potential_rewards()
 
         # 3. Final directional reward estimates
-        self.directional_reward_estimates = gaussian_filter1d(combined_pot_rew, sigma=3)
-        print()
+        self.directional_reward_estimates = gaussian_filter1d(combined_pot_rew, sigma=4)
+        # self.directional_reward_estimates = combined_pot_rew
 
         # 4. Validate reward estimates and decide whether to explore
         if not self._validate_and_maybe_explore():
@@ -568,6 +568,41 @@ class Driver(Supervisor):
             self.directional_reward_estimates_small = np.copy(combined_pot_rew)
             self.directional_reward_estimates_large = np.copy(combined_pot_rew)
         return combined_pot_rew, alpha
+    
+    # Single scale large
+    # def _compute_potential_rewards(self):
+    #     """
+    #     Depending on whether multiscale is enabled, compute a single-scale or 
+    #     combined multi-scale reward map. Returns (combined_pot_rew, alpha).
+    #     If single-scale, alpha is returned as 1.0 (unused).
+    #     """
+
+    #     if self.enable_multiscale:
+    #         # ===============================
+    #         # ONLY use the LARGE scale here
+    #         # ===============================
+    #         pot_rew_large = self._preplay_rewards(self.pcn_large, self.rcn_large)
+    #         pot_rew_large /= (np.max(pot_rew_large) + 1e-6)
+
+    #         # Return large-scale as combined
+    #         combined_pot_rew = pot_rew_large
+    #         alpha = 1.0  # or you could keep it as 0.0 if you want, but 1.0 is fine
+
+    #         # For internal consistency, set directional_reward_estimates_small/large
+    #         # so that we don't break the rest of the code.
+    #         self.directional_reward_estimates_small = np.copy(pot_rew_large)
+    #         self.directional_reward_estimates_large = np.copy(pot_rew_large)
+
+    #     else:
+    #         # ===============================
+    #         # SINGLE-SCALE = small scale only
+    #         # ===============================
+    #         combined_pot_rew = self._calculate_single_scale_rewards()
+    #         alpha = 1.0
+    #         self.directional_reward_estimates_small = np.copy(combined_pot_rew)
+    #         self.directional_reward_estimates_large = np.copy(combined_pot_rew)
+
+    #     return combined_pot_rew, alpha
 
     def _validate_and_maybe_explore(self):
         """
@@ -685,6 +720,12 @@ class Driver(Supervisor):
         grad_large = np.sum(np.abs(np.diff(pot_rew_large, append=pot_rew_large[0])))
 
         alpha = grad_small / (grad_small + grad_large + 1e-6)
+
+        alpha = grad_small / (grad_small + grad_large + 1e-6)
+        bias = 0.5  # Small bias towards the small scale
+        alpha = min(max(alpha + bias, 0.0), 1.0)  # Ensure alpha stays in [0, 1]
+
+
         combined = alpha * pot_rew_small + (1 - alpha) * pot_rew_large
         return combined, alpha
 
