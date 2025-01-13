@@ -1,0 +1,13 @@
+parent_dir,end_dir,full_path,total_clusters,non_zero_cells,cells_with_multiple_clusters,avg_clusters_per_non_zero_cell,avg_clusters_per_multi_cluster_cell,cosine_sum
+2D_250,inside_medium,/mnt/d/repos/AlabiHippocampalModel/controllers/bek_controller/IJCNN/2D_250/inside_medium/,320,164,83,1.951219512195122,3.855421686746988,148623.13732487964
+2D_250,inside_shallow,/mnt/d/repos/AlabiHippocampalModel/controllers/bek_controller/IJCNN/2D_250/inside_shallow/,329,160,90,2.05625,3.6555555555555554,173420.61020492317
+2D_250,inside_steep,/mnt/d/repos/AlabiHippocampalModel/controllers/bek_controller/IJCNN/2D_250/inside_steep/,289,155,76,1.864516129032258,3.8026315789473686,135123.26877663677
+2D_250,upright,/mnt/d/repos/AlabiHippocampalModel/controllers/bek_controller/IJCNN/2D_250/upright/,345,163,90,2.1165644171779143,3.8333333333333335,165150.4858061044
+3D_2L_250_1,inside_medium,/mnt/d/repos/AlabiHippocampalModel/controllers/bek_controller/IJCNN/3D_2L_250_1/inside_medium/,270,149,68,1.8120805369127517,3.9705882352941178,94016.57692176892
+3D_2L_250_1,inside_shallow,/mnt/d/repos/AlabiHippocampalModel/controllers/bek_controller/IJCNN/3D_2L_250_1/inside_shallow/,329,168,84,1.9583333333333333,3.9166666666666665,112392.82504092061
+3D_2L_250_1,inside_steep,/mnt/d/repos/AlabiHippocampalModel/controllers/bek_controller/IJCNN/3D_2L_250_1/inside_steep/,196,164,24,1.1951219512195121,8.166666666666666,27650.98652617349
+3D_2L_250_1,upright,/mnt/d/repos/AlabiHippocampalModel/controllers/bek_controller/IJCNN/3D_2L_250_1/upright/,314,154,84,2.038961038961039,3.738095238095238,118009.29950173618
+3D_3L_250,inside_medium,/mnt/d/repos/AlabiHippocampalModel/controllers/bek_controller/IJCNN/3D_3L_250/inside_medium/,219,161,42,1.360248447204969,5.214285714285714,50940.39855748543
+3D_3L_250,inside_shallow,/mnt/d/repos/AlabiHippocampalModel/controllers/bek_controller/IJCNN/3D_3L_250/inside_shallow/,262,151,61,1.7350993377483444,4.295081967213115,95865.80734617665
+3D_3L_250,inside_steep,/mnt/d/repos/AlabiHippocampalModel/controllers/bek_controller/IJCNN/3D_3L_250/inside_steep/,182,164,17,1.1097560975609757,10.705882352941176,11214.939649588556
+3D_3L_250,upright,/mnt/d/repos/AlabiHippocampalModel/controllers/bek_controller/IJCNN/3D_3L_250/upright/,331,156,89,2.121794871794872,3.7191011235955056,116563.30862553994

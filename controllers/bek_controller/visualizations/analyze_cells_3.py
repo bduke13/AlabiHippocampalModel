@@ -59,7 +59,6 @@ for path in df["full_path"]:
                 "non_zero_cells": None,
                 "cells_with_multiple_clusters": None,
                 "avg_clusters_per_non_zero_cell": None,
-                "avg_clusters_per_multi_cluster_cell": None,
             }
         )
 
@@ -113,18 +112,19 @@ df["cosine_sum"] = cosine_sums_list
 print("\nUpdated DataFrame with Cosine Sums:")
 print(df)
 
-
 # %%
 # Save the updated DataFrame to a CSV file
-output_csv_path = os.path.join(root_path, "model_metrics_analysis_results.csv")
-df.to_csv(output_csv_path, index=False)
+df.to_csv("model_metrics_analysis_results.csv", index=False)
 print(f"\nResults saved to {output_csv_path}")
 
 # %%
-# Plot the DBSCAN metrics by environment, as before
+# Filter for the models right before plotting
+allowed_models = ["2D_250", "3D_2L_250_1", "3D_3L_250"]
+df = df[df["parent_dir"].isin(allowed_models)]
+# Plot the DBSCAN metrics and cosine similarity on one graph
 order = ["upright", "inside_shallow", "inside_medium", "inside_steep"]
 
-fig, axes = plt.subplots(2, 3, figsize=(12, 8))
+fig, axes = plt.subplots(2, 3, figsize=(18, 10))
 fig.suptitle("Model Metrics Comparison by Environment Type", fontsize=16)
 axes = axes.flatten()
 
@@ -171,29 +171,20 @@ sns.barplot(
 axes[3].set_title("Average Clusters Per Non-Zero Cell")
 axes[3].tick_params(axis="x", rotation=45)
 
-# Plot average clusters per multi-cluster cell
+# Plot cosine sum
 sns.barplot(
     data=df,
     x="end_dir",
-    y="avg_clusters_per_multi_cluster_cell",
+    y="cosine_sum",
     hue="parent_dir",
     ax=axes[4],
     order=order,
 )
-axes[4].set_title("Average Clusters Per Multi-Cluster Cell")
+axes[4].set_title("Total Far-Distance Cosine Sum")
 axes[4].tick_params(axis="x", rotation=45)
 
 # Hide the 6th subplot
 axes[5].axis("off")
 
 plt.tight_layout(rect=[0, 0, 1, 0.95])
-plt.show()
-
-# %%
-# Finally, create a NEW bar plot comparing the SUM of COSINE VALUES
-fig, ax = plt.subplots(figsize=(8, 6))
-sns.barplot(data=df, x="end_dir", y="cosine_sum", hue="parent_dir", order=order, ax=ax)
-ax.set_title("Total Far-Distance Cosine Sum by Environment & Parent")
-ax.tick_params(axis="x", rotation=45)
-plt.tight_layout()
 plt.show()
