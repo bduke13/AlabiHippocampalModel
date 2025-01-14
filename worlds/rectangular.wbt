@@ -1,0 +1,266 @@
+#VRML_SIM R2021a utf8
+WorldInfo {
+  title "Rectangular Floor Space with Splitted Long Walls"
+  coordinateSystem "NUE"
+}
+Viewpoint {
+  orientation 1 -1.206729411764018e-18 -2.2737457958622347e-19 4.682388980384691
+  position 5.508718464253571e-15 18.435761916582717 -1.9188569396529127e-16
+  near 0.1
+  followType "None"
+}
+TexturedBackground {
+}
+RectangleArena {
+  floorSize 5 10
+  floorAppearance NULL
+  wallAppearance NULL
+}
+Wall {
+  translation 0 0 -5
+  name "outer_wall_1"
+  size 5 1.8 0.2
+  appearance PBRAppearance {
+    baseColor 1 0 0
+    roughness 0.3
+    metalness 0.5
+  }
+}
+Wall {
+  translation 0 0 5
+  name "outer_wall_2"
+  size 5 1.8 0.2
+  appearance PBRAppearance {
+    baseColor 0 1 0
+    roughness 0.3
+    metalness 0.5
+  }
+}
+Wall {
+  translation -2.5 0 2.5
+  rotation 0 1 0 1.5708
+  name "outer_wall_3_top"
+  size 5 1.8 0.2
+  appearance PBRAppearance {
+    baseColor 0 0 1
+    roughness 0.3
+    metalness 0.5
+  }
+}
+Wall {
+  translation -2.5 0 -2.5
+  rotation 0 1 0 1.5708
+  name "outer_wall_3_bottom"
+  size 5 1.8 0.2
+  appearance PBRAppearance {
+    baseColor 1 1 0
+    roughness 0.3
+    metalness 0.5
+  }
+}
+Wall {
+  translation 2.5 0 2.5
+  rotation 0 1 0 1.5708
+  name "outer_wall_4_top"
+  size 5 1.8 0.2
+  appearance PBRAppearance {
+    baseColor 0 1 1
+    roughness 0.3
+    metalness 0.5
+  }
+}
+Wall {
+  translation 2.5 0 -2.5
+  rotation 0 1 0 1.5708
+  name "outer_wall_4_bottom"
+  size 5 1.8 0.2
+  appearance PBRAppearance {
+    baseColor 1 0 1
+    roughness 0.3
+    metalness 0.5
+  }
+}
+Wall {
+  translation -1.5 0 2
+  name "inner_vertical_wall_1_top"
+  size 0.2 1.8 4
+  appearance PBRAppearance {
+    baseColor 1 0.333333 0.498039
+    roughness 0.3
+    metalness 0.3
+  }
+}
+Wall {
+  translation -1.5 0 -2
+  name "inner_vertical_wall_1_bottom"
+  size 0.2 1.8 4
+  appearance PBRAppearance {
+    baseColor 0.3 0.3 0.3
+    roughness 0.3
+    metalness 0.3
+  }
+}
+Wall {
+  translation -0.75 0 2
+  name "inner_vertical_wall_2_top"
+  size 0.2 1.8 4
+  appearance PBRAppearance {
+    baseColor 0.2 0.8 0.2
+    roughness 0.3
+    metalness 0.3
+  }
+}
+Wall {
+  translation -0.75 0 -2
+  name "inner_vertical_wall_2_bottom"
+  size 0.2 1.8 4
+  appearance PBRAppearance {
+    baseColor 0.2 0.6 0.2
+    roughness 0.3
+    metalness 0.3
+  }
+}
+Wall {
+  translation 1.5 0 2
+  name "inner_vertical_wall_3_top"
+  size 0.2 1.8 4
+  appearance PBRAppearance {
+    baseColor 0.8 0.2 0.2
+    roughness 0.3
+    metalness 0.3
+  }
+}
+Wall {
+  translation 1.5 0 -2
+  name "inner_vertical_wall_3_bottom"
+  size 0.2 1.8 4
+  appearance PBRAppearance {
+    baseColor 0.6 0.2 0.2
+    roughness 0.3
+    metalness 0.3
+  }
+}
+Wall {
+  translation 0.75 0 2
+  name "inner_vertical_wall_4_top"
+  size 0.2 1.8 4
+  appearance PBRAppearance {
+    baseColor 0.2 0.2 0.8
+    roughness 0.3
+    metalness 0.3
+  }
+}
+Wall {
+  translation 0.75 0 -2
+  name "inner_vertical_wall_4_bottom"
+  size 0.2 1.8 4
+  appearance PBRAppearance {
+    baseColor 0.2 0.2 0.6
+    roughness 0.3
+    metalness 0.3
+  }
+}
+Wall {
+  translation 1.13 0 3.9
+  name "inner_horizontal_wall_1"
+  size 0.55 1.8 0.2
+  appearance PBRAppearance {
+    baseColor 1 0.5 0
+    roughness 0.3
+    metalness 0.3
+  }
+}
+Wall {
+  translation -1.14 0 3.9
+  name "inner_horizontal_wall_2"
+  size 0.55 1.8 0.2
+  appearance PBRAppearance {
+    baseColor 0 0.5 1
+    roughness 0.3
+    metalness 0.3
+  }
+}
+Wall {
+  translation -1.14 0 -3.9
+  name "inner_horizontal_wall_3"
+  size 0.55 1.8 0.2
+  appearance PBRAppearance {
+    baseColor 0.5 0 1
+    roughness 0.3
+    metalness 0.3
+  }
+}
+Wall {
+  translation 1.13 0 -3.9
+  name "inner_horizontal_wall_4"
+  size 0.55 1.8 0.2
+  appearance PBRAppearance {
+    baseColor 1 1 0.5
+    roughness 0.3
+    metalness 0.3
+  }
+}
+DEF agent Create {
+  hidden position_0_0 45249.17206885208
+  hidden position_0_1 41597.76782775617
+  hidden rotation_6 -0.9999999999999999 0 0 1.7866486057427359e-06
+  hidden rotation_7 1 0 0 2.32851290529037
+  hidden translation_11 -2.345017957594564e-09 -3.1376148903194956e-06 4.360122929369936e-09
+  hidden rotation_11 -3.202882483397619e-13 1 -2.991344446943547e-13 0.726932000000005
+  hidden translation_12 -6.965349474974403e-06 -8.740904660242688e-06 -7.309796086651943e-06
+  hidden rotation_12 -7.129529783439409e-11 1 -1.4765219255597515e-10 0.7269319989228826
+  hidden translation_13 -3.1769309627449616e-07 -6.2142113273974675e-06 6.965599044228554e-07
+  hidden rotation_13 1.0737594881207881e-07 0.9999999999999902 8.831825317408958e-08 -0.7269304932988185
+  translation 0.4016696790071013 0.044205095898897394 4.673464315498493
+  rotation 4.784883772995307e-05 0.9999996177653768 -0.0008730289737838952 -2.2756741534314155
+  controller "bek_controller"
+  supervisor TRUE
+  bodySlot [
+    Solid {
+      translation 0 0.04 -0.08
+      children [
+        Display {
+          width 100
+          height 100
+        }
+        Compass {
+        }
+        DEF range-finder RangeFinder {
+          fieldOfView 6.28
+          width 720
+          height 1
+          spherical TRUE
+          maxRange 10
+        }
+        Camera {
+          translation 0 0.3 0
+          name "frontCamera"
+          fieldOfView 6.28319
+          width 360
+          height 180
+          spherical TRUE
+          recognition Recognition {
+          }
+        }
+        Shape {
+          appearance PBRAppearance {
+          }
+          geometry Cylinder {
+            height 0.04
+            radius 0.05
+          }
+        }
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.8 0.8 0.8
+            roughness 0.3
+            metalness 0.5
+          }
+          geometry Sphere {
+            radius 0.03
+          }
+        }
+      ]
+    }
+  ]
+}
