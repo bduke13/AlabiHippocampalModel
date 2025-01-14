@@ -68,7 +68,7 @@ class Driver(Supervisor):
         self,
         mode=RobotMode.PLOTTING,
         randomize_start_loc: bool = True,
-        run_time_hours: int = 1,
+        run_time_hours: float = 1.0,
         start_loc: Optional[List[int]] = None,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
@@ -584,63 +584,20 @@ class Driver(Supervisor):
     ########################################### SENSE ###########################################
 
     def sense(self):
-        """Updates the robot's perception of its environment.
-
-        Updates orientation, distance to obstacles (boundaries), head direction cell
-        activations, and collision detection. The method performs the following steps:
-        1. Captures LiDAR data for obstacle distances
-        2. Gets robot heading and aligns LiDAR data
-        3. Computes head direction vector and cell activations
-        4. Updates collision status from bumper sensors
-        5. Advances to next timestep
-
-        Updates the following instance variables:
-            boundaries: LiDAR range data (720 points)
-            current_heading_deg: Current heading in degrees
-            hd_activations: Head direction cell activations
-            collided: Collision status from bumpers
-        """
-
-        # 1. Capture distance data from the range finder (LiDAR), which provides 720 points around the robot.
-        # Shape: (720,)
+        """Updates the robot's perception of its environment."""
+        # 1. Capture the distance data from the LiDAR
         self.boundaries = self.range_finder.getRangeImage()
 
-        # 2. Get the robot's current heading in degrees using the compass and convert it to an integer.
-        # Shape: scalar (int)
+        # 2. Get the current heading angle in degrees and radians
         self.current_heading_deg = int(
             self.get_bearing_in_degrees(self.compass.getValues())
         )
-
-        # 3. Roll the LiDAR data based on the current heading to align the 'front' with index 0.
-        # Shape: (720,) - LiDAR data remains 720 points, but shifted according to the robot's current heading.
-        self.boundaries = np.roll(self.boundaries, 2 * self.current_heading_deg)
-
-        # 4. Convert the current heading from degrees to radians.
-        # Shape: scalar (float) - Current heading of the robot in radians.
         current_heading_rad = np.deg2rad(self.current_heading_deg)
 
-        # 5. Define the anchor direction (theta_0) as 0 radians for now, meaning no offset is applied.
-        theta_0 = 0
+        # 3. Align the LiDAR data by rolling (shifting) it horizontally
+        self.boundaries = np.roll(self.boundaries, 2 * self.current_heading_deg)
 
-        # 6. Calculate the current heading vector from the heading in radians.
-        # Shape: (2,) - A 2D vector representing the robot's current heading direction: [cos(theta), sin(theta)].
-        v_in = np.array([np.cos(current_heading_rad), np.sin(current_heading_rad)])
-
-        # 7. Compute the activations of the head direction cells based on the current heading vector (v_in).
-        # Shape: (self.num_cells,) - A 1D array where each element represents the activation of a head direction cell.
-        self.hd_activations = self.head_direction_layer.get_hd_activation(
-            theta_0=theta_0, v_in=v_in
-        )
-
-        # 8. Update the collision status using the left bumper sensor.
-        # Shape: scalar (int) - 1 if collision detected on the left bumper, 0 otherwise.
-        self.collided.scatter_nd_update([[0]], [int(self.left_bumper.getValue())])
-
-        # 9. Update the collision status using the right bumper sensor.
-        # Shape: scalar (int) - 1 if collision detected on the right bumper, 0 otherwise.
-        self.collided.scatter_nd_update([[1]], [int(self.right_bumper.getValue())])
-
-        # Capture the image from the front camera
+        # 4. Capture the front camera image
         camera_image = self.front_camera.getImage()
         if camera_image is not None:
             # Convert the Webots camera image to a NumPy array (BGRA format)
@@ -658,18 +615,36 @@ class Driver(Supervisor):
                 rgb_image, (self.camera_resize_width, self.camera_resize_height)
             )
 
-            # Store the resized image in hmap_images
+            # Shift the image horizontally to simulate rotation alignment
+            # Calculate the number of pixels to roll based on the heading angle
+            pixels_to_roll = int(
+                (self.current_heading_deg / 360.0) * self.camera_resize_width
+            )
+            wrapped_image = np.roll(resized_image, pixels_to_roll, axis=1)
+
+            # Store the horizontally wrapped image in `hmap_images`
             if self.step_count < self.num_steps:
-                self.hmap_images[self.step_count] = resized_image
+                self.hmap_images[self.step_count] = wrapped_image
 
-            # Display the resized image using Matplotlib
-            # plt.imshow(resized_image)
-            # plt.title("Camera Image (Resized)")
+            # Optionally display the wrapped image
+            # plt.imshow(wrapped_image)
+            # plt.title(f"Wrapped Camera Image (Heading: {self.current_heading_deg}°)")
             # plt.axis("off")
-            # plt.show(block=False)  # Non-blocking display
-            # plt.pause(0.001)  # Allow time for the plot to update
+            # plt.show(block=False)
+            # plt.pause(0.001)
 
-        # 11. Proceed to the next timestep in the robot's control loop.
+        # 5. Compute head direction cell activations (unchanged)
+        theta_0 = 0
+        v_in = np.array([np.cos(current_heading_rad), np.sin(current_heading_rad)])
+        self.hd_activations = self.head_direction_layer.get_hd_activation(
+            theta_0=theta_0, v_in=v_in
+        )
+
+        # 6. Update collision status from bumper sensors (unchanged)
+        self.collided.scatter_nd_update([[0]], [int(self.left_bumper.getValue())])
+        self.collided.scatter_nd_update([[1]], [int(self.right_bumper.getValue())])
+
+        # Advance the simulation timestep
         self.step(self.timestep)
 
     def get_bearing_in_degrees(self, north: List[float]) -> float:

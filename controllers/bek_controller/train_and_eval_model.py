@@ -12,10 +12,10 @@ from tensorflow import keras
 from keras.callbacks import EarlyStopping
 import tensorflow as tf
 from sklearn.model_selection import train_test_split
-from models.sparse_cnn_v2 import create_models
+from controllers.bek_controller.models.sparse_cnn_v1 import create_models
 
 # Load the preprocessed images
-resized_images = np.load("preprocessed_images.npy")
+resized_images = np.load("controllers/bek_controller/hmap_images.npy")
 print("Processed image shape:", resized_images.shape)
 
 # Enable interactive mode
@@ -35,60 +35,25 @@ for idx, i in enumerate(random_indices):  # Show 5 random images
 # Split the data into training and validation sets
 X_train, X_val = train_test_split(resized_images, test_size=0.1, random_state=42)
 
-early_stopping = EarlyStopping(
-    monitor="val_loss", patience=5, restore_best_weights=True
-)
+X_train = X_train / 255.0
+X_val = X_val / 255.0
 
-BATCH_SIZE = 64
-EPOCHS = 20
+
+BATCH_SIZE = 4
+EPOCHS = 30
 
 # %%
 
 # Train non-sparse model
 print("\nTraining Non-Sparse Model...")
-encoder_std, decoder_std, autoencoder_std = create_models(
-    input_shape=(96, 96, 3), use_sparse_loss=False
-)
-autoencoder_std.compile(optimizer="adam", loss="mse")
-history = autoencoder_std.fit(
+encoder, decoder, autoencoder = create_models()
+autoencoder.compile(optimizer="adam", loss="mse")
+history = autoencoder.fit(
     X_train,
     X_train,  # Input and target are the same for autoencoders
     batch_size=BATCH_SIZE,
     epochs=EPOCHS,
     validation_data=(X_val, X_val),
-    callbacks=[early_stopping],
-    shuffle=True,
-)
-
-# Plot training history
-plt.figure(figsize=(10, 6))
-plt.plot(history.history["loss"], label="Training Loss")
-plt.plot(history.history["val_loss"], label="Validation Loss")
-plt.title("Model Loss During Training")
-plt.xlabel("Epoch")
-plt.ylabel("Loss")
-plt.legend()
-plt.grid(True)
-plt.show()
-# Print final loss values
-print(f"\nFinal training loss: {history.history['loss'][-1]:.4f}")
-print(f"Final validation loss: {history.history['val_loss'][-1]:.4f}")
-
-
-# %%
-# Train sparse model
-print("\nTraining Sparse Model...")
-encoder_sparse, decoder_sparse, autoencoder_sparse = create_models(
-    input_shape=(96, 96, 3), use_sparse_loss=True
-)
-autoencoder_sparse.compile(optimizer="adam", loss="mse")
-history = autoencoder_sparse.fit(
-    X_train,
-    X_train,  # Input and target are the same for autoencoders
-    batch_size=BATCH_SIZE,
-    epochs=EPOCHS,
-    validation_data=(X_val, X_val),
-    callbacks=[early_stopping],
     shuffle=True,
 )
 
@@ -108,26 +73,17 @@ print(f"Final validation loss: {history.history['val_loss'][-1]:.4f}")
 
 # %%
 # Save the encoder and decoder separately
-encoder_std.save("encoder_model_std.keras")
-decoder_std.save("decoder_model_std.keras")
-
-encoder_sparse.save("encoder_model_sparse.keras")
-decoder_sparse.save("decoder_model_sparse.keras")
-
+encoder.save("encoder_model_std.keras")
+decoder.save("decoder_model_std.keras")
 
 # %%
 # Load the encoder and decoder models separately
 encoder = tf.keras.models.load_model("encoder_model_std.keras")
 decoder = tf.keras.models.load_model("decoder_model_std.keras")
 
-# %%
-# Load the encoder and decoder models separately
-encoder = tf.keras.models.load_model("encoder_model_sparse.keras")
-decoder = tf.keras.models.load_model("decoder_model_sparse.keras")
-
 
 # %%
-# Get random indices for visualization
+# Get random indices fcr visualization
 n = 10  # Number of images to display
 random_indices = np.random.choice(len(X_val), n, replace=False)
 
@@ -170,6 +126,74 @@ for i in range(n):
 
 plt.tight_layout()
 plt.show()
+
+
+# %%
+import numpy as np
+import matplotlib.pyplot as plt
+import umap
+import pickle
+from sklearn.preprocessing import StandardScaler
+from tensorflow import keras
+
+
+# Load the preprocessed images and colors
+def load_data():
+    images = np.load("controllers/bek_controller/hmap_images.npy")
+    with open("controllers/bek_controller/point_colors.pkl", "rb") as f:
+        point_colors = np.array(pickle.load(f))
+    return images, point_colors
+
+
+# Normalize images for model input
+def normalize_images(images):
+    return images / 255.0
+
+
+# Predict embeddings and reduce dimensions using UMAP
+def predict_and_reduce(encoder, images):
+    embeddings = encoder.predict(images)
+    scaler = StandardScaler()
+    embeddings_scaled = scaler.fit_transform(embeddings)
+
+    umap_reducer = umap.UMAP(
+        n_neighbors=15, min_dist=0.1, n_components=2, random_state=42
+    )
+    umap_embeddings = umap_reducer.fit_transform(embeddings_scaled)
+    return umap_embeddings
+
+
+# Plot UMAP embeddings with colors
+def plot_colored_umap(umap_embeddings, point_colors):
+    plt.figure(figsize=(10, 10))
+    plt.scatter(
+        umap_embeddings[:, 0], umap_embeddings[:, 1], c=point_colors, s=5, alpha=0.7
+    )
+    plt.title("Colored UMAP Embeddings")
+    plt.xlabel("UMAP 1")
+    plt.ylabel("UMAP 2")
+    plt.colorbar(label="Color Gradient")
+    plt.grid(True)
+    plt.show()
+
+
+# Load the preprocessed data
+images, point_colors = load_data()
+
+# Normalize images
+normalized_images = normalize_images(images)
+
+# Load the encoder model
+encoder = keras.models.load_model("encoder_model_std.keras")
+
+# Predict embeddings and reduce dimensions
+umap_embeddings = predict_and_reduce(encoder, normalized_images)
+
+# Plot the UMAP embeddings with colors
+plot_colored_umap(umap_embeddings, point_colors)
+
+
+# ------------------------------------------------------------------------------------------
 
 # %%
 # Generate embeddings for all images

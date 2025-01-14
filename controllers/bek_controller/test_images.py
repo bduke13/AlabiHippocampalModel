@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 
 # %%
 # Load the saved images file
-images = np.load("recorded_images.npy")
+images = np.load("controllers/bek_controller/hmap_images.npy")
 
 # %%
 # Display each channel separately
