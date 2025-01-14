@@ -64,9 +64,9 @@ def plot_trajectory(
 
 if __name__ == "__main__":
     # Load hmap data
-    with open("hmap_x.pkl", "rb") as f:
+    with open("controllers/bek_controller/hmap_x.pkl", "rb") as f:
         hmap_x = np.array(pickle.load(f))
-    with open("hmap_y.pkl", "rb") as f:
+    with open("controllers/bek_controller/hmap_y.pkl", "rb") as f:
         hmap_y = np.array(pickle.load(f))
 
     # Plot the trajectory

@@ -23,7 +23,7 @@ class PlaceCellLayer:
         timestep: int = 32 * 3,
         n_hd: int = 8,
         enable_ojas: bool = False,
-        enable_hebb: bool = False,
+        enable_stdp: bool = False,
     ):
         """Initialize the Place Cell Layer.
 
@@ -33,7 +33,7 @@ class PlaceCellLayer:
             timestep: Time step for simulation/learning updates in milliseconds.
             n_hd: Number of head direction cells.
             enable_ojas: Enable weight updates via competition.
-            enable_hebb: Enable tripartite synapse weight updates.
+            enable_stdp: Enable tripartite synapse weight updates via Spike-Timing-Dependent Plasticity.
         """
         rng = default_rng()
 
@@ -50,7 +50,7 @@ class PlaceCellLayer:
         # Initialized with a 20% probability of connection
         # Shape: (num_pc, num_bvc)
         self.w_in = tf.Variable(
-            rng.binomial(n=1, p=0.2, size=(num_pc, self.num_bvc)), dtype=tf.float32
+            rng.binomial(n=1, p=0.25, size=(num_pc, self.num_bvc)), dtype=tf.float32
         )
 
         # Recurrent weight matrix for head direction and place cell interactions
@@ -111,10 +111,10 @@ class PlaceCellLayer:
         self.enable_ojas = enable_ojas
 
         # Enables/disables updating weights in the tripartite synapses to track adjacencies between cells
-        self.enable_hebb = enable_hebb
+        self.enable_stdp = enable_stdp
 
     def get_place_cell_activations(
-        self, input_data, hd_activations, collided: bool = False
+        self, distances, hd_activations, collided: bool = False
     ):
         """Compute place cell activations from BVC and head direction inputs.
 
@@ -127,9 +127,7 @@ class PlaceCellLayer:
         self.prev_place_cell_activations = tf.identity(self.place_cell_activations)
 
         # Compute BVC activations based on the input distances and angles
-        self.bvc_activations = self.bvc_layer.get_bvc_activation(
-            input_data[0], input_data[1]
-        )
+        self.bvc_activations = self.bvc_layer.get_bvc_activation(distances)
 
         # Compute the input to place cells by taking the dot product of the input weights and BVC activations
         # Afferent excitation term: ∑_j W_ij^{pb} v_j^b (Equation 3.2a)
@@ -160,7 +158,7 @@ class PlaceCellLayer:
         self.place_cell_activations = tf.tanh(tf.nn.relu(self.activation_update))
 
         # Update the eligibility trace and weights
-        if self.enable_hebb and np.any(self.place_cell_activations) and not collided:
+        if self.enable_stdp and np.any(self.place_cell_activations) and not collided:
             # Update the eligibility trace for place cells and head direction cells
             # Eligibility traces are used for temporal difference learning and sequence encoding
             if self.place_cell_trace is None:

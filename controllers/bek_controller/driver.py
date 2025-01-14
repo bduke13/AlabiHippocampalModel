@@ -3,8 +3,6 @@ import tensorflow as tf
 from numpy.random import default_rng
 import matplotlib.pyplot as plt
 from matplotlib.cm import get_cmap
-import cv2
-from tensorflow.python.eager.context import num_gpus
 from astropy.stats import circmean, circvar
 import pickle
 import os
@@ -16,57 +14,16 @@ from controller import Supervisor, Robot
 from enum import Enum, auto
 from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
 from layers.head_direction_layer import HeadDirectionLayer
-from layers.place_cell_layer_vision import PlaceCellLayer
+from layers.place_cell_layer import PlaceCellLayer
 from layers.reward_cell_layer import RewardCellLayer
-import matplotlib.pyplot as plt
+from robot_mode import RobotMode
+import cv2
 
-# Enable interactive mode
-plt.ion()
 tf.random.set_seed(5)
 np.set_printoptions(precision=2)
 PI = tf.constant(np.pi)
 rng = default_rng()  # random number generator
 cmap = get_cmap("plasma")
-
-
-class RobotMode(Enum):
-    """Defines the different operating modes for the robot's behavior and learning.
-
-    The robot can operate in several modes that control its behavior, learning mechanisms,
-    and data collection. These modes determine how the robot explores its environment,
-    learns from experiences, and utilizes learned information.
-
-    Modes:
-        LEARN_OJAS: Initial learning phase where the robot randomly explores while only
-            enabling competition (Oja's rule) between place cells. Runs until time limit.
-
-        LEARN_HEBB: Secondary learning phase with both Oja's rule and tripartite (Hebbian)
-            learning enabled during random exploration. Must run after LEARN_OJAS since
-            place cells need to stabilize first.
-
-        DMTP: Delayed Matching to Place task. Random exploration with both learning rules
-            enabled until goal is reached, then updates reward map in reward cell network.
-
-        EXPLOIT: Goal-directed navigation using the learned reward map. Both learning
-            rules remain enabled while the robot navigates to known goals.
-
-        PLOTTING: Random exploration mode with all learning disabled in both place cell
-            and reward cell networks. Used for visualization and analysis.
-
-        MANUAL_CONTROL: Enables direct user control of the robot in the Webots simulator
-            through keyboard inputs.
-
-        RECORDING: Random exploration with learning disabled, focused on collecting and
-            saving sensor data for offline analysis or training.
-    """
-
-    LEARN_OJAS = auto()
-    LEARN_HEBB = auto()
-    DMTP = auto()
-    EXPLOIT = auto()
-    PLOTTING = auto()
-    MANUAL_CONTROL = auto()
-    RECORDING = auto()
 
 
 class Driver(Supervisor):
@@ -105,9 +62,6 @@ class Driver(Supervisor):
         boundary_data (Tensor): Current LiDAR readings.
         goal_location (List[float]): Target [x,y] coordinates.
         expected_reward (float): Predicted reward at current state.
-        last_reward (float): Reward received in previous step.
-        current_pcn_state (Tensor): Current place cell activations.
-        prev_pcn_state (Tensor): Previous place cell activations.
     """
 
     def initialization(
@@ -117,7 +71,8 @@ class Driver(Supervisor):
         run_time_hours: int = 1,
         start_loc: Optional[List[int]] = None,
         enable_ojas: Optional[bool] = None,
-        enable_hebb: Optional[bool] = None,
+        enable_stdp: Optional[bool] = None,
+        file_prefix: str = "",
     ):
         """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
@@ -131,31 +86,27 @@ class Driver(Supervisor):
                 Defaults to None.
             enable_ojas (Optional[bool], optional): Flag to enable Oja's learning rule.
                 If None, determined by robot mode. Defaults to None.
-            enable_hebb (Optional[bool], optional): Flag to enable Hebbian learning.
+            enable_stdp (Optional[bool], optional): Flag to enable Spike-Timing-Dependent Plasticity.
                 If None, determined by robot mode. Defaults to None.
 
         Returns:
             None
         """
-        # Initialize sensor data dictionary
-        self.sensor_data = {
-            "headings": [],
-            "lidar": [],
-            "images": [],  # Buffer for camera images
-        }
-        self.image_frame_counter = 0  # Counter for image sampling
         self.mode = mode
+        self.done = False
+        self.file_prefix = file_prefix
 
         # Model parameters
-        self.num_place_cells = 200
+        self.num_place_cells = 250
+        self.num_bvc_per_dir = 120
         self.num_reward_cells = 1
         self.n_hd = 8
         self.timestep = 32 * 3
         self.tau_w = 10  # time constant for the window function
 
-        # Initialize the plot
-        self.fig, self.ax = plt.subplots(figsize=(8, 6))
-        self.plot_initialized = False
+        # Camera Params
+        self.camera_resize_width = 200
+        self.camera_resize_height = 100
 
         # Robot parameters
         self.max_speed = 16
@@ -173,6 +124,11 @@ class Driver(Supervisor):
         self.hmap_z = np.zeros(
             (self.num_steps, self.num_place_cells)
         )  # place cell activations
+        self.hmap_images = np.zeros(
+            (self.num_steps, self.camera_resize_height, self.camera_resize_width, 3),
+            dtype=np.uint8,
+        )
+
         self.hmap_h = np.zeros(
             (self.num_steps, self.n_hd)
         )  # head direction cell activations
@@ -198,16 +154,16 @@ class Driver(Supervisor):
         self.left_position_sensor.enable(self.timestep)
         self.right_position_sensor = self.getDevice("right wheel sensor")
         self.right_position_sensor.enable(self.timestep)
-
-        self.enable_camera = True
-        # Initialize 360 camera
-        if self.enable_camera:
-            self.camera360 = self.getDevice("frontCamera")
-            self.camera360.enable(self.timestep)
-            self.camera_image = None
+        self.front_camera = self.getDevice("frontCamera")
+        self.front_camera.enable(self.timestep)
 
         if self.mode == RobotMode.LEARN_OJAS:
             self.clear()
+
+        # Initialize boundaries
+        self.lidar_resolution = 720
+        self.boundary_data = tf.Variable(tf.zeros((self.lidar_resolution, 1)))
+        self.lidar_angles = np.linspace(0, 2 * np.pi, self.lidar_resolution, False)
 
         # Initialize layers
         self.load_pcn(
@@ -215,7 +171,7 @@ class Driver(Supervisor):
             n_hd=self.n_hd,
             timestep=self.timestep,
             enable_ojas=enable_ojas,
-            enable_hebb=enable_hebb,
+            enable_stdp=enable_stdp,
         )
         self.load_rcn(
             num_reward_cells=self.num_reward_cells,
@@ -223,9 +179,7 @@ class Driver(Supervisor):
             num_replay=6,
         )
         self.head_direction_layer = HeadDirectionLayer(num_cells=self.n_hd)
-
-        # Initialize boundaries
-        self.boundary_data = tf.Variable(tf.zeros((720, 1)))
+        self.hmap_bvc = np.zeros((self.num_steps, self.pcn.bvc_layer.num_bvc))
 
         self.directional_reward_estimates = tf.zeros(self.n_hd)
         self.step(self.timestep)
@@ -234,9 +188,6 @@ class Driver(Supervisor):
         # Initialize goal
         self.goal_location = [-1, 1]
         self.expected_reward = 0
-        self.last_reward = 0
-        self.current_pcn_state = tf.zeros_like(self.pcn.place_cell_activations)
-        self.prev_pcn_state = tf.zeros_like(self.pcn.place_cell_activations)
 
         if randomize_start_loc:
             while True:
@@ -265,7 +216,7 @@ class Driver(Supervisor):
         n_hd: int,
         timestep: int,
         enable_ojas: Optional[bool] = None,
-        enable_hebb: Optional[bool] = None,
+        enable_stdp: Optional[bool] = None,
     ):
         """Loads an existing place cell network from disk or initializes a new one.
 
@@ -275,7 +226,7 @@ class Driver(Supervisor):
             timestep (int): Time step duration in milliseconds.
             enable_ojas (Optional[bool], optional): Flag to enable Oja's learning rule.
                 If None, determined by robot mode. Defaults to None.
-            enable_hebb (Optional[bool], optional): Flag to enable Hebbian learning.
+            enable_stdp (Optional[bool], optional): Flag to enable Spike-Timing-Dependent Plasticity.
                 If None, determined by robot mode. Defaults to None.
 
         Returns:
@@ -287,21 +238,23 @@ class Driver(Supervisor):
                 self.pcn.reset_activations()
                 print("Loaded existing Place Cell Network.")
         except:
-            # bvc = BoundaryVectorCellLayer(
-            # max_dist=10,
-            # input_dim=720,
-            # n_hd=n_hd,
-            # sigma_ang=90,
-            # sigma_d=0.5,
-            # )
+            bvc = BoundaryVectorCellLayer(
+                max_dist=12,
+                input_dim=self.lidar_resolution,
+                n_hd=n_hd,
+                sigma_ang=90,
+                sigma_d=0.75,
+                lidar_angles=self.lidar_angles,
+                num_bvc_per_dir=self.num_bvc_per_dir,
+            )
 
             self.pcn = PlaceCellLayer(
-                encoder_path="encoder_model_sparse.keras",
-                num_pc=num_place_cells,
-                timestep=timestep,
-                n_hd=n_hd,
+                bvc_layer=bvc, num_pc=num_place_cells, timestep=timestep, n_hd=n_hd
             )
-            print("Initialized new Place Cell Network.")
+            print(
+                f"Initialized new Boundary Vector Cell Network with {self.pcn.num_bvc} cells"
+            )
+            print(f"Initialized new Place Cell Network with {self.pcn.num_pc} cells")
 
         if enable_ojas is not None:
             self.pcn.enable_ojas = enable_ojas
@@ -312,10 +265,10 @@ class Driver(Supervisor):
         ):
             self.pcn.enable_ojas = True
 
-        if enable_hebb is not None:
-            self.pcn.enable_hebb = enable_hebb
+        if enable_stdp is not None:
+            self.pcn.enable_stdp = enable_stdp
         elif self.mode == RobotMode.LEARN_HEBB or self.mode == RobotMode.DMTP:
-            self.pcn.enable_hebb = True
+            self.pcn.enable_stdp = True
 
         return self.pcn
 
@@ -357,9 +310,9 @@ class Driver(Supervisor):
 
         print(f"Starting robot in stage {self.mode}")
         print(f"Goal at {self.goal_location}")
-        while True:
-            # Handle the robot's state
 
+        while not self.done:
+            # Handle the robot's state
             if self.mode == RobotMode.MANUAL_CONTROL:
                 self.manual_control()
 
@@ -381,8 +334,6 @@ class Driver(Supervisor):
                 print("Unknown state. Exiting...")
                 break
 
-            self.update_plot()
-
     ########################################### EXPLORE ###########################################
 
     def explore(self) -> None:
@@ -398,8 +349,6 @@ class Driver(Supervisor):
         Returns:
             None
         """
-        self.prev_pcn_state = self.current_pcn_state
-        self.current_pcn_state *= 0
 
         for s in range(self.tau_w):
             self.sense()
@@ -427,19 +376,11 @@ class Driver(Supervisor):
                 or self.mode == RobotMode.LEARN_HEBB
                 or self.mode == RobotMode.EXPLOIT
             ):
-                self.current_pcn_state += self.pcn.place_cell_activations
                 self.check_goal_reached()
 
             self.compute()
             self.forward()
             self.check_goal_reached()
-
-        if (
-            self.mode == RobotMode.DMTP
-            or self.mode == RobotMode.LEARN_HEBB
-            or self.mode == RobotMode.EXPLOIT
-        ):
-            self.current_pcn_state /= s  # 's' should be greater than 0
 
         self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
 
@@ -458,8 +399,6 @@ class Driver(Supervisor):
         Returns:
             None
         """
-        # Reset the current place cell state
-        self.current_pcn_state *= 0
 
         # Stop movement and update sensor readings
         self.stop()
@@ -539,7 +478,6 @@ class Driver(Supervisor):
                 self.compute()
                 self.forward()
                 # Accumulate place cell activations
-                self.current_pcn_state += self.pcn.place_cell_activations
                 self.check_goal_reached()
 
                 # Update reward cell activations and perform TD update
@@ -548,9 +486,6 @@ class Driver(Supervisor):
                 self.rcn.td_update(
                     self.pcn.place_cell_activations, next_reward=actual_reward
                 )
-
-            # Normalize the accumulated place cell state over the time window
-            self.current_pcn_state /= self.tau_w
 
     def get_actual_reward(self):
         """Determines the actual reward for the agent at the current state.
@@ -574,22 +509,23 @@ class Driver(Supervisor):
         """Records sensor data during robot operation.
 
         Stores:
-            - Current position coordinates (in hmap_x, hmap_y)
-            - Head direction activations (in hmap_h)
+            - Current position coordinates
+            - Heading angle in degrees
             - LiDAR range readings
-            - Camera images (if enabled)
+
+        The data is stored in the sensor_data dictionary with keys:
+        'positions', 'headings', and 'lidar'.
 
         Returns:
             None
         """
         # Get current position
         curr_pos = self.robot.getField("translation").getSFVec3f()
+        self.sensor_data["positions"].append([curr_pos[0], curr_pos[2]])
 
-        # Store coordinates and head direction activations like other modes
-        if self.step_count < self.num_steps:
-            self.hmap_x[self.step_count] = curr_pos[0]
-            self.hmap_y[self.step_count] = curr_pos[2]
-            self.hmap_h[self.step_count] = self.hd_activations
+        # Get current heading angle in degrees
+        current_heading_deg = int(self.get_bearing_in_degrees(self.compass.getValues()))
+        self.sensor_data["headings"].append(current_heading_deg)
 
         # Get LiDAR readings
         lidar_readings = self.range_finder.getRangeImage()
@@ -597,32 +533,19 @@ class Driver(Supervisor):
             lidar_readings.copy()
         )  # Copy to avoid referencing issues
 
-        # Get camera image if enabled
-        if self.enable_camera and self.camera_image:
-            # Convert camera image to numpy array
-            width = self.camera360.getWidth()
-            height = self.camera360.getHeight()
-            image = np.frombuffer(self.camera_image, np.uint8).reshape(
-                (height, width, 4)
-            )
-            self.sensor_data["images"].append(image.copy())
-
     def save_sensor_data(self):
         """
         Saves the recorded sensor data to files for later use.
         """
-        # Save position, heading and other map data using standard method
-        self.on_save(include_pcn=False, include_rcn=False)
-
-        # Save additional sensor data
+        # Convert lists to NumPy arrays
+        positions = np.array(self.sensor_data["positions"])
+        headings = np.array(self.sensor_data["headings"])
         lidar_data = np.array(self.sensor_data["lidar"])
-        np.save("recorded_lidar.npy", lidar_data)
 
-        # Save camera images if they were recorded
-        if self.enable_camera and len(self.sensor_data["images"]) > 0:
-            images = np.array(self.sensor_data["images"])
-            np.save("recorded_images.npy", images)
-            print(f"Saved {len(images)} camera frames")
+        # Save data to files
+        np.save("recorded_positions.npy", positions)
+        np.save("recorded_headings.npy", headings)
+        np.save("recorded_lidar.npy", lidar_data)
 
         print("Sensor data saved.")
 
@@ -640,9 +563,8 @@ class Driver(Supervisor):
         if not np.any(self.collided):
             self.forward()
         else:
-            # If collided, turn by a random angle between -180 and 180 degrees (in radians)
-            random_angle = np.random.uniform(-np.pi, np.pi)
-            self.turn(random_angle)
+            # If collided, turn by a random angle to avoid obstacle
+            self.turn(np.random.uniform(-np.pi / 2, np.pi / 2))
             self.collided.assign([0, 0])  # Reset collision status
 
         # Introduce a 5% chance to rotate randomly
@@ -656,9 +578,8 @@ class Driver(Supervisor):
 
         # Check if the maximum number of steps has been reached
         if self.step_count >= self.num_steps:
+            self.save()
             print("Data recording complete.")
-            self.save_sensor_data()  # Save all recorded sensor data
-            self.on_save()
 
     ########################################### SENSE ###########################################
 
@@ -719,9 +640,34 @@ class Driver(Supervisor):
         # Shape: scalar (int) - 1 if collision detected on the right bumper, 0 otherwise.
         self.collided.scatter_nd_update([[1]], [int(self.right_bumper.getValue())])
 
-        # 10. Capture the image from camera. Display if enabled
-        if self.enable_camera:
-            self.camera_image = self.camera360.getImage()
+        # Capture the image from the front camera
+        camera_image = self.front_camera.getImage()
+        if camera_image is not None:
+            # Convert the Webots camera image to a NumPy array (BGRA format)
+            width = self.front_camera.getWidth()
+            height = self.front_camera.getHeight()
+            image_data = np.frombuffer(camera_image, dtype=np.uint8).reshape(
+                (height, width, 4)
+            )
+
+            # Convert BGRA to RGB
+            rgb_image = image_data[:, :, :3][:, :, ::-1]
+
+            # Resize the image to the specified dimensions
+            resized_image = cv2.resize(
+                rgb_image, (self.camera_resize_width, self.camera_resize_height)
+            )
+
+            # Store the resized image in hmap_images
+            if self.step_count < self.num_steps:
+                self.hmap_images[self.step_count] = resized_image
+
+            # Display the resized image using Matplotlib
+            # plt.imshow(resized_image)
+            # plt.title("Camera Image (Resized)")
+            # plt.axis("off")
+            # plt.show(block=False)  # Non-blocking display
+            # plt.pause(0.001)  # Allow time for the plot to update
 
         # 11. Proceed to the next timestep in the robot's control loop.
         self.step(self.timestep)
@@ -741,67 +687,15 @@ class Driver(Supervisor):
             bearing = bearing + 360.0
         return bearing
 
-    def update_plot(self):
-        if not self.plot_initialized:
-            # Initial plot setup
-            (self.line,) = self.ax.plot([], [], "b-", label="Path")  # Robot path
-            self.pos_scatter = self.ax.scatter(
-                [], [], c="blue", marker="o", s=50, label="Robot"
-            )
-            self.goal_scatter = self.ax.scatter(
-                self.goal_location[0],
-                self.goal_location[1],
-                c="red",
-                marker="*",
-                s=100,
-                label="Goal",
-            )
-            self.ax.set_xlabel("X Position")
-            self.ax.set_ylabel("Y Position")
-            self.ax.set_title("Robot Path")
-            self.ax.legend()
-            self.ax.grid(True)
-            self.plot_initialized = True
-
-        # Update the robot's path
-        self.line.set_data(
-            self.hmap_x[: self.step_count], self.hmap_y[: self.step_count]
-        )
-
-        # Update the robot's current position
-        curr_pos = self.robot.getField("translation").getSFVec3f()
-        self.pos_scatter.set_offsets([curr_pos[0], curr_pos[2]])
-
-        # Adjust the plot limits if necessary
-        self.ax.relim()
-        self.ax.autoscale_view()
-
-        plt.draw()
-        plt.pause(0.001)  # Pause to allow the plot to update
-
-    ####################################### COMPUTE ###########################################
+    ########################################### COMPUTE ###########################################
 
     def compute(self):
         """
         Compute the activations of place cells and handle the environment interactions.
         """
-        # Format camera image for place cell network
-        # Format camera image for place cell network
-        if self.camera_image:
-            width = self.camera360.getWidth()
-            height = self.camera360.getHeight()
-            image = np.frombuffer(self.camera_image, np.uint8).reshape(
-                (height, width, 4)
-            )
-            # Convert to RGB, resize to (96, 192), and normalize to [0, 1]
-            image = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
-            image = cv2.resize(image, (96, 96)) / 255.0
-        else:
-            image = None
-
         # Compute the place cell network activations
         self.pcn.get_place_cell_activations(
-            input_data=image,
+            distances=self.boundaries,
             hd_activations=self.hd_activations,
             collided=np.any(self.collided),
         )
@@ -815,8 +709,9 @@ class Driver(Supervisor):
             self.hmap_x[self.step_count] = curr_pos[0]
             self.hmap_y[self.step_count] = curr_pos[2]
             self.hmap_z[self.step_count] = self.pcn.place_cell_activations
+            self.hmap_bvc[self.step_count] = self.pcn.bvc_activations
             self.hmap_h[self.step_count] = self.hd_activations
-            # self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn.bvc_activations)
+            self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn.bvc_activations)
 
         # Increment timestep
         self.step_count += 1
@@ -849,12 +744,12 @@ class Driver(Supervisor):
             print(f"Time taken: {self.getTime()}")
 
             # Don't save any of the layers during exploit mode
-            self.on_save(
+            self.save(
                 include_rcn=(self.mode != RobotMode.EXPLOIT),
                 include_pcn=(self.mode != RobotMode.EXPLOIT),
             )
         elif self.getTime() >= 60 * self.run_time_minutes:
-            self.on_save()
+            self.save()
 
     ########################################### AUTO PILOT ###########################################
 
@@ -883,9 +778,7 @@ class Driver(Supervisor):
             self.sense()
             self.compute()
             self.forward()
-            self.current_pcn_state += self.pcn.place_cell_activations
             s_start += 1
-        self.current_pcn_state /= s_start
 
         # Replay the place cell activations
         self.rcn.replay(pcn=self.pcn)
@@ -917,7 +810,6 @@ class Driver(Supervisor):
 
         # Always step simulation forward and update sensors
         self.sense()
-        self.compute()
         self.step(self.timestep)
 
     def rotate(self, direction: int, speed_factor: float = 0.3):
@@ -1011,7 +903,7 @@ class Driver(Supervisor):
 
         return path_length
 
-    def on_save(
+    def save(
         self,
         include_pcn: bool = True,
         include_rcn: bool = True,
@@ -1024,47 +916,71 @@ class Driver(Supervisor):
         Parameters:
             include_maps (bool): If True, saves the history of the agent's path and activations.
         """
+        # Create directory if it doesn't exist
+        if self.file_prefix:
+            directory = os.path.dirname(self.file_prefix)
+            if directory and not os.path.exists(directory):
+                os.makedirs(directory)
 
         files_saved = []
+
+        # Save parameters to text file
+        params_file = f"{self.file_prefix}parameters.txt"
+        with open(params_file, "w") as f:
+            f.write("Model Parameters:\n")
+            f.write(f"sigma_d: {self.pcn.bvc_layer.sigma_d}\n")
+            f.write(f"sigma_ang: {self.pcn.bvc_layer.sigma_ang}\n")
+            f.write(f"num_place_cells: {self.pcn.num_pc}\n")
+            f.write(f"num_bvcs: {self.pcn.num_bvc}\n")
+            f.write(f"num_bvc_per_dir: {self.num_bvc_per_dir}\n")
+            f.write(f"n_hd: {self.n_hd}\n")
+            f.write(f"run_time_hours: {self.run_time_minutes / 60}\n")
+            f.write(f"num_simulation_steps: {self.num_steps}\n")
+
+        np.save(
+            f"{self.file_prefix}hmap_images.npy",
+            self.hmap_images[: self.step_count],
+        )
+        files_saved.append("hmap_images.npy")
+
+        files_saved.append("parameters.txt")
+
         # Save the Place Cell Network (PCN)
         if include_pcn:
-            with open("pcn.pkl", "wb") as output:
+            with open(f"{self.file_prefix}pcn.pkl", "wb") as output:
                 pickle.dump(self.pcn, output)
                 files_saved.append("pcn.pkl")
 
         # Save the Reward Cell Network (RCN)
         if include_rcn:
-            with open("rcn.pkl", "wb") as output:
+            with open(f"{self.file_prefix}rcn.pkl", "wb") as output:
                 pickle.dump(self.rcn, output)
                 files_saved.append("rcn.pkl")
 
         # Save the history maps if specified
         if include_hmaps:
-            with open("hmap_x.pkl", "wb") as output:
+            with open(f"{self.file_prefix}hmap_x.pkl", "wb") as output:
                 pickle.dump(self.hmap_x[: self.step_count], output)
                 files_saved.append("hmap_x.pkl")
-            with open("hmap_y.pkl", "wb") as output:
+            with open(f"{self.file_prefix}hmap_y.pkl", "wb") as output:
                 pickle.dump(self.hmap_y[: self.step_count], output)
                 files_saved.append("hmap_y.pkl")
-            with open("hmap_z.pkl", "wb") as output:
+            with open(f"{self.file_prefix}hmap_z.pkl", "wb") as output:
                 pickle.dump(self.hmap_z[: self.step_count], output)
                 files_saved.append("hmap_z.pkl")
-            with open("hmap_g.pkl", "wb") as output:
+            with open(f"{self.file_prefix}hmap_g.pkl", "wb") as output:
                 pickle.dump(self.hmap_g[: self.step_count], output)
                 files_saved.append("hmap_g.pkl")
-            with open("hmap_h.pkl", "wb") as output:
+            with open(f"{self.file_prefix}hmap_h.pkl", "wb") as output:
                 pickle.dump(self.hmap_h[: self.step_count], output)
                 files_saved.append("hmap_h.pkl")
+            with open(f"{self.file_prefix}hmap_bvc.pkl", "wb") as output:
+                pickle.dump(self.hmap_bvc[: self.step_count], output)
+                files_saved.append("hmap_bvc.pkl")
 
-        root = tk.Tk()
-        root.withdraw()  # Hide the main window
-        root.attributes("-topmost", True)  # Always keep the window on top
-        root.update()
-        messagebox.showinfo("Information", "Press OK to save data")
-        root.destroy()  # Destroy the main window
-        self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
         print(f"Files Saved: {files_saved}")
         print("Saving Done!")
+        self.done = True
 
     def clear(self):
         """
@@ -1077,6 +993,7 @@ class Driver(Supervisor):
             "hmap_x.pkl",
             "hmap_y.pkl",
             "hmap_z.pkl",
+            "hmap_bvc.pkl",
             "hmap_g.pkl",
             "hmap_h.pkl",
         ]
