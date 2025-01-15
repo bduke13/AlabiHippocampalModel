@@ -34,8 +34,16 @@ if __name__ == "__main__":
     n_rows = len(MODEL_ORDER)
     n_cols = len(ENV_ORDER)
 
-    # Create subplots
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(2.5 * n_cols, 2.5 * n_rows))
+    # Create subplots with reduced vertical spacing
+    fig, axes = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=(2.5 * n_cols, 2.5 * n_rows),  # Increased from 2.5 to 3.0
+        gridspec_kw={
+            "hspace": 0.02,
+            "wspace": 0.02,
+        },  # Reduced both horizontal and vertical spacing
+    )
 
     # Ensure axes is a 2D array
     if n_rows == 1 and n_cols == 1:
@@ -68,21 +76,26 @@ if __name__ == "__main__":
                 )
                 scatter_obj = sc
             else:
-                ax.text(0.5, 0.5, "No data", ha="center", va="center")
+                ax.text(0.5, 0.5, "No data", ha="center", va="center", fontsize=12)
 
-            # Make each subplot square, remove ticks
+            # Make each subplot square, remove ticks and spines
             ax.set_aspect("equal", "box")
             ax.set_xticks([])
             ax.set_yticks([])
+            # Remove the black bounding box
+            for spine in ax.spines.values():
+                spine.set_visible(False)
 
-            # Titles/labels
+            # Titles/labels with font sizes
             if r == 0:
-                ax.set_title(env_name)
+                ax.set_title(env_name, fontsize=12)
             if c == 0:
-                ax.set_ylabel(model_name, rotation=90, labelpad=10)
+                ax.set_ylabel(model_name, rotation=90, labelpad=10, fontsize=12)
 
-    # Shrink the plotting area to 88% of figure width, 95% of figure height
-    plt.tight_layout(rect=[0, 0, 0.88, 0.95])
+    # Shrink the plotting area to 88% of figure width, 95% of figure height, with reduced spacing
+    plt.tight_layout(
+        rect=[0, 0, 0.88, 0.95], h_pad=-0.1, w_pad=-0.1
+    )  # Reduced both horizontal and vertical padding
 
     # Make the color bar bigger by increasing fraction from 0.02 -> 0.04
     if scatter_obj is not None:
@@ -92,9 +105,11 @@ if __name__ == "__main__":
             fraction=0.04,  # about twice as large
             pad=0.02,
         )
-        cbar.set_label("Sum of Cosine Similarities (distance >= 2.0)")
+        cbar.set_label("Aliasing Index (Global Color Range)", fontsize=14)
 
     # Move the suptitle a bit higher
-    fig.suptitle("Cosine Similarity (Global Color Range)", fontsize=14, x=0.45, y=0.98)
+    fig.suptitle(
+        "Aliasing Index", fontsize=20, x=0.5, y=0.96
+    )  # x=0.5 centers the title over the entire figure
 
     plt.show()
