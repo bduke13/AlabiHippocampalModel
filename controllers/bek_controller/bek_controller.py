@@ -15,7 +15,7 @@ bot = Driver()
 # 3. HYBRID
 
 bot.initialization(
-    mode=RobotMode.DMTP,
+    mode=RobotMode.LEARN_HEBB,
     randomize_start_loc=True,
     run_time_hours=3,
     start_loc=[2, -2],

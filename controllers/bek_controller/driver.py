@@ -255,29 +255,16 @@ class Driver(Supervisor):
         self.sense()
         self.compute()
 
-         # Initialize attributes for curiosity-driven exploration
-        if self.explore_mthd in [ExploreMethod.CURIOSITY, ExploreMethod.HYBRID]:
-            self.grid_resolution = 0.5  # Cell size in meters; adjust as needed
-            self.decay_rate = 0.99  # Decay rate for visitation counts
-
-            # Initialize or load the visitation map based on the parameter
-            if use_existing_visitation_map:
-                # Try to load existing visitation map
-                try:
-                    with open("visitation_map.pkl", "rb") as f:
-                        self.visitation_map = pickle.load(f)
-                        print("Loaded existing visitation map.")
-                except FileNotFoundError:
-                    # If file does not exist, create a new visitation map
-                    self.visitation_map = {}
-                    print("No existing visitation map found. Initialized new visitation map.")
-            else:
-                # Always create a new visitation map
-                self.visitation_map = {}
-                print("Initialized new visitation map (existing map not used).")
+        
+        self.grid_resolution = 0.5  # Cell size in meters
+        self.decay_rate = 0.99  # Decay rate for visitation counts (used in curiosity-based exploration)
+        # Initialize or load visitation map
+        if use_existing_visitation_map and os.path.exists("visitation_map.pkl"):
+            with open("visitation_map.pkl", "rb") as f:
+                self.visitation_map = pickle.load(f)
         else:
-            # If not using curiosity or hybrid methods, visitation map is not needed
             self.visitation_map = {}
+        
 
     def load_pcn(
         self,
@@ -438,6 +425,7 @@ class Driver(Supervisor):
 
         for s in range(self.tau_w):
             self.sense()
+            self.update_visitation_map()
 
             # Update the reward cell activations
             self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations)
@@ -1229,9 +1217,8 @@ class Driver(Supervisor):
             with open("hmap_h.pkl", "wb") as output:
                 pickle.dump(self.hmap_h[: self.step_count], output)
                 files_saved.append("hmap_h.pkl")
-            if self.explore_mthd in [ExploreMethod.CURIOSITY, ExploreMethod.HYBRID]:
-                with open("visitation_map.pkl", "wb") as output:
-                    pickle.dump(self.visitation_map, output)
+            with open("visitation_map.pkl", "wb") as output:
+                pickle.dump(self.visitation_map, output)
 
         root = tk.Tk()
         root.withdraw()  # Hide the main window
