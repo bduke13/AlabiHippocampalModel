@@ -17,6 +17,21 @@ if __name__ == "__main__":
     global_max = df["cosine_similarity_sum"].max()
     print(f"Global Cosine Sum Range: [{global_min:.3f}, {global_max:.3f}]")
 
+    # Define name mappings
+    MODEL_NAMES = {
+        "2D_250": "2D Model",
+        "3D_2L_250_1": "3D-2Layer (v1)",
+        "3D_2L_250_2": "3D-2Layer (v2)",
+        "3D_3L_250": "3D-3Layer",
+    }
+
+    ENV_NAMES = {
+        "upright": "Upright",
+        "inside_shallow": "Shallow Tilt 30°",
+        "inside_medium": "Medium Tilt 45°",
+        "inside_steep": "Steep Tilt 60°",
+    }
+
     # Desired model/environment order
     MODEL_ORDER = [
         "2D_250",
@@ -72,7 +87,7 @@ if __name__ == "__main__":
                     cmap="viridis",
                     vmin=global_min,
                     vmax=global_max,
-                    s=27,  # ~10% smaller than 30
+                    s=4,  # ~10% smaller than 30
                 )
                 scatter_obj = sc
             else:
@@ -105,11 +120,13 @@ if __name__ == "__main__":
             fraction=0.04,  # about twice as large
             pad=0.02,
         )
-        cbar.set_label("Aliasing Index (Global Color Range)", fontsize=14)
+        cbar.set_label(
+            "Sum of Cosine Similarities beyond Distance Threshold", fontsize=14
+        )
 
     # Move the suptitle a bit higher
     fig.suptitle(
-        "Aliasing Index", fontsize=20, x=0.5, y=0.96
+        "Aliasing Index by Environment", fontsize=20, x=0.5, y=0.96
     )  # x=0.5 centers the title over the entire figure
 
     plt.show()

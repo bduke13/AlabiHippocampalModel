@@ -24,7 +24,7 @@ def load_hmaps(prefix="three_dim/"):
     with open(f"{prefix}hmap_z.pkl", "rb") as f:
         hmap_z = np.array(pickle.load(f))
 
-    return hmap_x, hmap_y, hmap_z
+    return hmap_x[1:], hmap_y[1:], hmap_z[1:]
 
 
 def get_available_directories(root_path: str, max_dirs: int = 200) -> List[str]:

@@ -71,53 +71,6 @@ print("\nModel Analysis Results (DBSCAN):")
 print(df)
 
 # %%
-# Now compute COSINE SIMILARITIES for each path, save plot, and store sums
-cosine_sums_list = []
-for path in df["full_path"]:
-    try:
-        print("Computing cosine similarities for:", path)
-        hmap_x, hmap_y, hmap_z = load_hmaps(path)
-
-        # Run the far-distance cosine similarity analysis
-        similarity_sums = analyze_cosine_similarity(
-            hmap_x,
-            hmap_y,
-            hmap_z,
-            gridsize=50,  # adjust if needed
-            filter_bottom_ratio=0.1,  # adjust if needed
-            distance_threshold=2.0,  # adjust if needed
-        )
-
-        # Save a scatter-plot of similarity sums in the same directory
-        output_path = os.path.join(path, "cosine_sums_plot.png")
-        fig, ax, total_sum = plot_similarity_sums(
-            similarity_sums,
-            title=f"Far-Cosine Similarity Sums ({path})",
-            output_path=output_path,
-            close_plot=True,
-        )
-
-        # Store the total sum for this path
-        cosine_sums_list.append(total_sum)
-
-    except Exception as e:
-        print(f"Error computing cosine for {path}: {str(e)}")
-        cosine_sums_list.append(None)
-
-# Add the list of sums to the main DataFrame
-df["cosine_sum"] = cosine_sums_list
-
-# %%
-# Display updated DataFrame with cosine sums
-print("\nUpdated DataFrame with Cosine Sums:")
-print(df)
-
-# %%
-# Save the updated DataFrame to a CSV file
-df.to_csv("model_metrics_analysis_results.csv", index=False)
-print(f"\nResults saved to {output_csv_path}")
-
-# %%
 # Filter for the models right before plotting
 allowed_models = ["2D_250", "3D_2L_250_1", "3D_3L_250"]
 df = df[df["parent_dir"].isin(allowed_models)]
