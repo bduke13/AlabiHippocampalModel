@@ -51,7 +51,7 @@ class RewardCellLayer:
             tf.tensordot(self.w_in_effective, input_data, axes=1) / safe_denominator
         )
         # Clip values to prevent extreme values
-        self.reward_cell_activations = tf.clip_by_value(activations, -1e6, 1e6)
+        self.reward_cell_activations = tf.clip_by_value(activations, 0, 1e6)
 
         if visit:
             # Update weights directly based on input data
