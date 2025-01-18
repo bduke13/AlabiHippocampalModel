@@ -509,12 +509,18 @@ class Driver(Supervisor):
             return  # Not enough steps for an 'exploit' action yet
 
         # 2. Compute potential rewards (multi-scale or single-scale).
-        #    This populates:
-        #       self.directional_reward_estimates_small
-        #       self.directional_reward_estimates_large
-        #       combined_pot_rew (the alpha-weighted combination if multiscale)
-        #       alpha
         combined_pot_rew, alpha = self._compute_potential_rewards()
+
+        print(f"Alpha: {alpha:.2f}")
+
+        # 2.1 Determine the current scale based on alpha
+        new_scale = "small" if alpha > 0.5 else "large" if self.enable_multiscale else "single-scale"
+        if self.current_scale != new_scale:
+            self.current_scale = new_scale
+            print(f"Switching to {self.current_scale} scale.")
+        elif self.current_scale == "None":  # Initial indication at start
+            self.current_scale = new_scale
+            print(f"Starting with {self.current_scale} scale.")
 
         # -----------------------------------------------------------
         # 3. Gather LiDAR-based distances. We'll scale down headings
@@ -531,17 +537,14 @@ class Driver(Supervisor):
         )
 
         # 3.1 Apply a distance-based linear penalty if dist < 1.0
-        #     e.g. dist=0.5 => scale=0.5
-        #          dist=0.9 => scale=0.9
-        #          dist>1.0 => scale=1.0 (no penalty)
         for i, dist in enumerate(rotated_distances_per_hd):
-            if dist < 1.0:  
+            if dist < 1:
                 scale = np.exp(-5 * (1.0 - dist))  # Steeper penalty near walls
                 self.directional_reward_estimates_small[i] *= scale
                 if self.enable_multiscale:
                     self.directional_reward_estimates_large[i] *= scale
 
-        # 3.2 Renormalize small & large so they sum to 1 (unless they're nearly all zero)
+        # 3.2 Renormalize small & large so they sum to 1
         sum_small = np.sum(self.directional_reward_estimates_small)
         if sum_small > 1e-6:
             self.directional_reward_estimates_small /= sum_small
@@ -559,21 +562,10 @@ class Driver(Supervisor):
             combined_pot_rew = alpha * self.directional_reward_estimates_small \
                             + (1.0 - alpha) * self.directional_reward_estimates_large
         else:
-            # single-scale => final is just the small array
             combined_pot_rew = self.directional_reward_estimates_small
 
         # 5. Smooth the final distribution
         self.directional_reward_estimates = gaussian_filter1d(combined_pot_rew, sigma=4)
-
-        # -----------------------------------------------------------
-        # OPTIONAL 5.1: If you want a second pass to re-penalize
-        # headings after smoothing, do it here. For example:
-        # for i, dist in enumerate(rotated_distances_per_hd):
-        #     if dist < 1.0:
-        #         scale = dist / 1.0
-        #         self.directional_reward_estimates[i] *= scale
-        # # Then renormalize self.directional_reward_estimates again.
-        # -----------------------------------------------------------
 
         # 6. Renormalize final distribution
         total_sum = np.sum(self.directional_reward_estimates)
@@ -587,35 +579,6 @@ class Driver(Supervisor):
         # 7. Compute the final action angle using updated multi-scale logic
         action_angle = self._compute_action_angle(alpha)
 
-        # -----------------------------------------------------------
-        # Debug prints: see which directions got penalized
-        # -----------------------------------------------------------
-        angles_rad = np.linspace(0, 2 * np.pi, self.n_hd, endpoint=False)
-        angles_deg = np.degrees(angles_rad)
-        chosen_angle_deg = np.degrees(action_angle)
-
-        # print(f"Chosen action angle: {action_angle:.3f} rad ({chosen_angle_deg:.1f}°)")
-        # print("----- Debug Info: Head Directions -----")
-        # for i in range(self.n_hd):
-        #     print(
-        #         f"HD index={i:2d} | "
-        #         f"Angle={angles_deg[i]:6.1f}° | "
-        #         f"Dist raw={distances_per_hd[i]:5.2f} | "
-        #         f"Dist rotated={rotated_distances_per_hd[i]:5.2f} | "
-        #         f"Reward={self.directional_reward_estimates[i]:.3f}"
-        #     )
-
-        # for i, dist in enumerate(rotated_distances_per_hd):
-        #     if dist < 1.0:
-        #         print(
-        #             f"Penalizing reward at index={i}, angle={angles_deg[i]:.1f}°, "
-        #             f"dist={dist:.2f}"
-        #         )
-        # print("----------------------------------------")
-
-        # OPTIONAL: Plot after penalty
-        # self._plot_action_angle_rewards(action_angle)
-
         # 8. Validate final reward distribution and maybe explore
         if not self._validate_and_maybe_explore():
             return
@@ -627,6 +590,7 @@ class Driver(Supervisor):
 
         # 10. Execute movement
         self._turn_and_move(action_angle)
+
 
 
     def _plot_action_angle_rewards(self, action_angle):
@@ -654,11 +618,6 @@ class Driver(Supervisor):
         ax.set_title("Normalized Directional Rewards and Action Angle", va='bottom')
         ax.legend(loc='upper right')
         plt.show()
-
-
-    # --------------------------------------------------------------------------
-    # Consolidated / Refactored Helpers
-    # --------------------------------------------------------------------------
 
     def _perform_initial_actions(self):
         """Stops, senses, updates PCNs/hmaps, and checks if goal is reached."""
@@ -774,10 +733,6 @@ class Driver(Supervisor):
         angles = np.array([action_angle_small, action_angle_large])
         weights = np.array([weight_small, weight_large])
 
-        # Validate shapes
-        if angles.shape != weights.shape:
-            raise ValueError("Angles and weights must have the same shape for circmean.")
-
         multiscale_angle = circmean(angles, weights=weights)
         multiscale_conf = np.sum(self.directional_reward_estimates)
 
@@ -833,25 +788,7 @@ class Driver(Supervisor):
                             print("Still stuck after retry. Switching to explore mode.")
                             self.explore()
                             return
-                    break  # End collision retry
-
-            # # Wall avoidance logic
-            # lidar_readings = self.range_finder.getRangeImage()
-            # min_distance = np.min(lidar_readings)
-            # if min_distance < 0.5:  # Threshold distance to wall
-            #     print("Wall detected. Avoiding wall.")
-            #     self.turn(np.pi / 2)  # Turn 90 degrees
-            #     for _ in range(self.tau_w):
-            #         self.sense()
-            #         self.compute_pcn_activations()
-            #         self.update_hmaps()
-            #         self.forward()
-            #         self.check_goal_reached()
-            #         if np.any(self.collided):
-            #             print("Collision detected during wall avoidance. Switching to explore mode.")
-            #             self.explore()
-            #             return
-            #     break  # End wall avoidance
+                    break
 
             if self.done:
                 return
@@ -874,13 +811,13 @@ class Driver(Supervisor):
 
         alpha = grad_small / (grad_small + grad_large + 1e-6)
 
-        alpha = grad_small / (grad_small + grad_large + 1e-6)
-        bias = 0.5  # Small bias towards the small scale
-        alpha = min(max(alpha + bias, 0.0), 1.0)  # Ensure alpha stays in [0, 1]
-
+        # Add bias towards small scale
+        bias = 0.1  # Adjust this value to control the bias strength
+        alpha = min(max(alpha + bias, 0.0), 1.0)
 
         combined = alpha * pot_rew_small + (1 - alpha) * pot_rew_large
         return combined, alpha
+
 
     def _calculate_single_scale_rewards(self):
         return self._preplay_rewards(self.pcn_small, self.rcn_small)
@@ -896,11 +833,6 @@ class Driver(Supervisor):
             rcn.update_reward_cell_activations(pcn_future)
             pot_rew[d] = tf.reduce_max(np.nan_to_num(rcn.reward_cell_activations))
         return pot_rew
-
-    # Other methods that may remain: sense(), compute_pcn_activations(),
-    # update_hmaps(), check_goal_reached(), etc. 
-    # (Not shown here but presumably are part of the larger class.)
-
 
     ########################################### RECORDING ###########################################
 
