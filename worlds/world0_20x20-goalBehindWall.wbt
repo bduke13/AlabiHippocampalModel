@@ -8,7 +8,7 @@ WorldInfo {
 }
 Viewpoint {
   orientation 1 0 0 4.71238898038469
-  position 6.176886881231866e-05 23.147914421423287 1.4772974583894872e-07
+  position 6.176886881231866e-05 49.88928603587046 1.4772974092680074e-07
   near 0.1
   follow "Create"
   followType "None"
@@ -16,7 +16,7 @@ Viewpoint {
 TexturedBackground {
 }
 RectangleArena {
-  floorSize 10 10
+  floorSize 20 20
   floorAppearance NULL
   wallAppearance BrushedAluminium {
     colorOverride 0 1 1
@@ -24,7 +24,7 @@ RectangleArena {
   }
 }
 Transform {
-  translation -2 0.0001 2
+  translation -2 0 2
   children [
     Shape {
       appearance Appearance {
@@ -34,10 +34,21 @@ Transform {
       }
       geometry Cylinder {
         height 0.0001
-        radius 0.0762
+        radius 0.8
       }
     }
   ]
+}
+Wall {
+  rotation 0 1 0 2.3554
+  name "wall1"
+  size 7 1 0.4
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 1.2
+    }
+  }
 }
 DEF agent Create {
   hidden position_0_0 45249.17206706551
@@ -49,7 +60,7 @@ DEF agent Create {
   hidden rotation_13 1.0737594881207881e-07 0.9999999999999902 8.831825317408958e-08 -0.7269304932988185
   translation 0 0 0
   rotation -0.0007384019371796149 0.999998101604535 -0.001803205452893127 -2.2756754662412746
-  controller "test_controller"
+  controller "bek_controller"
   supervisor TRUE
   bodySlot [
     Solid {
@@ -62,7 +73,7 @@ DEF agent Create {
           width 720
           height 1
           spherical TRUE
-          maxRange 10
+          maxRange 30
         }
         Shape {
           appearance PBRAppearance {
