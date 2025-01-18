@@ -106,11 +106,15 @@ class Driver(Supervisor):
         self.timestep = 32 * 3
         self.tau_w = 10  # time constant for the window function
         if self.mode == RobotMode.EXPLOIT:
-            self.tau_w = 12
+            self.tau_w = 10
         self.enable_multiscale = enable_multiscale
 
         # Robot parameters
-        self.max_speed = 16
+        if self.mode == RobotMode.EXPLOIT:
+            self.max_speed = 16
+        else:
+            self.max_speed = 16
+
         self.left_speed = self.max_speed
         self.right_speed = self.max_speed
         self.wheel_radius = 0.031
@@ -118,8 +122,8 @@ class Driver(Supervisor):
         self.run_time_minutes = run_time_hours * 60
         self.step_count = 0
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
-        self.goal_r = {"explore": 0.3, "exploit": 1.2}
-        self.goal_location = [-6.5, 6.5]
+        self.goal_r = {"explore": 0.3, "exploit": 0.8}
+        self.goal_location = [-7, 7]
         
         self.hmap_x = np.zeros(self.num_steps)  # x-coordinates
         self.hmap_y = np.zeros(self.num_steps)  # y-coordinate
@@ -186,9 +190,6 @@ class Driver(Supervisor):
             print()
 
         self.head_direction_layer = HeadDirectionLayer(num_cells=self.n_hd)
-
-        # Initialize boundaries
-        self.boundary_data = tf.Variable(tf.zeros((720, 1)))
 
         self.directional_reward_estimates = tf.zeros(self.n_hd)
         self.step(self.timestep)
@@ -499,6 +500,7 @@ class Driver(Supervisor):
         """
         Enhanced goal-directed navigation using learned reward maps.
         Dynamically switches between small and large reward scales based on environmental context.
+        Uses a distance-based penalty for directions that are within 1m of a wall.
         """
 
         # 1. Initial actions and checks
@@ -506,27 +508,153 @@ class Driver(Supervisor):
         if self.step_count <= self.tau_w:
             return  # Not enough steps for an 'exploit' action yet
 
-        # 2. Compute potential rewards (multiscale or single-scale)
+        # 2. Compute potential rewards (multi-scale or single-scale).
+        #    This populates:
+        #       self.directional_reward_estimates_small
+        #       self.directional_reward_estimates_large
+        #       combined_pot_rew (the alpha-weighted combination if multiscale)
+        #       alpha
         combined_pot_rew, alpha = self._compute_potential_rewards()
 
-        # 3. Final directional reward estimates
-        self.directional_reward_estimates = gaussian_filter1d(combined_pot_rew, sigma=4)
-        # self.directional_reward_estimates = combined_pot_rew
+        # -----------------------------------------------------------
+        # 3. Gather LiDAR-based distances. We'll scale down headings
+        #    with distance < 1m, in both small & large arrays.
+        # -----------------------------------------------------------
+        num_points_per_hd = len(self.boundaries) // self.n_hd
+        distances_per_hd = [
+            np.min(self.boundaries[i * num_points_per_hd : (i + 1) * num_points_per_hd])
+            for i in range(self.n_hd)
+        ]
+        rotated_distances_per_hd = np.roll(
+            distances_per_hd,
+            shift=(self.n_hd // 4 + self.n_hd // 2)
+        )
 
-        # 4. Validate reward estimates and decide whether to explore
+        # 3.1 Apply a distance-based linear penalty if dist < 1.0
+        #     e.g. dist=0.5 => scale=0.5
+        #          dist=0.9 => scale=0.9
+        #          dist>1.0 => scale=1.0 (no penalty)
+        for i, dist in enumerate(rotated_distances_per_hd):
+            if dist < 1.0:  
+                scale = np.exp(-5 * (1.0 - dist))  # Steeper penalty near walls
+                self.directional_reward_estimates_small[i] *= scale
+                if self.enable_multiscale:
+                    self.directional_reward_estimates_large[i] *= scale
+
+        # 3.2 Renormalize small & large so they sum to 1 (unless they're nearly all zero)
+        sum_small = np.sum(self.directional_reward_estimates_small)
+        if sum_small > 1e-6:
+            self.directional_reward_estimates_small /= sum_small
+
+        if self.enable_multiscale:
+            sum_large = np.sum(self.directional_reward_estimates_large)
+            if sum_large > 1e-6:
+                self.directional_reward_estimates_large /= sum_large
+
+        # -----------------------------------------------------------
+        # 4. Re-compute the final "combined" distribution from the
+        #    updated small & large arrays, if in multiscale mode.
+        # -----------------------------------------------------------
+        if self.enable_multiscale:
+            combined_pot_rew = alpha * self.directional_reward_estimates_small \
+                            + (1.0 - alpha) * self.directional_reward_estimates_large
+        else:
+            # single-scale => final is just the small array
+            combined_pot_rew = self.directional_reward_estimates_small
+
+        # 5. Smooth the final distribution
+        self.directional_reward_estimates = gaussian_filter1d(combined_pot_rew, sigma=4)
+
+        # -----------------------------------------------------------
+        # OPTIONAL 5.1: If you want a second pass to re-penalize
+        # headings after smoothing, do it here. For example:
+        # for i, dist in enumerate(rotated_distances_per_hd):
+        #     if dist < 1.0:
+        #         scale = dist / 1.0
+        #         self.directional_reward_estimates[i] *= scale
+        # # Then renormalize self.directional_reward_estimates again.
+        # -----------------------------------------------------------
+
+        # 6. Renormalize final distribution
+        total_sum = np.sum(self.directional_reward_estimates)
+        if total_sum > 1e-6:
+            self.directional_reward_estimates /= total_sum
+        else:
+            print("All directions are heavily penalized. Triggering exploration.")
+            self.explore()
+            return
+
+        # 7. Compute the final action angle using updated multi-scale logic
+        action_angle = self._compute_action_angle(alpha)
+
+        # -----------------------------------------------------------
+        # Debug prints: see which directions got penalized
+        # -----------------------------------------------------------
+        angles_rad = np.linspace(0, 2 * np.pi, self.n_hd, endpoint=False)
+        angles_deg = np.degrees(angles_rad)
+        chosen_angle_deg = np.degrees(action_angle)
+
+        # print(f"Chosen action angle: {action_angle:.3f} rad ({chosen_angle_deg:.1f}°)")
+        # print("----- Debug Info: Head Directions -----")
+        # for i in range(self.n_hd):
+        #     print(
+        #         f"HD index={i:2d} | "
+        #         f"Angle={angles_deg[i]:6.1f}° | "
+        #         f"Dist raw={distances_per_hd[i]:5.2f} | "
+        #         f"Dist rotated={rotated_distances_per_hd[i]:5.2f} | "
+        #         f"Reward={self.directional_reward_estimates[i]:.3f}"
+        #     )
+
+        # for i, dist in enumerate(rotated_distances_per_hd):
+        #     if dist < 1.0:
+        #         print(
+        #             f"Penalizing reward at index={i}, angle={angles_deg[i]:.1f}°, "
+        #             f"dist={dist:.2f}"
+        #         )
+        # print("----------------------------------------")
+
+        # OPTIONAL: Plot after penalty
+        # self._plot_action_angle_rewards(action_angle)
+
+        # 8. Validate final reward distribution and maybe explore
         if not self._validate_and_maybe_explore():
             return
 
-        # 5. Compute action angle
-        action_angle = self._compute_action_angle(alpha)
-
-        # 6. Validate action angle and move
+        # 9. Validate action angle
         if not self._validate_action_angle(action_angle):
             self.explore()
             return
 
-        # 7. Execute movement
+        # 10. Execute movement
         self._turn_and_move(action_angle)
+
+
+    def _plot_action_angle_rewards(self, action_angle):
+        """
+        Plots the directional rewards and highlights the selected action angle.
+
+        Args:
+            action_angle (float): Selected action angle in radians.
+        """
+        angles = np.linspace(0, 2 * np.pi, self.n_hd, endpoint=False)
+
+        # Normalize rewards based on the maximum value among the 8 head direction rewards
+        max_reward = np.max(self.directional_reward_estimates)
+        normalized_rewards = self.directional_reward_estimates / max_reward if max_reward > 0 else self.directional_reward_estimates
+
+        fig, ax = plt.subplots(subplot_kw={'projection': 'polar'}, figsize=(8, 6))
+        ax.plot(angles, normalized_rewards, label="Normalized Directional Rewards", linewidth=2)
+
+        # Rotate the plot to align 270° (left) to the left on the display
+        ax.set_theta_zero_location('N')  # Set 0° at the top
+        ax.set_theta_direction(-1)       # Clockwise rotation
+
+        ax.plot([action_angle, action_angle], [0, 1],  # Plot line normalized to 1
+                label="Action Angle", color='red', linewidth=2, linestyle='--')
+        ax.set_title("Normalized Directional Rewards and Action Angle", va='bottom')
+        ax.legend(loc='upper right')
+        plt.show()
+
 
     # --------------------------------------------------------------------------
     # Consolidated / Refactored Helpers
@@ -631,7 +759,7 @@ class Driver(Supervisor):
 
         # Multiscale blending
         single_scale_angle = circmean(angles, weights=self.directional_reward_estimates_small)
-        single_scale_conf  = np.sum(self.directional_reward_estimates_small)
+        single_scale_conf = np.sum(self.directional_reward_estimates_small)
 
         action_angle_small = circmean(angles, weights=self.directional_reward_estimates_small)
         action_angle_large = circmean(angles, weights=self.directional_reward_estimates_large)
@@ -663,7 +791,7 @@ class Driver(Supervisor):
         )
 
         return blended_angle
-
+    
     def _validate_action_angle(self, action_angle):
         if np.isnan(action_angle):
             print("Circmean resulted in NaN. Triggering exploration.")
@@ -676,6 +804,7 @@ class Driver(Supervisor):
         angle_to_turn = -np.deg2rad(np.rad2deg(action_angle) - self.current_heading_deg)
         angle_to_turn = ((angle_to_turn + np.pi) % (2 * np.pi)) - np.pi
         self.turn(angle_to_turn)
+        collision_count = 0
 
         # Move
         for _ in range(self.tau_w):
@@ -687,24 +816,48 @@ class Driver(Supervisor):
 
             # Collision logic
             if np.any(self.collided):
-                print("Collision detected. Turning back and retrying.")
-                self.turn(np.pi)  # reverse direction
-                for _ in range(self.tau_w):
-                    self.sense()
-                    self.compute_pcn_activations()
-                    self.update_hmaps()
-                    self.forward()
-                    self.check_goal_reached()
-                    if np.any(self.collided):
-                        print("Still stuck after retry. Switching to explore mode.")
-                        self.explore()
-                        return
-                break  # End collision retry
+                if collision_count > 2:
+                    collision_count = 0
+                    self.explore()
+                else:
+                    collision_count += 1
+                    print("Collision detected. Turning back and retrying.")
+                    self.turn(np.pi)  # reverse direction
+                    for _ in range(self.tau_w):
+                        self.sense()
+                        self.compute_pcn_activations()
+                        self.update_hmaps()
+                        self.forward()
+                        self.check_goal_reached()
+                        if np.any(self.collided):
+                            print("Still stuck after retry. Switching to explore mode.")
+                            self.explore()
+                            return
+                    break  # End collision retry
+
+            # # Wall avoidance logic
+            # lidar_readings = self.range_finder.getRangeImage()
+            # min_distance = np.min(lidar_readings)
+            # if min_distance < 0.5:  # Threshold distance to wall
+            #     print("Wall detected. Avoiding wall.")
+            #     self.turn(np.pi / 2)  # Turn 90 degrees
+            #     for _ in range(self.tau_w):
+            #         self.sense()
+            #         self.compute_pcn_activations()
+            #         self.update_hmaps()
+            #         self.forward()
+            #         self.check_goal_reached()
+            #         if np.any(self.collided):
+            #             print("Collision detected during wall avoidance. Switching to explore mode.")
+            #             self.explore()
+            #             return
+            #     break  # End wall avoidance
+
             if self.done:
                 return
 
     # --------------------------------------------------------------------------
-    # Lower-level Utilities (unchanged or slightly merged)
+    # Lower-level Utilities
     # --------------------------------------------------------------------------
 
     def _calculate_multiscale_rewards(self):
@@ -972,7 +1125,7 @@ class Driver(Supervisor):
         """
         curr_pos = self.robot.getField("translation").getSFVec3f()
         curr_pos_2d = [curr_pos[0], curr_pos[2]]  # Use only x and z coordinates
-        time_limit = 15 # minutes
+        time_limit = 45 # minutes
 
         # In LEARN_OJAS or PLOTTING mode, save only after run_time is reached:
         if (self.mode == RobotMode.LEARN_OJAS or self.mode == RobotMode.LEARN_HEBB or self.mode == RobotMode.PLOTTING) \
