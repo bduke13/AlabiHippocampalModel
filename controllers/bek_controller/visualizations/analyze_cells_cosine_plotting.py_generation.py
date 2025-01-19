@@ -101,11 +101,13 @@ if __name__ == "__main__":
             for spine in ax.spines.values():
                 spine.set_visible(False)
 
-            # Titles/labels with font sizes
+            # Titles/labels with font sizes using mapped names
             if r == 0:
-                ax.set_title(env_name, fontsize=12)
+                ax.set_title(ENV_NAMES[env_name], fontsize=12)
             if c == 0:
-                ax.set_ylabel(model_name, rotation=90, labelpad=10, fontsize=12)
+                ax.set_ylabel(
+                    MODEL_NAMES[model_name], rotation=90, labelpad=10, fontsize=12
+                )
 
     # Shrink the plotting area to 88% of figure width, 95% of figure height, with reduced spacing
     plt.tight_layout(

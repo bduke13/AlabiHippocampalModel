@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import pickle
 import os
 from scipy.interpolate import interp1d
+from scipy.sparse import base
 
 
 def plot_trajectory(
@@ -51,11 +52,17 @@ def plot_trajectory(
     # Plot points at each x,y coordinate
     plt.plot(hmap_x, hmap_y, "bo", markersize=3, alpha=0.7)
 
-    plt.title("Agent Trajectory")
-    plt.xlabel("X Coordinate")
-    plt.ylabel("Y Coordinate")
-    plt.legend()
+    # Increase font sizes for all text elements
+    plt.title("Agent Trajectory", fontsize=16)
+    plt.xlabel("X Coordinate", fontsize=14)
+    plt.ylabel("Y Coordinate", fontsize=14)
+    plt.legend(fontsize=10, loc="upper right")
     plt.grid(True, alpha=0.3)
+
+    # Increase tick label sizes
+    plt.xticks(fontsize=12)
+    plt.yticks(fontsize=12)
+
     plt.gca().set_aspect("equal", adjustable="box")
 
     plt.show()
@@ -63,11 +70,11 @@ def plot_trajectory(
 
 
 if __name__ == "__main__":
+    from controllers.bek_controller.visualizations.analysis_utils import load_hmaps
+
+    base_path = "controllers/bek_controller/IJCNN/2D_250/upright/"
     # Load hmap data
-    with open("hmap_x.pkl", "rb") as f:
-        hmap_x = np.array(pickle.load(f))
-    with open("hmap_y.pkl", "rb") as f:
-        hmap_y = np.array(pickle.load(f))
+    hmap_x, hmap_y, hmap_z = load_hmaps(base_path)
 
     # Plot the trajectory
     plot_trajectory(hmap_x, hmap_y)

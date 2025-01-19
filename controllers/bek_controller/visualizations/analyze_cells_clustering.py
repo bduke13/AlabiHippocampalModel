@@ -124,17 +124,8 @@ sns.barplot(
 axes[3].set_title("Average Clusters Per Non-Zero Cell")
 axes[3].tick_params(axis="x", rotation=45)
 
-# Plot cosine sum
-sns.barplot(
-    data=df,
-    x="end_dir",
-    y="cosine_sum",
-    hue="parent_dir",
-    ax=axes[4],
-    order=order,
-)
-axes[4].set_title("Total Far-Distance Cosine Sum")
-axes[4].tick_params(axis="x", rotation=45)
+# Hide the 6th subplot
+axes[4].axis("off")
 
 # Hide the 6th subplot
 axes[5].axis("off")

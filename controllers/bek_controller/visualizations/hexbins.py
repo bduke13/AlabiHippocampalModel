@@ -86,21 +86,24 @@ def create_hexbin(
 
     # Set the facecolors of the hexbin collection
     hb.set_facecolors(rgba_colors)
+    counts = hb.get_array()  # Number of points per bin
+
+    if analyze:
+        verts = hb.get_offsets()
+        x_centers = verts[:, 0]
+        y_centers = verts[:, 1]
 
     if close_plot:
-        plt.close(fig)  # Release memory for the figure if requested
+        plt.close(fig)
 
     if analyze:
         binned_data = [
-            (x, y, activation) for x, y, activation in zip(x_centers, y_centers, counts)
+            (x, y, activation, count)
+            for x, y, activation, count in zip(x_centers, y_centers, counts, counts)
         ]
-        if close_plot:
-            plt.close(fig)  # Ensure the figure is closed
-        return fig, ax, hb, binned_data
+        return fig, ax, hb, binned_data, counts
 
-    if close_plot:
-        plt.close(fig)  # Ensure the figure is closed
-    return fig, ax, hb
+    return fig, ax, hb, counts
 
 
 def plot_place_cell(
@@ -503,11 +506,6 @@ def plot_cosine_similarity_heatmap(
     ax.set_ylabel("Y Coordinate")
 
     return fig, ax
-
-
-import matplotlib.pyplot as plt
-import numpy as np
-import os
 
 
 def plot_similarity_sums(
