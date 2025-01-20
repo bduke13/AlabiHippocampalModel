@@ -11,7 +11,7 @@ if __name__ == "__main__":
     number_tests = 1
     start_locations = [[4, 4], [-4, 4], [4, -4], [-4, -4]]
     models = ["3D_2L_250_1"]
-    world_name = "inside_steep"
+    world_name = "upright_2"
 
     preferred_va = [0.0, 0.1]
     sigma_d = [0.75] * len(preferred_va)

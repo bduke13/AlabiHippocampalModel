@@ -1,9 +1,11 @@
+# %%
 import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from controllers.bek_controller.visualizations.hexbins import create_hexbin, load_hmaps
+from controllers.bek_controller.visualizations.hexbins import create_hexbin
+from controllers.bek_controller.visualizations.analysis_utils import *
 
 # Set pandas display options
 pd.set_option("display.max_rows", None)
@@ -14,25 +16,6 @@ pd.set_option("display.max_colwidth", None)
 # Define paths and filters
 root_path = "controllers/bek_controller/IJCNN"
 desired_path_ends = ["inside_shallow", "inside_medium", "inside_steep", "upright"]
-
-
-# Define helper functions to filter directories
-def get_available_directories(root_path):
-    directories = []
-    for dirpath, dirnames, filenames in os.walk(root_path):
-        if (
-            "hmap_x.npy" in filenames
-        ):  # Check for specific files to validate directories
-            directories.append(dirpath)
-    return directories
-
-
-def filter_directories(directories, desired_ends):
-    return [
-        directory
-        for directory in directories
-        if any(directory.endswith(end) for end in desired_ends)
-    ]
 
 
 # Collect directories
@@ -52,6 +35,7 @@ path_info = [
 ]
 df = pd.DataFrame(path_info)
 
+# %%
 # Collect data points per hexbin for each world
 bin_counts_per_world = {}
 
@@ -61,19 +45,24 @@ for path in df["full_path"]:
     all_counts = []
 
     for cell_index in range(hmap_z.shape[1]):
-        _, _, _, counts = create_hexbin(
+        _, _, _, _, counts = create_hexbin(
             cell_index,
             hmap_x,
             hmap_y,
             hmap_z,
             normalize=True,
             analyze=True,
+            get_counts=True,
             close_plot=True,
         )
         all_counts.extend(counts)
 
     bin_counts_per_world[path] = all_counts
 
+# %%
+bin_counts_per_world
+
+# %%
 # Plot distribution of bin counts for each world
 plt.figure(figsize=(12, 8))
 for world, counts in bin_counts_per_world.items():

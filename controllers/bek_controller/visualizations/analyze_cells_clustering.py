@@ -49,6 +49,7 @@ for path in df["full_path"]:
         print("Processing:", path)
         hmap_x, hmap_y, hmap_z = load_hmaps(path)
         metrics = get_model_hexbin_metrics(hmap_x, hmap_y, hmap_z, verbose=False)
+        print("hello")
         metrics_list.append(metrics)
     except Exception as e:
         print(f"Error processing {path}: {str(e)}")

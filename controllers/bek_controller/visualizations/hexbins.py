@@ -19,6 +19,7 @@ def create_hexbin(
     normalize: bool = False,
     filter_bottom_ratio: float = 0.0,
     analyze: bool = False,
+    get_counts: bool = False,
     close_plot: bool = False,
 ):
     """
@@ -98,10 +99,12 @@ def create_hexbin(
 
     if analyze:
         binned_data = [
-            (x, y, activation, count)
-            for x, y, activation, count in zip(x_centers, y_centers, counts, counts)
+            (x, y, activation) for x, y, activation in zip(x_centers, y_centers, counts)
         ]
-        return fig, ax, hb, binned_data, counts
+        if get_counts:
+            return fig, ax, hb, binned_data, counts
+        else:
+            return fig, ax, hb, binned_data
 
     return fig, ax, hb, counts
 
@@ -578,6 +581,10 @@ if __name__ == "__main__":
     data_path = "controllers/bek_controller/IJCNN/3D_3L_250/upright/"
     hmap_x, hmap_y, hmap_z = load_hmaps(data_path)
 
+    # %%
+    metrics = get_model_hexbin_metrics(hmap_x, hmap_y, hmap_z, verbose=False)
+
+    # %%
     fig, ax, hb, binned_data = create_hexbin(
         cell_index=0,
         hmap_x=hmap_x,
