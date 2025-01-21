@@ -20,8 +20,8 @@ if __name__ == "__main__":
     # Define name mappings
     MODEL_NAMES = {
         "2D_250": "2D Model",
-        "3D_2L_250_1": "3D-2Layer (v1)",
-        "3D_2L_250_2": "3D-2Layer (v2)",
+        "3D_2L_250_1": "3D-2Layer (0.1 rad)",
+        "3D_2L_250_2": "3D-2Layer (0.2 rad)",
         "3D_3L_250": "3D-3Layer",
     }
 
