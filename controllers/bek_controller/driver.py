@@ -99,8 +99,11 @@ class Driver(Supervisor):
         self.done = False
 
         # Model parameters
-        self.num_small_place_cells = 1000  # world0_20x20
-        self.num_large_place_cells = 200  # world0_20x20
+        # world0_20x20: 1000 small, 200 large
+        # world0_20x20-obstacles: 1000 small, 200 large
+        # world0_20x20-goalBehindWall: 1000 small, 500 large
+        self.num_small_place_cells = 1000  
+        self.num_large_place_cells = 200  
         self.num_reward_cells = 1
         self.n_hd = 8
         self.timestep = 32 * 3
@@ -108,6 +111,15 @@ class Driver(Supervisor):
         if self.mode == RobotMode.EXPLOIT:
             self.tau_w = 10
         self.enable_multiscale = enable_multiscale
+
+        self.force_explore_count = 0
+        self.rotation_accumulator = 0.0
+        self.rotation_loop_count = 0
+        self.last_heading_deg = None
+        self.steps_since_last_loop = 0
+
+        self.LOOP_THRESHOLD = 4            # e.g., 4 loops in a row triggers exploration
+        self.MAX_STEPS_BETWEEN_LOOPS = 5   # if more than 5 steps pass before another loop, reset count
 
         # Robot parameters
         if self.mode == RobotMode.EXPLOIT:
@@ -127,6 +139,7 @@ class Driver(Supervisor):
         
         self.hmap_x = np.zeros(self.num_steps)  # x-coordinates
         self.hmap_y = np.zeros(self.num_steps)  # y-coordinate
+        self.hmap_alpha = np.zeros(self.num_steps)  # alpha
 
         self.hmap_h = np.zeros(
             (self.num_steps, self.n_hd)
@@ -172,17 +185,17 @@ class Driver(Supervisor):
             enable_stdp=enable_stdp,
         )
 
-        # Initialize history maps for both layers
-        self.hmap_z_small = np.zeros((self.num_steps, self.num_small_place_cells))
-        if self.enable_multiscale:
-            self.hmap_z_large = np.zeros((self.num_steps, self.num_large_place_cells))
-
         self.load_rcn(
             num_reward_cells=self.num_reward_cells,
             num_small_place_cells=self.num_small_place_cells,
             num_large_place_cells=self.num_large_place_cells,
             num_replay=5,
         )
+
+        # Initialize history maps for both layers
+        self.hmap_z_small = np.zeros((self.num_steps, self.num_small_place_cells))
+        if self.enable_multiscale:
+            self.hmap_z_large = np.zeros((self.num_steps, self.num_large_place_cells))
 
         print(f"SMALL: Oja's: {self.pcn_small.enable_ojas}, STDP: {self.pcn_small.enable_stdp}")
         if self.enable_multiscale:
@@ -276,7 +289,7 @@ class Driver(Supervisor):
                     input_dim=720,
                     n_hd=n_hd,
                     sigma_ang=90,
-                    sigma_d=3,
+                    sigma_d=1.5,
                 )
                 self.pcn_large = PlaceCellLayer(
                     bvc_layer=bvc,
@@ -349,7 +362,7 @@ class Driver(Supervisor):
                 num_reward_cells=num_reward_cells,
                 input_dim=num_small_place_cells,
                 num_replay=num_replay,
-                learning_rate=0.5,
+                learning_rate=0.1,
             )
             print("Initialized new Small Reward Cell Network.")
 
@@ -365,7 +378,7 @@ class Driver(Supervisor):
                     num_reward_cells=num_reward_cells,
                     input_dim=num_large_place_cells,
                     num_replay=num_replay,
-                    learning_rate=0.1,
+                    learning_rate=0.05,
                 )
                 print("Initialized new Large Reward Cell Network.")
 
@@ -502,16 +515,35 @@ class Driver(Supervisor):
         Dynamically switches between small and large reward scales based on environmental context.
         Uses a distance-based penalty for directions that are within 1m of a wall.
         """
-
+        # -- Forced exploration check --
+        if self.force_explore_count > 0:
+            # Reduce count and switch to exploration
+            self.force_explore_count -= 1
+            if self.force_explore_count == 0:
+                print("Forced exploration complete. Resuming EXPLOIT.")
+            self.explore()
+            return
+        
         # 1. Initial actions and checks
         self._perform_initial_actions()
+        
         if self.step_count <= self.tau_w:
             return  # Not enough steps for an 'exploit' action yet
+
+        # --- DETECT EXCESSIVE ROTATION WITH COOLDOWN ---
+        if self._detect_excessive_rotation_cooldown():
+            print("Excessive rotation with cooldown triggered. Forcing exploration.")
+            self.force_explore_count = 5
+            self.explore()
+            return
 
         # 2. Compute potential rewards (multi-scale or single-scale).
         combined_pot_rew, alpha = self._compute_potential_rewards()
 
-        print(f"Alpha: {alpha:.2f}")
+        if self.enable_multiscale:
+            print(f"Alpha: {alpha:.2f}")
+            if self.step_count <= self.num_steps:
+                self.hmap_alpha[self.step_count] = alpha
 
         # 2.1 Determine the current scale based on alpha
         new_scale = "small" if alpha > 0.5 else "large" if self.enable_multiscale else "single-scale"
@@ -536,7 +568,7 @@ class Driver(Supervisor):
             shift=(self.n_hd // 4 + self.n_hd // 2)
         )
 
-        # 3.1 Apply a distance-based linear penalty if dist < 1.0
+        # 3.1 Apply a distance-based exponential penalty if dist < 1.0
         for i, dist in enumerate(rotated_distances_per_hd):
             if dist < 1:
                 scale = np.exp(-5 * (1.0 - dist))  # Steeper penalty near walls
@@ -572,7 +604,8 @@ class Driver(Supervisor):
         if total_sum > 1e-6:
             self.directional_reward_estimates /= total_sum
         else:
-            print("All directions are heavily penalized. Triggering exploration.")
+            print("All directions are heavily penalized. Forcing future exploration.")
+            self.force_explore_count = 10  # <--- Set forced exploration
             self.explore()
             return
 
@@ -585,13 +618,13 @@ class Driver(Supervisor):
 
         # 9. Validate action angle
         if not self._validate_action_angle(action_angle):
+            print("Invalid action angle. Forcing future exploration.")
+            self.force_explore_count = 10  # <--- Set forced exploration
             self.explore()
             return
 
         # 10. Execute movement
         self._turn_and_move(action_angle)
-
-
 
     def _plot_action_angle_rewards(self, action_angle):
         """
@@ -691,6 +724,59 @@ class Driver(Supervisor):
 
     #     return combined_pot_rew, alpha
 
+    def _detect_excessive_rotation_cooldown(self):
+        """
+        Tracks how much the robot has turned overall and checks if it performs
+        N (LOOP_THRESHOLD) consecutive 360° rotations within a short window (MAX_STEPS_BETWEEN_LOOPS).
+        If so, returns True to trigger forced exploration. Otherwise, returns False.
+        """
+
+        # On first run, initialize last_heading_deg to current heading
+        if self.last_heading_deg is None:
+            self.last_heading_deg = self.current_heading_deg
+            return False  # can't detect rotation until we have 2 headings
+
+        # 1. Calculate heading change in [-180, 180] range
+        heading_diff = self.current_heading_deg - self.last_heading_deg
+        heading_diff = ((heading_diff + 180) % 360) - 180  # e.g. 350 -> -10
+
+        # 2. Accumulate the absolute turn
+        self.rotation_accumulator += abs(heading_diff)
+
+        # 3. Check if we've done a full 360 turn
+        if self.rotation_accumulator >= 360.0:
+            # Completed one full loop
+            self.rotation_loop_count += 1
+            self.rotation_accumulator -= 360.0  # remove one loop's worth; or reset to 0
+
+            # Check if this loop happened within the cooldown window
+            if self.steps_since_last_loop > self.MAX_STEPS_BETWEEN_LOOPS:
+                # Too many steps passed since last loop -> reset
+                self.rotation_loop_count = 1  # current loop is our new baseline
+
+            # Reset step counter since we just counted a loop
+            self.steps_since_last_loop = 0
+
+            # If we've reached the threshold of consecutive loops, we’re stuck
+            if self.rotation_loop_count >= self.LOOP_THRESHOLD:
+                # Reset so we don't trigger again immediately
+                self.rotation_loop_count = 0
+                self.rotation_accumulator = 0.0
+                self.steps_since_last_loop = 0
+                print(f"Detected {self.LOOP_THRESHOLD} consecutive loops within {self.MAX_STEPS_BETWEEN_LOOPS} steps!")
+                return True
+        else:
+            # If no new loop, increment steps since last loop
+            self.steps_since_last_loop += 1
+            # If we've gone too long without completing a loop, reset loop count
+            if self.steps_since_last_loop > self.MAX_STEPS_BETWEEN_LOOPS:
+                self.rotation_loop_count = 0
+
+        # 4. Update heading reference for next step
+        self.last_heading_deg = self.current_heading_deg
+
+        return False
+
     def _validate_and_maybe_explore(self):
         """
         Checks if directional_reward_estimates is valid. If invalid, trigger explore mode.
@@ -772,8 +858,10 @@ class Driver(Supervisor):
             # Collision logic
             if np.any(self.collided):
                 if collision_count > 2:
-                    collision_count = 0
+                    # Robot is repeatedly colliding; force exploration for 10 calls
+                    self.force_explore_count = 10
                     self.explore()
+                    return
                 else:
                     collision_count += 1
                     print("Collision detected. Turning back and retrying.")
@@ -785,7 +873,8 @@ class Driver(Supervisor):
                         self.forward()
                         self.check_goal_reached()
                         if np.any(self.collided):
-                            print("Still stuck after retry. Switching to explore mode.")
+                            print("Still stuck after retry. Forcing future exploration.")
+                            self.force_explore_count = 10
                             self.explore()
                             return
                     break
@@ -833,84 +922,6 @@ class Driver(Supervisor):
             rcn.update_reward_cell_activations(pcn_future)
             pot_rew[d] = tf.reduce_max(np.nan_to_num(rcn.reward_cell_activations))
         return pot_rew
-
-    ########################################### RECORDING ###########################################
-
-    def record_sensor_data(self):
-        """Records sensor data during robot operation.
-
-        Stores:
-            - Current position coordinates
-            - Heading angle in degrees
-            - LiDAR range readings
-
-        The data is stored in the sensor_data dictionary with keys:
-        'positions', 'headings', and 'lidar'.
-
-        Returns:
-            None
-        """
-        # Get current position
-        curr_pos = self.robot.getField("translation").getSFVec3f()
-        self.sensor_data["positions"].append([curr_pos[0], curr_pos[2]])
-
-        # Get current heading angle in degrees
-        current_heading_deg = int(self.get_bearing_in_degrees(self.compass.getValues()))
-        self.sensor_data["headings"].append(current_heading_deg)
-
-        # Get LiDAR readings
-        lidar_readings = self.range_finder.getRangeImage()
-        self.sensor_data["lidar"].append(
-            lidar_readings.copy()
-        )  # Copy to avoid referencing issues
-
-    def save_sensor_data(self):
-        """
-        Saves the recorded sensor data to files for later use.
-        """
-        # Convert lists to NumPy arrays
-        positions = np.array(self.sensor_data["positions"])
-        headings = np.array(self.sensor_data["headings"])
-        lidar_data = np.array(self.sensor_data["lidar"])
-
-        # Save data to files
-        np.save("recorded_positions.npy", positions)
-        np.save("recorded_headings.npy", headings)
-        np.save("recorded_lidar.npy", lidar_data)
-
-        print("Sensor data saved.")
-
-    def recording(self):
-        """
-        Handles the logic for recording sensor data without using place fields.
-        """
-        # Sense the environment
-        self.sense()
-
-        # Record sensor data
-        self.record_sensor_data()
-
-        # Move the robot forward
-        if not np.any(self.collided):
-            self.forward()
-        else:
-            # If collided, turn by a random angle to avoid obstacle
-            self.turn(np.random.uniform(-np.pi / 2, np.pi / 2))
-            self.collided.assign([0, 0])  # Reset collision status
-
-        # Introduce a 5% chance to rotate randomly
-        if rng.uniform(0, 1) < 0.05:  # 5% probability
-            self.turn(
-                np.random.normal(0, np.deg2rad(30))
-            )  # Random turn with normal distribution
-
-        # Increment the step count
-        self.step_count += 1
-
-        # Check if the maximum number of steps has been reached
-        if self.step_count >= self.num_steps:
-            self.save()
-            print("Data recording complete.")
 
     ########################################### SENSE ###########################################
 
@@ -978,7 +989,7 @@ class Driver(Supervisor):
 
         # Get environmental complexity
         # self.vis_density = self.compute_visual_density(self.boundaries, self.current_heading_deg)
-        self.vis_density = self.compute_visual_density(self.boundaries)
+        # self.vis_density = self.compute_visual_density(self.boundaries)
 
         # 10. Proceed to the next timestep in the robot's control loop.
         self.step(self.timestep)
@@ -1006,20 +1017,20 @@ class Driver(Supervisor):
             self.pcn_small.get_place_cell_activations(
                 input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)],
                 hd_activations=self.hd_activations,
-                vis_density=self.vis_density,  # No modulation
+                vis_density=None,  # No modulation
             )
 
             # Compute activations for the large PCN (affected by complexity)
             self.pcn_large.get_place_cell_activations(
                 input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)],
                 hd_activations=self.hd_activations,
-                vis_density=self.vis_density,  # Modulated by complexity
+                vis_density=None,  # Modulated by complexity
             )
         else:
             self.pcn_small.get_place_cell_activations(
                 input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)],
                 hd_activations=self.hd_activations,
-                vis_density=0.0,  # No modulation
+                vis_density=None,  # No modulation
             )
         
         self.step(self.timestep)
@@ -1036,16 +1047,16 @@ class Driver(Supervisor):
             # Always record the small PCN
             self.hmap_z_small[self.step_count] = self.pcn_small.place_cell_activations.numpy()
             
-            self.hmap_h[self.step_count] = self.hd_activations
-            self.hmap_vis_density[self.step_count] = self.vis_density
+            # self.hmap_h[self.step_count] = self.hd_activations
+            # self.hmap_vis_density[self.step_count] = self.vis_density
             
             if self.enable_multiscale:
                 # If multiscale, also record the large PCN
                 self.hmap_z_large[self.step_count] = self.pcn_large.place_cell_activations.numpy()
-                self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn_large.bvc_activations)
-            else:
-                # Single-scale => only small PCN, so record e.g. the small BVC sum
-                self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn_small.bvc_activations)
+                # self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn_large.bvc_activations)
+            # else:
+            #     # Single-scale => only small PCN, so record e.g. the small BVC sum
+            #     self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn_small.bvc_activations)
 
         self.step_count += 1
 
@@ -1122,6 +1133,7 @@ class Driver(Supervisor):
             else:
                 self.stop()
                 self.done = True
+                self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
                 return
 
     ########################################### AUTO PILOT ###########################################
@@ -1373,10 +1385,7 @@ class Driver(Supervisor):
             for attr, filename in [
                 ("hmap_x", "hmap_x.pkl"),
                 ("hmap_y", "hmap_y.pkl"),
-                ("hmap_z_small", "hmap_z_small.pkl"),
-                ("hmap_g", "hmap_g.pkl"),
-                ("hmap_h", "hmap_h.pkl"),
-                ("hmap_vis_density", "hmap_vis_density.pkl"),
+                ("hmap_z_small", "hmap_z_small.pkl")
             ]:
                 with open(f"{hmaps_dir}/{filename}", "wb") as output:
                     pickle.dump(getattr(self, attr)[: self.step_count], output)
@@ -1386,7 +1395,7 @@ class Driver(Supervisor):
                 with open(f"{hmaps_dir}/hmap_z_large.pkl", "wb") as output:
                     pickle.dump(self.hmap_z_large[: self.step_count], output)
                     files_saved.append(f"{hmaps_dir}/hmap_z_large.pkl")
-        
+
         if save_path:
             # Determine the base directory based on multiscale or vanilla mode
             base_stats_dir = os.path.join(
@@ -1401,6 +1410,7 @@ class Driver(Supervisor):
             trial_id = getattr(self, "trial_id", "default")
             hmap_x_file = os.path.join(hmaps_path_dir, f"{trial_id}_hmap_x.pkl")
             hmap_y_file = os.path.join(hmaps_path_dir, f"{trial_id}_hmap_y.pkl")
+            hmap_alpha_file = os.path.join(hmaps_path_dir, f"{trial_id}_hmap_alpha.pkl")
 
             # Save only up to the current step count
             with open(hmap_x_file, "wb") as fx:
@@ -1409,8 +1419,11 @@ class Driver(Supervisor):
             with open(hmap_y_file, "wb") as fy:
                 pickle.dump(self.hmap_y[:self.step_count], fy)
                 files_saved.append(hmap_y_file)
+            with open(hmap_alpha_file, "wb") as fa:
+                pickle.dump(self.hmap_alpha[:self.step_count], fa)
+                files_saved.append(hmap_alpha_file)
 
-            print(f"Saved hmap_x and hmap_y for {trial_id} to {hmaps_path_dir}")
+            print(f"Saved path data for trial {trial_id}.")
             return
 
         # User confirmation dialog
@@ -1446,9 +1459,9 @@ class Driver(Supervisor):
             f"{hmaps_dir}/hmap_y.pkl",
             f"{hmaps_dir}/hmap_g.pkl",
             f"{hmaps_dir}/hmap_h.pkl",
-            f"{hmaps_dir}/hmap_vis_density.pkl",
             f"{hmaps_dir}/hmap_z_small.pkl",
             f"{hmaps_dir}/hmap_z_large.pkl",
+            f"{hmaps_dir}/hmap_alpha.pkl",
         ]
 
         # Remove all files
