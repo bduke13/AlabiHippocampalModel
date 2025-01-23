@@ -34,7 +34,7 @@ Transform {
       }
       geometry Cylinder {
         height 0.0001
-        radius 0.6
+        radius 0.8
       }
     }
   ]
