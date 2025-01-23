@@ -66,7 +66,7 @@ class RewardCellLayer:
         # Create a copy of the place cell network
         pcn_copy = deepcopy(pcn)
         weight_update = tf.zeros_like(self.w_in)
-        for time_step in range(10):
+        for time_step in range(20):
             # Exponential decay factor for the current time step
             exponential_decay_factor = tf.math.exp(-time_step / 6)
             # Normalize the place cell activations using L2 norm with added stability

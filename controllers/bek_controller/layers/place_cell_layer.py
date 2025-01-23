@@ -79,7 +79,7 @@ class PlaceCellLayer:
         # Trace of head direction cells for eligibility tracking
         self.hd_cell_trace = tf.zeros((n_hd, 1, 1), tf.float32)
 
-    def get_place_cell_activations(self, input_data, hd_activations, vis_density, collided=False):
+    def get_place_cell_activations(self, input_data, hd_activations, vis_density=None, collided=False):
         # Store the previous place cell activations
         self.prev_place_cell_activations = tf.identity(self.place_cell_activations)
 
