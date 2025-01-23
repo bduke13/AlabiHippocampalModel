@@ -3,6 +3,7 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 if __name__ == "__main__":
 
@@ -53,11 +54,11 @@ if __name__ == "__main__":
     fig, axes = plt.subplots(
         n_rows,
         n_cols,
-        figsize=(2.5 * n_cols, 2.5 * n_rows),  # Increased from 2.5 to 3.0
+        figsize=(2.5 * n_cols, 2.5 * n_rows),
         gridspec_kw={
-            "hspace": 0.02,
-            "wspace": 0.02,
-        },  # Reduced both horizontal and vertical spacing
+            "hspace": 0.02,  # Reduced vertical spacing
+            "wspace": 0.02,  # Keep horizontal spacing tight
+        },
     )
 
     # Ensure axes is a 2D array
@@ -80,14 +81,16 @@ if __name__ == "__main__":
                 sums = subset["cosine_similarity_sum"].values
 
                 # Slightly smaller points
+                # Normalize sums by total number of bins
+                normalized_sums = sums / 2662
                 sc = ax.scatter(
                     x_vals,
                     y_vals,
-                    c=sums,
+                    c=normalized_sums,
                     cmap="viridis",
-                    vmin=global_min,
-                    vmax=global_max,
-                    s=4,  # ~10% smaller than 30
+                    vmin=global_min / 2662,  # Normalize global min/max
+                    vmax=global_max / 2662,
+                    s=3,  # ~10% smaller than 30
                 )
                 scatter_obj = sc
             else:
@@ -110,9 +113,7 @@ if __name__ == "__main__":
                 )
 
     # Shrink the plotting area to 88% of figure width, 95% of figure height, with reduced spacing
-    plt.tight_layout(
-        rect=[0, 0, 0.88, 0.95], h_pad=-0.1, w_pad=-0.1
-    )  # Reduced both horizontal and vertical padding
+    plt.tight_layout(rect=[0, 0, 0.88, 0.95], h_pad=0.1, w_pad=-0.1)
 
     # Make the color bar bigger by increasing fraction from 0.02 -> 0.04
     if scatter_obj is not None:
@@ -122,13 +123,40 @@ if __name__ == "__main__":
             fraction=0.04,  # about twice as large
             pad=0.02,
         )
-        cbar.set_label(
-            "Sum of Cosine Similarities beyond Distance Threshold", fontsize=14
-        )
 
-    # Move the suptitle a bit higher
-    fig.suptitle(
-        "Aliasing Index by Environment", fontsize=20, x=0.5, y=0.96
-    )  # x=0.5 centers the title over the entire figure
+    plt.show()
 
+    # Create bar plot of sums
+    fig, ax = plt.subplots(figsize=(12, 6))
+    fig.suptitle("Mean Aliasing Index by Environment", fontsize=16)
+
+    # Calculate sums for each model and environment
+    sum_data = []
+    for env_name in ENV_ORDER:
+        env_data = df[df["environment"] == env_name]
+        for model_name in MODEL_ORDER:
+            model_data = env_data[df["model"] == model_name]
+            if len(model_data) > 0:
+                total_sum = model_data["cosine_similarity_sum"].sum() / (2662**2)
+                sum_data.append(
+                    {
+                        "Environment": ENV_NAMES[env_name],
+                        "Model": MODEL_NAMES[model_name],
+                        "Total Sum": total_sum,
+                    }
+                )
+
+    # Convert to DataFrame for plotting
+    sum_df = pd.DataFrame(sum_data)
+
+    # Create grouped bar plot
+    sns.barplot(data=sum_df, x="Environment", y="Total Sum", hue="Model", ax=ax)
+
+    # Customize plot
+    ax.set_xlabel("Environment", fontsize=12)
+    ax.set_ylabel("Mean Aliasing Index", fontsize=12)
+    ax.tick_params(labelsize=10)
+    ax.legend(title="Model", fontsize=10, title_fontsize=12)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.show()

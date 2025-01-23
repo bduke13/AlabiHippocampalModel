@@ -511,6 +511,199 @@ def plot_cosine_similarity_heatmap(
     return fig, ax
 
 
+def analyze_bin_similarities(
+    stacked_dict,
+    bin_index=None,
+    distance_threshold=2.0,
+    show_plots=True,
+    save_path=None,
+):
+    """
+    Analyzes and visualizes cosine similarities between a selected bin and all other bins.
+
+    Args:
+        stacked_dict (dict): Dictionary of binned data with keys as (x, y) coordinates
+        bin_index (int, optional): Index of bin to analyze. If None, picks random bin
+        distance_threshold (float): Minimum distance to consider for similarity calculation
+        show_plots (bool): Whether to display the plots
+        save_path (str, optional): Path to save the plots
+
+    Returns:
+        tuple: (bin_coords, similarities, fig_spatial, fig_dist)
+            - bin_coords: (x,y) coordinates of selected bin
+            - similarities: Dictionary mapping (x,y) coords to similarity values
+            - fig_spatial: Figure object for spatial similarity plot
+            - fig_dist: Figure object for similarity distribution plot
+    """
+    coords = np.array(list(stacked_dict.keys()))
+
+    # Select bin
+    if bin_index is None:
+        bin_index = np.random.randint(0, len(coords))
+    bin_coords = tuple(coords[bin_index])
+
+    # Get vector for selected bin
+    vec_ref = np.array(stacked_dict[bin_coords])
+
+    # Calculate similarities to all other bins
+    similarities = {}
+    for x, y in coords:
+        coord = (x, y)
+        if coord == bin_coords:
+            similarities[coord] = 1.0  # Self-similarity
+            continue
+
+        # Calculate distance
+        distance = np.sqrt((bin_coords[0] - x) ** 2 + (bin_coords[1] - y) ** 2)
+        if distance <= distance_threshold:
+            similarities[coord] = 0.0
+            continue
+
+        # Calculate cosine similarity
+        vec = np.array(stacked_dict[coord])
+        if norm(vec_ref) > 0 and norm(vec) > 0:
+            cos_sim = np.dot(vec_ref, vec) / (norm(vec_ref) * norm(vec))
+            similarities[coord] = cos_sim
+        else:
+            similarities[coord] = 0.0
+
+    if show_plots:
+        # Create spatial similarity plot
+        fig_spatial, ax1 = plt.subplots(figsize=(10, 8))
+        scatter_coords = np.array(list(similarities.keys()))
+        scatter_values = np.array(list(similarities.values()))
+
+        sc = ax1.scatter(
+            scatter_coords[:, 0],
+            scatter_coords[:, 1],
+            c=scatter_values,
+            cmap="viridis",
+            vmin=-1,
+            vmax=1,
+        )
+        ax1.scatter(
+            bin_coords[0],
+            bin_coords[1],
+            color="red",
+            marker="*",
+            s=200,
+            label="Selected Bin",
+        )
+        plt.colorbar(sc, label="Cosine Similarity")
+        ax1.set_xlabel("X Coordinate")
+        ax1.set_ylabel("Y Coordinate")
+        ax1.set_title(
+            f"Spatial Distribution of Cosine Similarities\nReference Bin: {bin_coords}"
+        )
+        ax1.legend()
+
+        # Create similarity distribution plot
+        fig_dist, ax2 = plt.subplots(figsize=(8, 6))
+        similarity_values = [
+            v for v in similarities.values() if v != 1.0
+        ]  # Exclude self-similarity
+        ax2.hist(similarity_values, bins=50, density=True, alpha=0.7)
+        ax2.axvline(
+            np.mean(similarity_values),
+            color="r",
+            linestyle="--",
+            label=f"Mean: {np.mean(similarity_values):.3f}",
+        )
+        ax2.set_xlabel("Cosine Similarity")
+        ax2.set_ylabel("Density")
+        ax2.set_title("Distribution of Cosine Similarities")
+        ax2.legend()
+
+        if save_path:
+            fig_spatial.savefig(f"{save_path}_spatial.png")
+            fig_dist.savefig(f"{save_path}_distribution.png")
+
+        plt.show()
+
+    return bin_coords, similarities, fig_spatial, fig_dist
+
+
+def analyze_active_cells_per_bin(
+    stacked_dict, activation_threshold=0.0, show_plot=True, save_path=None
+):
+    """
+    Analyzes the number of active cells in each bin and creates a histogram.
+
+    Args:
+        stacked_dict (dict): Dictionary mapping (x,y) coordinates to lists of cell activations
+        activation_threshold (float): Minimum activation value to consider a cell active
+        show_plot (bool): Whether to display the histogram
+        save_path (str, optional): Path to save the plot
+
+    Returns:
+        tuple: (active_cells_dict, mean_active_cells, std_active_cells, fig)
+            - active_cells_dict: Dictionary mapping (x,y) coords to number of active cells
+            - mean_active_cells: Mean number of active cells across all bins
+            - std_active_cells: Standard deviation of active cells across bins
+            - fig: Figure object if show_plot is True, else None
+    """
+    active_cells_dict = {}
+    active_cells_counts = []
+
+    # Count active cells for each bin
+    for coord, activations in stacked_dict.items():
+        active_count = sum(1 for act in activations if act > activation_threshold)
+        active_cells_dict[coord] = active_count
+        active_cells_counts.append(active_count)
+
+    # Calculate statistics
+    active_cells_counts = np.array(active_cells_counts)
+    mean_active_cells = np.mean(active_cells_counts)
+    std_active_cells = np.std(active_cells_counts)
+
+    fig = None
+    if show_plot:
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        # Create histogram
+        counts, bins, _ = ax.hist(
+            active_cells_counts,
+            bins=50,
+            density=False,
+            alpha=0.7,
+            color="blue",
+            edgecolor="black",
+        )
+
+        # Add vertical line for mean
+        ax.axvline(
+            mean_active_cells,
+            color="red",
+            linestyle="--",
+            label=f"Mean: {mean_active_cells:.1f}",
+        )
+
+        # Add text with statistics
+        stats_text = f"Mean: {mean_active_cells:.1f}\nStd: {std_active_cells:.1f}"
+        ax.text(
+            0.95,
+            0.95,
+            stats_text,
+            transform=ax.transAxes,
+            verticalalignment="top",
+            horizontalalignment="right",
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+        )
+
+        ax.set_xlabel("Number of Active Cells")
+        ax.set_ylabel("Number of Bins")
+        ax.set_title("Distribution of Active Cells per Bin")
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+
+        if save_path:
+            plt.savefig(save_path)
+
+        plt.tight_layout()
+
+    return active_cells_dict, mean_active_cells, std_active_cells, fig
+
+
 def plot_similarity_sums(
     similarity_sums,
     title="Far-Cosine Similarity Sums",
@@ -616,3 +809,45 @@ if __name__ == "__main__":
         close_plot=True,
     )
     fig.show()
+
+    # %%
+
+    # Get stacked dictionary first
+    all_binned_data = []
+    for cell_index in range(hmap_z.shape[1]):
+        _, _, _, binned_data = create_hexbin(
+            cell_index=cell_index,
+            hmap_x=hmap_x,
+            hmap_y=hmap_y,
+            hmap_z=hmap_z,
+            normalize=True,
+            filter_bottom_ratio=0.1,
+            analyze=True,
+            close_plot=True,
+        )
+        all_binned_data.append(binned_data)
+
+    stacked_dict = stack_binned_data_by_location(all_binned_data)
+
+    # %%
+    # Analyze a random bin
+    bin_coords, similarities, fig_spatial, fig_dist = analyze_bin_similarities(
+        stacked_dict,
+        bin_index=None,  # Random bin
+        distance_threshold=2.0,
+        show_plots=True,
+        save_path="",
+    )
+
+    # %%
+    active_cells_dict, mean_active, std_active, fig = analyze_active_cells_per_bin(
+        stacked_dict,
+        activation_threshold=0.2,  # Adjust this threshold as needed
+        show_plot=True,
+        save_path="",  # Optional
+    )
+    fig.show()
+
+    print(
+        f"Average number of active cells per bin: {mean_active:.2f} ± {std_active:.2f}"
+    )

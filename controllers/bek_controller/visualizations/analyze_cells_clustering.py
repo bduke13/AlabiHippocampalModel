@@ -18,6 +18,21 @@ pd.set_option("display.max_colwidth", None)
 
 desired_path_ends = ["inside_shallow", "inside_medium", "inside_steep", "upright"]
 
+MODEL_NAMES = {
+    "2D_250": "2D Model",
+    "3D_2L_250_1": "3D-2Layer (0.1 rad)",
+    "3D_2L_250_2": "3D-2Layer (0.2 rad)",
+    "3D_3L_250": "3D-3Layer",
+}
+
+ENV_NAMES = {
+    "upright": "Upright",
+    "inside_shallow": "Shallow Tilt 30°",
+    "inside_medium": "Medium Tilt 45°",
+    "inside_steep": "Steep Tilt 60°",
+}
+
+
 root_path = "controllers/bek_controller/IJCNN"
 directories = get_available_directories(root_path)
 
@@ -49,7 +64,6 @@ for path in df["full_path"]:
         print("Processing:", path)
         hmap_x, hmap_y, hmap_z = load_hmaps(path)
         metrics = get_model_hexbin_metrics(hmap_x, hmap_y, hmap_z, verbose=False)
-        print("hello")
         metrics_list.append(metrics)
     except Exception as e:
         print(f"Error processing {path}: {str(e)}")
@@ -72,24 +86,36 @@ print("\nModel Analysis Results (DBSCAN):")
 print(df)
 
 # %%
-# Filter for the models right before plotting
-allowed_models = ["2D_250", "3D_2L_250_1", "3D_3L_250"]
+# Filter for allowed models
+allowed_models = ["2D_250", "3D_2L_250_1", "3D_2L_250_2", "3D_3L_250"]
 df = df[df["parent_dir"].isin(allowed_models)]
-# Plot the DBSCAN metrics and cosine similarity on one graph
+
+# Desired order for environments
 order = ["upright", "inside_shallow", "inside_medium", "inside_steep"]
 
-fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+# Create subplots
+fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 fig.suptitle("Model Metrics Comparison by Environment Type", fontsize=16)
 axes = axes.flatten()
 
 # Plot total clusters
 sns.barplot(
-    data=df, x="end_dir", y="total_clusters", hue="parent_dir", ax=axes[0], order=order
+    data=df,
+    x="end_dir",
+    y="total_clusters",
+    hue="parent_dir",
+    ax=axes[0],
+    order=order,
 )
-axes[0].set_title("Total Clusters")
-axes[0].tick_params(axis="x", rotation=45)
+axes[0].set_title("Total Clusters", fontsize=12)
+axes[0].set_xticklabels([ENV_NAMES.get(env, env) for env in order])
+axes[0].set_xlabel("", fontsize=10)
+axes[0].set_ylabel("Clusters", fontsize=10)
+axes[0].legend(
+    title="Model", labels=[MODEL_NAMES[m] for m in allowed_models], loc="upper right"
+)
 
-# Plot non-zero cells
+# Plot proportion of non-zero cells
 sns.barplot(
     data=df,
     x="end_dir",
@@ -98,10 +124,12 @@ sns.barplot(
     ax=axes[1],
     order=order,
 )
-axes[1].set_title("Non-Zero Cells")
-axes[1].tick_params(axis="x", rotation=45)
+axes[1].set_title("Proportion of Non-Zero Cells", fontsize=12)
+axes[1].set_xticklabels([ENV_NAMES.get(env, env) for env in order])
+axes[1].set_xlabel("", fontsize=10)
+axes[1].set_ylabel("Proportion", fontsize=10)
 
-# Plot cells with more than 1 cluster
+# Plot proportion of cells with multiple clusters
 sns.barplot(
     data=df,
     x="end_dir",
@@ -110,8 +138,10 @@ sns.barplot(
     ax=axes[2],
     order=order,
 )
-axes[2].set_title("Cells with More Than 1 Cluster")
-axes[2].tick_params(axis="x", rotation=45)
+axes[2].set_title("Proportion of Cells with Multiple Clusters", fontsize=12)
+axes[2].set_xticklabels([ENV_NAMES.get(env, env) for env in order])
+axes[2].set_xlabel("", fontsize=10)
+axes[2].set_ylabel("Proportion", fontsize=10)
 
 # Plot average clusters per non-zero cell
 sns.barplot(
@@ -122,14 +152,11 @@ sns.barplot(
     ax=axes[3],
     order=order,
 )
-axes[3].set_title("Average Clusters Per Non-Zero Cell")
-axes[3].tick_params(axis="x", rotation=45)
+axes[3].set_title("Average Clusters per Non-Zero Cell", fontsize=12)
+axes[3].set_xticklabels([ENV_NAMES.get(env, env) for env in order])
+axes[3].set_xlabel("", fontsize=10)
+axes[3].set_ylabel("Average Clusters", fontsize=10)
 
-# Hide the 6th subplot
-axes[4].axis("off")
-
-# Hide the 6th subplot
-axes[5].axis("off")
-
+# Adjust layout
 plt.tight_layout(rect=[0, 0, 1, 0.95])
 plt.show()
