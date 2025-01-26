@@ -53,15 +53,15 @@ def plot_trajectory(
     plt.plot(hmap_x, hmap_y, "bo", markersize=3, alpha=0.7)
 
     # Increase font sizes for all text elements
-    plt.title("Agent Trajectory", fontsize=16)
-    plt.xlabel("X Coordinate", fontsize=14)
-    plt.ylabel("Y Coordinate", fontsize=14)
+    plt.title("", fontsize=16)
+    plt.xlabel("", fontsize=16)
+    plt.ylabel("", fontsize=18)
     plt.legend(fontsize=10, loc="upper right")
     plt.grid(True, alpha=0.3)
 
     # Increase tick label sizes
-    plt.xticks(fontsize=12)
-    plt.yticks(fontsize=12)
+    plt.xticks(fontsize=0)
+    plt.yticks(fontsize=0)
 
     plt.gca().set_aspect("equal", adjustable="box")
 
