@@ -118,12 +118,12 @@ class Driver(Supervisor):
         self.last_heading_deg = None
         self.steps_since_last_loop = 0
 
-        self.LOOP_THRESHOLD = 4            # e.g., 4 loops in a row triggers exploration
+        self.LOOP_THRESHOLD = 2            # e.g., 4 loops in a row triggers exploration
         self.MAX_STEPS_BETWEEN_LOOPS = 5   # if more than 5 steps pass before another loop, reset count
 
         # Robot parameters
         if self.mode == RobotMode.EXPLOIT:
-            self.max_speed = 16
+            self.max_speed = 8
         else:
             self.max_speed = 16
 
@@ -541,7 +541,6 @@ class Driver(Supervisor):
         combined_pot_rew, alpha = self._compute_potential_rewards()
 
         if self.enable_multiscale:
-            print(f"Alpha: {alpha:.2f}")
             if self.step_count <= self.num_steps:
                 self.hmap_alpha[self.step_count] = alpha
 
@@ -605,7 +604,6 @@ class Driver(Supervisor):
             self.directional_reward_estimates /= total_sum
         else:
             print("All directions are heavily penalized. Forcing future exploration.")
-            self.force_explore_count = 10  # <--- Set forced exploration
             self.explore()
             return
 
@@ -619,7 +617,6 @@ class Driver(Supervisor):
         # 9. Validate action angle
         if not self._validate_action_angle(action_angle):
             print("Invalid action angle. Forcing future exploration.")
-            self.force_explore_count = 10  # <--- Set forced exploration
             self.explore()
             return
 
@@ -859,7 +856,7 @@ class Driver(Supervisor):
             if np.any(self.collided):
                 if collision_count > 2:
                     # Robot is repeatedly colliding; force exploration for 10 calls
-                    self.force_explore_count = 10
+                    self.force_explore_count = 5
                     self.explore()
                     return
                 else:
@@ -874,7 +871,7 @@ class Driver(Supervisor):
                         self.check_goal_reached()
                         if np.any(self.collided):
                             print("Still stuck after retry. Forcing future exploration.")
-                            self.force_explore_count = 10
+                            self.force_explore_count = 5
                             self.explore()
                             return
                     break
@@ -901,7 +898,7 @@ class Driver(Supervisor):
         alpha = grad_small / (grad_small + grad_large + 1e-6)
 
         # Add bias towards small scale
-        bias = 0.1  # Adjust this value to control the bias strength
+        bias = 0.2  # Adjust this value to control the bias strength
         alpha = min(max(alpha + bias, 0.0), 1.0)
 
         combined = alpha * pot_rew_small + (1 - alpha) * pot_rew_large
