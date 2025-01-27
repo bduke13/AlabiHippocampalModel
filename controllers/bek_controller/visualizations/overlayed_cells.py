@@ -4,7 +4,7 @@ import pickle
 import json
 import matplotlib.colors as mcolors
 
-gridsize = 100
+gridsize = 150
 
 # Load the colors list
 with open("C:/Users/alexm/Documents/senior_design/AlabiHippocampalModel-1/controllers/bek_controller/visualizations/colors.json", "r") as f:

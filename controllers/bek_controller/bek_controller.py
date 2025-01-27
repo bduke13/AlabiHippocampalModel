@@ -13,13 +13,20 @@ bot = Driver()
 # 1. RANDOM_WALK
 # 2. CURIOSITY
 # 3. HYBRID
+# 4. INTELLIGENT_CURIOSITY
 
 bot.initialization(
-    mode=RobotMode.LEARN_HEBB,
+    mode=RobotMode.PLOTTING,
     randomize_start_loc=True,
-    run_time_hours=3,
+    run_time_hours=10,
     start_loc=[2, -2],
     explore_mthd=ExploreMethod.RANDOM_WALK,
     use_existing_visitation_map=False,
+    environment_label="15x15",
+    bvc_max_dist=30.0,
+    bvc_sigma_ang=90.0,
+    bvc_sigma_d=0.6,
+    num_place_cells=1000,
+    n_hd=8,
 ) 
 bot.run()

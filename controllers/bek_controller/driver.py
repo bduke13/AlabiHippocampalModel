@@ -79,6 +79,7 @@ class ExploreMethod(Enum):
     RANDOM_WALK = auto()
     CURIOSITY = auto()
     HYBRID = auto()
+    INTELLIGENT_CURIOSITY = auto()
 
 class Driver(Supervisor):
     """Controls robot navigation and learning using neural networks for place and reward cells.
@@ -131,6 +132,13 @@ class Driver(Supervisor):
         enable_stdp: Optional[bool] = None,
         explore_mthd: ExploreMethod = ExploreMethod.RANDOM_WALK,
         use_existing_visitation_map: bool = False,
+        # NEW FIELDS for environment and BVC/PlaceCell parameters:
+        environment_label: str = "10x10",
+        bvc_max_dist: float = 10.0,
+        bvc_sigma_ang: float = 90.0,
+        bvc_sigma_d: float = 0.5,
+        num_place_cells: int = 200,
+        n_hd: int = 8,
     ):
         """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
@@ -150,15 +158,20 @@ class Driver(Supervisor):
         Returns:
             None
         """
+
         self.mode = mode
         self.explore_mthd = explore_mthd
+        self.environment_label = environment_label
 
         # Model parameters
-        self.num_place_cells = 200
+        self.num_place_cells = num_place_cells
         self.num_reward_cells = 1
-        self.n_hd = 8
+        self.n_hd = n_hd
         self.timestep = 32 * 3
         self.tau_w = 10  # time constant for the window function
+        self.bvc_max_dist = bvc_max_dist
+        self.bvc_sigma_ang = bvc_sigma_ang
+        self.bvc_sigma_d = bvc_sigma_d
 
         # Robot parameters
         self.max_speed = 16
@@ -264,7 +277,14 @@ class Driver(Supervisor):
                 self.visitation_map = pickle.load(f)
         else:
             self.visitation_map = {}
-        
+
+        # New: A separate visitation map used ONLY for metric calculations
+        if use_existing_visitation_map and os.path.exists("visitation_map_metrics.pkl"):
+            with open("visitation_map_metrics.pkl", "rb") as f:
+                self.visitation_map_metrics = pickle.load(f)
+        else:
+            self.visitation_map_metrics = {}
+            
 
     def load_pcn(
         self,
@@ -295,11 +315,11 @@ class Driver(Supervisor):
                 print("Loaded existing Place Cell Network.")
         except:
             bvc = BoundaryVectorCellLayer(
-                max_dist=10,
+                max_dist=self.bvc_max_dist,
                 input_dim=720,
                 n_hd=n_hd,
-                sigma_ang=90,
-                sigma_d=0.5,
+                sigma_ang=self.bvc_sigma_ang,
+                sigma_d=self.bvc_sigma_d,
             )
 
             self.pcn = PlaceCellLayer(
@@ -403,6 +423,8 @@ class Driver(Supervisor):
             self.curiosity_explore()
         elif self.explore_mthd == ExploreMethod.HYBRID:
             self.hybrid_explore()
+        elif self.explore_mthd == ExploreMethod.INTELLIGENT_CURIOSITY:
+            self.intelligent_curiosity_explore()
         else:
             self.random_walk_explore()
 
@@ -466,110 +488,252 @@ class Driver(Supervisor):
 
         self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
 
-    def curiosity_explore(self):
-        """Performs curiosity-driven exploration with learning updates and goal checks."""
+    def curiosity_explore(self) -> None:
+        """
+        Performs curiosity-driven exploration with obstacle avoidance.
+        
+        1) Updates sensors and place cells each step.
+        2) Uses a decaying visitation map for novelty.
+        3) Penalizes directions that are too close to walls (based on LiDAR).
+        4) Picks the direction with the highest final "score."
+        5) If all directions are blocked, do a random turn.
+        """
         self.prev_pcn_state = self.current_pcn_state
         self.current_pcn_state *= 0
 
         for s in range(self.tau_w):
+            # Sense environment (LiDAR, bumpers, compass, etc.)
             self.sense()
+            # Update place cell and reward cell states, etc.
             self.compute()
 
-            # Update visitation map and decay counts
+            # Update visitation map (curiosity map) and apply decay
             self.update_visitation_map()
             self.decay_visitation_counts()
 
-            # Compute novelty scores and choose direction
-            directions, novelty_scores = self.compute_novelty_scores()
-            total_novelty = sum(novelty_scores)
-            if total_novelty == 0:
-                probabilities = [1 / len(novelty_scores)] * len(novelty_scores)
-            else:
-                probabilities = [n / total_novelty for n in novelty_scores]
-            chosen_direction = np.random.choice(directions, p=probabilities)
-            self.move_in_direction(chosen_direction)
+            # Compute direction scores using novelty + obstacle check
+            directions, scores = self.compute_novelty_scores()
 
-            # Update reward cell activations and perform TD update if applicable
-            self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations)
-            actual_reward = self.get_actual_reward()
-            self.rcn.td_update(self.pcn.place_cell_activations, next_reward=actual_reward)
-
-            # Accumulate place cell activations for learning
-            if (
-                self.mode == RobotMode.DMTP
-                or self.mode == RobotMode.LEARN_HEBB
-                or self.mode == RobotMode.EXPLOIT
-            ):
-                self.current_pcn_state += self.pcn.place_cell_activations
-                self.check_goal_reached()
-
-            # Handle collision by turning randomly
-            if np.any(self.collided):
+            # If all directions are 0 after obstacle penalization, do a fallback
+            total_score = sum(scores)
+            if total_score <= 1e-9:
+                # Everything blocked or heavily penalized
                 random_angle = np.random.uniform(-np.pi, np.pi)
                 self.turn(random_angle)
+                continue  # Move to next sub-step in tau_w
+
+            # Select direction with highest score, or sample stochastically
+            # Option A: pick the direction with max score
+            best_idx = int(np.argmax(scores))
+            chosen_dir = directions[best_idx]
+
+            # Optional: for a softmax approach
+            # probs = [sc / total_score for sc in scores]
+            # chosen_dir = np.random.choice(directions, p=probs)
+
+            # Execute movement in that direction
+            self.move_in_direction(chosen_dir)
+
+            # Check collision
+            if np.any(self.collided):
+                # Turn randomly if collided
+                random_angle = np.random.uniform(-np.pi, np.pi)
+                self.turn(random_angle)
+                # Reset collision status
+                self.collided.assign([0, 0])
                 break
 
-        # Normalize accumulated place cell activations
-        if (
-            self.mode == RobotMode.DMTP
-            or self.mode == RobotMode.LEARN_HEBB
-            or self.mode == RobotMode.EXPLOIT
-        ):
-            self.current_pcn_state /= s  # 's' should be greater than 0
+            # Accumulate place cell activations for training
+            if (self.mode == RobotMode.DMTP
+                or self.mode == RobotMode.LEARN_HEBB
+                or self.mode == RobotMode.EXPLOIT):
+                self.current_pcn_state += self.pcn.place_cell_activations
 
-        self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
+        # Normalize accumulated activations if needed
+        if s > 0 and (self.mode in [RobotMode.DMTP, RobotMode.LEARN_HEBB, RobotMode.EXPLOIT]):
+            self.current_pcn_state /= float(s)
+
+        # Add a random turn at the end to keep it from going too straight
+        self.turn(np.random.normal(0, np.deg2rad(30)))
     
-    def hybrid_explore(self):
-        """Performs exploration using a hybrid of random walk and curiosity-driven methods."""
-        epsilon = 0.2  # Probability of choosing a random action; adjust as needed
+    def hybrid_explore(self) -> None:
+        """
+        Performs exploration using a hybrid of random exploration and curiosity-driven methods,
+        with obstacle avoidance via LiDAR-based penalties.
+
+        Logic:
+        - With probability epsilon, pick a random direction (forward/left/right),
+            but skip directions that are obviously blocked (dist < threshold).
+        - Otherwise (1-epsilon), we call compute_novelty_scores() (which includes obstacle avoidance)
+            to pick the direction with the best novelty.
+        - If everything is blocked, fallback to a random turn.
+        - Update place cells, handle collisions, etc.
+        """
+
+        epsilon = 0.3  # Probability of random exploration (30%), adjust as you like
 
         self.prev_pcn_state = self.current_pcn_state
         self.current_pcn_state *= 0
 
         for s in range(self.tau_w):
+            # 1) Sense environment (LiDAR, bumpers, etc.)
+            self.sense()
+            # 2) Update place cells, reward cells, etc.
+            self.compute()
+
+            # 3) Update visitation map & apply decay for curiosity logic
+            self.update_visitation_map()
+            self.decay_visitation_counts()
+
+            # 4) Decide: random or curiosity-driven
+            if np.random.rand() < epsilon:
+                # Random branch
+                directions = ["forward", "left", "right"]
+                threshold = 1.0  # If LiDAR sees a wall within 1m, skip that direction
+                viable_dirs = []
+
+                for d in directions:
+                    # We'll do a quick LiDAR check
+                    angle_offset = 0.0
+                    if d == "left":
+                        angle_offset = 45.0
+                    elif d == "right":
+                        angle_offset = -45.0
+
+                    check_angle_deg = (self.current_heading_deg + angle_offset) % 360
+                    idx = int(round(check_angle_deg * 2)) % 720  # 720 LiDAR pts
+                    dist_to_obstacle = self.boundaries[idx]
+
+                    if dist_to_obstacle > threshold:
+                        # If the path is not too close to a wall, consider it
+                        viable_dirs.append(d)
+
+                if not viable_dirs:
+                    # If no directions are viable, fallback: do a random turn
+                    self.turn(np.random.uniform(-np.pi, np.pi))
+                    continue
+                else:
+                    # Pick among viable directions randomly
+                    chosen_dir = np.random.choice(viable_dirs)
+
+            else:
+                # Curiosity branch
+                directions, scores = self.compute_novelty_scores()
+                total_score = sum(scores)
+                if total_score <= 1e-9:
+                    # Everything is blocked or heavily penalized
+                    self.turn(np.random.uniform(-np.pi, np.pi))
+                    continue
+
+                best_idx = int(np.argmax(scores))
+                chosen_dir = directions[best_idx]
+
+            # 5) Move in the chosen direction
+            self.move_in_direction(chosen_dir)
+
+            # 6) Check collision
+            if np.any(self.collided):
+                # Turn randomly if collided
+                random_angle = np.random.uniform(-np.pi, np.pi)
+                self.turn(random_angle)
+                # Reset collision
+                self.collided.assign([0, 0])
+                break
+
+            # 7) If in a learning mode, accumulate place cell activations
+            if self.mode in [RobotMode.DMTP, RobotMode.LEARN_HEBB, RobotMode.EXPLOIT]:
+                self.current_pcn_state += self.pcn.place_cell_activations
+
+        # end-for loop
+
+        # 8) Normalize place cell activations if needed
+        if s > 0 and self.mode in [RobotMode.DMTP, RobotMode.LEARN_HEBB, RobotMode.EXPLOIT]:
+            self.current_pcn_state /= float(s)
+
+        # 9) Optionally add a small random turn at the end
+        self.turn(np.random.normal(0, np.deg2rad(30)))
+
+    def intelligent_curiosity_explore(self) -> None:
+        """
+        An enhanced exploration method that:
+        1) Uses curiosity + wall avoidance to pick directions (compute_novelty_scores).
+        2) Detects if 'stuck' (coverage not increasing for X steps).
+            If stuck, do a 360 scan to find an exit.
+        3) Adapts how long it moves forward based on LiDAR distance in the chosen direction:
+            larger open space => more forward steps, smaller space => fewer steps.
+        """
+
+        # --- STUCK DETECTION INITIALIZATION ---
+        if not hasattr(self, 'stuck_steps_count'):
+            self.stuck_steps_count = 0
+        if not hasattr(self, 'last_coverage_count'):
+            self.last_coverage_count = 0
+
+        stuck_threshold_steps = 200  # how many steps with no coverage increase => 'stuck'
+
+        self.prev_pcn_state = self.current_pcn_state
+        self.current_pcn_state *= 0
+
+        for s in range(self.tau_w):
+            # 1) Sense & compute
             self.sense()
             self.compute()
 
-            if np.random.rand() < epsilon:
-                # Random exploration
-                action = np.random.choice(['forward', 'left', 'right'])
+            # 2) Update visitation map & decay
+            self.update_visitation_map()
+            self.decay_visitation_counts()
+
+            # 3) Check coverage progress => stuck detection
+            coverage_count = len(self.visitation_map)
+            if coverage_count > self.last_coverage_count:
+                self.stuck_steps_count = 0
+                self.last_coverage_count = coverage_count
             else:
-                # Curiosity-driven exploration
-                action = self.select_curiosity_action()
+                self.stuck_steps_count += 1
 
-            self.move_in_direction_random(action)
+            # 4) If stuck => do a 360 scan
+            if self.stuck_steps_count >= stuck_threshold_steps:
+                print("Seems we are stuck. Attempting a 360-degree scan for exit.")
+                success = self.scan_for_exit(step_deg=15, threshold=0.75)
+                if success:
+                    self.stuck_steps_count = 0
+                else:
+                    print("Scan didn't find a clear exit. Doing random turn fallback.")
+                    self.turn(np.random.uniform(-np.pi, np.pi))
+                    self.stuck_steps_count = 0
 
-            # Update learning and check goal
-            self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations)
-            actual_reward = self.get_actual_reward()
-            self.rcn.td_update(self.pcn.place_cell_activations, next_reward=actual_reward)
+            # 5) Normal curiosity logic => directions + scores
+            directions, scores = self.compute_novelty_scores()
+            total_score = sum(scores)
+            if total_score <= 1e-9:
+                # All directions blocked => random turn
+                self.turn(np.random.uniform(-np.pi, np.pi))
+                continue
 
-            # Accumulate place cell activations
-            if (
-                self.mode == RobotMode.DMTP
-                or self.mode == RobotMode.LEARN_HEBB
-                or self.mode == RobotMode.EXPLOIT
-            ):
-                self.current_pcn_state += self.pcn.place_cell_activations
-                self.check_goal_reached()
+            best_idx = int(np.argmax(scores))
+            chosen_dir = directions[best_idx]
 
-            # Handle collision
+            # 6) Now do ADAPTIVE FORWARD movement in the chosen direction
+            self.adaptive_move_in_direction(chosen_dir)
+
+            # 7) Check collision
             if np.any(self.collided):
                 random_angle = np.random.uniform(-np.pi, np.pi)
                 self.turn(random_angle)
+                self.collided.assign([0, 0])
                 break
 
-        # Normalize accumulated activations
-        if (
-            self.mode == RobotMode.DMTP
-            or self.mode == RobotMode.LEARN_HEBB
-            or self.mode == RobotMode.EXPLOIT
-        ):
-            self.current_pcn_state /= s  # 's' should be greater than 0
+            # 8) Accumulate place cell activations if in learning mode
+            if self.mode in [RobotMode.DMTP, RobotMode.LEARN_HEBB, RobotMode.EXPLOIT]:
+                self.current_pcn_state += self.pcn.place_cell_activations
 
-        # Choose a new random direction
+        # end for
+        if s > 0 and self.mode in [RobotMode.DMTP, RobotMode.LEARN_HEBB, RobotMode.EXPLOIT]:
+            self.current_pcn_state /= float(s)
+
+        # Small random turn at end
         self.turn(np.random.normal(0, np.deg2rad(30)))
-    
+
     def update_visitation_map(self):
         """Update the visitation map with the current cell based on robot's position."""
         curr_pos = self.robot.getField("translation").getSFVec3f()
@@ -577,6 +741,8 @@ class Driver(Supervisor):
         y_cell = int(curr_pos[2] / self.grid_resolution)
         cell = (x_cell, y_cell)
         self.visitation_map[cell] = self.visitation_map.get(cell, 0) + 1
+        # Update the "metrics" visitation map (NO decay):
+        self.visitation_map_metrics[cell] = self.visitation_map_metrics.get(cell, 0) + 1
 
     def decay_visitation_counts(self):
         """Decay visitation counts to allow areas to become novel again over time."""
@@ -584,46 +750,81 @@ class Driver(Supervisor):
             self.visitation_map[cell] *= self.decay_rate
 
     def compute_novelty_scores(self):
-        """Compute novelty scores for possible movement directions."""
-        directions = ['forward', 'left', 'right']
-        novelty_scores = []
+        """
+        Computes a combined 'score' for each direction = novelty * obstacle_factor.
 
-        for direction in directions:
-            predicted_position = self.predict_position(direction)
-            if predicted_position is None:
-                novelty_scores.append(0)
+        Returns:
+            (directions, scores):
+                directions: list of direction labels (e.g., ["forward","left","right"])
+                scores: corresponding float values after obstacle penalty
+        """
+        directions = ["forward", "left", "right"]
+        scores = []
+
+        for d in directions:
+            # 1) Predict position if we move in direction d
+            predicted_pos = self.predict_position(d)
+            if predicted_pos is None:
+                # Possibly can't move that way at all, or no data
+                scores.append(0.0)
                 continue
 
-            x_cell = int(predicted_position[0] / self.grid_resolution)
-            y_cell = int(predicted_position[1] / self.grid_resolution)
+            # 2) Compute novelty from visitation map
+            x_cell = int(predicted_pos[0] / self.grid_resolution)
+            y_cell = int(predicted_pos[1] / self.grid_resolution)
             cell = (x_cell, y_cell)
 
-            visitation_count = self.visitation_map.get(cell, 0)
-            novelty = 1 / (visitation_count + 1)
-            novelty_scores.append(novelty)
+            visits = self.visitation_map.get(cell, 0)
+            novelty = 1.0 / (visits + 1.0)
 
-        return directions, novelty_scores
+            # 3) Check LiDAR for obstacles in direction d
+            # We do a rough check: (current_heading_deg + offset) -> boundary index
+            angle_offset = 0.0
+            if d == "left":
+                angle_offset = 45  # deg
+            elif d == "right":
+                angle_offset = -45  # deg
+
+            check_angle_deg = (self.current_heading_deg + angle_offset) % 360
+            # LiDAR array self.boundaries has 720 points (0.5 deg each)
+            idx = int(round(check_angle_deg * 2)) % 720
+            dist_to_obstacle = self.boundaries[idx]
+
+            # 4) Apply obstacle penalty if too close
+            threshold = 1.0
+            penalty_factor = 2.0
+            if dist_to_obstacle < threshold:
+                # e.g., exponential decay near the wall
+                penalty_factor = np.exp(-5.0 * (threshold - dist_to_obstacle))
+                # or simply penalty_factor = 0.0 to completely block it
+
+            final_score = novelty * penalty_factor
+            scores.append(final_score)
+
+        return directions, scores
 
     def predict_position(self, direction):
-        """Predict the robot's future position if it moves in the given direction."""
-        movement_distance = 0.5  # Adjust as needed
-        current_heading_rad = np.deg2rad(self.current_heading_deg)
+        """
+        Predict the (x,z) position if we move in the given direction.
+        Could be as simple as small step from current heading or more advanced logic.
+        Return None if we can't reliably predict or no data.
+        """
+        # Example: step 0.5m forward in direction d
+        # This is minimal logic, you can refine as you want
 
-        if direction == 'forward':
-            angle = current_heading_rad
-        elif direction == 'left':
-            angle = current_heading_rad + np.pi / 4  # Turn 45 degrees left
-        elif direction == 'right':
-            angle = current_heading_rad - np.pi / 4  # Turn 45 degrees right
-        else:
-            return None
+        step_distance = 0.5  # how far we move
+        current_pos = self.robot.getField("translation").getSFVec3f()
+        heading_deg = self.current_heading_deg
 
-        curr_pos = self.robot.getField("translation").getSFVec3f()
-        new_x = curr_pos[0] + movement_distance * np.cos(angle)
-        new_z = curr_pos[2] + movement_distance * np.sin(angle)
+        # Adjust heading based on direction
+        if direction == "left":
+            heading_deg += 45
+        elif direction == "right":
+            heading_deg -= 45
 
-        if self.is_collision_predicted(new_x, new_z):
-            return None
+        heading_rad = np.deg2rad(heading_deg)
+        new_x = current_pos[0] + step_distance * np.cos(heading_rad)
+        new_z = current_pos[2] + step_distance * np.sin(heading_rad)
 
         return (new_x, new_z)
     
@@ -633,28 +834,25 @@ class Driver(Supervisor):
         return False  # Placeholder implementation
 
     def move_in_direction(self, direction):
-        """Move the robot in the specified direction."""
-        if direction == 'forward':
+        """
+        A helper to turn and move forward in a discrete direction.
+        Example:
+          - 'forward': no turn, just go straight
+          - 'left': turn ~45 deg left, move forward
+          - 'right': turn ~45 deg right, move forward
+        """
+        if direction == "forward":
+            # minimal turn, then forward
             self.forward()
-        elif direction == 'left':
-            self.turn(np.deg2rad(45))  # Turn 45 degrees left
+        elif direction == "left":
+            self.turn(np.deg2rad(45))
             self.forward()
-        elif direction == 'right':
-            self.turn(-np.deg2rad(45))  # Turn 45 degrees right
+        elif direction == "right":
+            self.turn(np.deg2rad(-45))
             self.forward()
-
-    def move_in_direction_random(self, direction):
-        """Move the robot in the specified direction with adjusted turning angles."""
-        if direction == 'forward':
-            self.forward()
-        elif direction == 'left':
-            turn_angle = np.deg2rad(np.random.uniform(30, 90))  # Random angle between 30 and 90 degrees
-            self.turn(turn_angle)
-            self.forward()
-        elif direction == 'right':
-            turn_angle = -np.deg2rad(np.random.uniform(30, 90))
-            self.turn(turn_angle)
-            self.forward()
+        else:
+            # If needed, handle other directions
+            pass
 
 
     def select_curiosity_action(self):
@@ -674,6 +872,85 @@ class Driver(Supervisor):
         chosen_direction = np.random.choice(directions, p=probabilities)
         return chosen_direction
 
+    
+    def adaptive_move_in_direction(self, direction: str, max_sub_steps=5):
+        """
+        Moves in 'direction' with an adaptive number of forward steps based on LiDAR distance.
+        - If there's a large open space, take more forward steps.
+        - If the obstacle is close, do fewer steps or none.
+
+        Args:
+            direction: "forward", "left", "right" (or more if you have them).
+            max_sub_steps: the max number of sub-steps we might take if the space is huge.
+        """
+        # 1) Turn to the chosen direction first
+        if direction == "forward":
+            turn_offset_deg = 0.0
+        elif direction == "left":
+            turn_offset_deg = 45.0
+        elif direction == "right":
+            turn_offset_deg = -45.0
+        else:
+            turn_offset_deg = 0.0  # default if unknown direction
+
+        # Turn to that direction from current heading
+        angle_offset = np.deg2rad((self.current_heading_deg + turn_offset_deg) - self.current_heading_deg)
+        self.turn(angle_offset)
+
+        # 2) Sense again to measure forward distance
+        self.sense()
+        forward_idx = int(round(self.current_heading_deg * 2)) % 720
+        forward_dist = self.boundaries[forward_idx]
+
+        # Fix: if forward_dist is infinite, clamp it to a large number
+        if np.isinf(forward_dist):
+            forward_dist = 30.0  # or some large float
+
+        # 3) Convert forward_dist => how many sub-steps to take
+        # e.g. sub_steps = int(forward_dist * 2), but clamp to [1, max_sub_steps]
+        sub_steps = int(forward_dist * 2)
+        sub_steps = max(1, min(sub_steps, max_sub_steps))
+
+        # 4) Perform those sub-steps
+        for i in range(sub_steps):
+            self.forward()
+            self.sense()
+            if np.any(self.collided):
+                break
+
+
+    def scan_for_exit(self, step_deg=15, threshold=0.75):
+        """
+        Rotate in increments of step_deg from 0..360. 
+        At each orientation, sense LiDAR, record distance.
+        If the best distance is above 'threshold', move forward in that direction.
+        Return True if we moved, False if no good direction found.
+        """
+        original_heading = self.current_heading_deg
+        best_dist = 0.0
+        best_angle = None
+
+        for angle in range(0, 360, step_deg):
+            target_angle_deg = (original_heading + angle) % 360
+            delta = np.deg2rad(target_angle_deg - self.current_heading_deg)
+            self.turn(delta)
+            self.sense()
+
+            idx = int(round(self.current_heading_deg * 2)) % 720
+            dist = self.boundaries[idx]
+            if dist > best_dist:
+                best_dist = dist
+                best_angle = self.current_heading_deg
+
+        if best_angle is not None and best_dist > threshold:
+            angle_diff = np.deg2rad(best_angle - self.current_heading_deg)
+            self.turn(angle_diff)
+            print(f"ScanForExit => best_angle={best_angle:.2f}°, dist={best_dist:.2f}")
+            self.forward()
+            return True
+        else:
+            return False 
+    
 
 
     ########################################### EXPLOIT ###########################################
@@ -1219,6 +1496,8 @@ class Driver(Supervisor):
                 files_saved.append("hmap_h.pkl")
             with open("visitation_map.pkl", "wb") as output:
                 pickle.dump(self.visitation_map, output)
+            with open("visitation_map_metrics.pkl", "wb") as output:
+                pickle.dump(self.visitation_map_metrics, output)
 
         root = tk.Tk()
         root.withdraw()  # Hide the main window

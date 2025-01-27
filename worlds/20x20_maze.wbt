@@ -1,0 +1,267 @@
+#VRML_SIM R2021a utf8
+WorldInfo {
+  info [
+    "iRobot Create Maze (20x20) environment"
+    "A moderately complex maze for testing exploration and pathfinding."
+  ]
+  title "Create 20x20 Maze"
+  coordinateSystem "NUE"
+}
+
+Viewpoint {
+  orientation 1 0 0 4.71238898038469
+  position 0 35 0
+  near 0.1
+  follow "agent"
+  followType "None"
+}
+
+TexturedBackground {
+}
+
+# RectangleArena with 20x20 floor, minimal bounding thickness
+RectangleArena {
+  floorSize 20 20
+  wallThickness 0.01
+  wallHeight 0.01
+  floorAppearance NULL
+}
+
+DirectionalLight {
+  direction 0 -1 0
+  intensity 1.0
+}
+
+#
+# The main robot agent: 'Create' with sensors
+#
+DEF agent Create {
+  translation -9.5 0.04 -9.5
+  rotation 0 1 0 0
+  supervisor TRUE
+  controller "bek_controller"  # Or your chosen controller
+  bodySlot [
+    Solid {
+      translation 0 0.04 -0.08
+      children [
+        Display {
+          width 100
+          height 100
+        }
+        Compass {
+        }
+        DEF range-finder RangeFinder {
+          fieldOfView 6.28
+          width 720
+          height 1
+          spherical TRUE
+          maxRange 30
+        }
+        Camera {
+          translation -0.002 0.02 0
+          rotation 0 1 0 1.57
+          name "lefteye"
+          fieldOfView 3.14
+          width 720
+          height 360
+          spherical TRUE
+          recognition Recognition {
+          }
+        }
+        Camera {
+          translation 0.002 0.02 0
+          rotation 0 1 0 -1.57
+          name "righteye"
+          fieldOfView 3.14
+          width 720
+          height 360
+          spherical TRUE
+          recognition Recognition {
+          }
+        }
+        Shape {
+          appearance PBRAppearance {
+          }
+          geometry Cylinder {
+            height 0.04
+            radius 0.05
+          }
+        }
+      ]
+    }
+  ]
+}
+
+#
+# Outer walls
+#
+Wall {
+  name "OuterWall1"
+  translation 0 0 -10
+  size 20.3 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.7 0.45 0.25
+  }
+}
+
+Wall {
+  name "OuterWall2"
+  translation -10 0 0
+  rotation 0 1 0 1.5708
+  size 19.7 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.7 0.45 0.25
+  }
+}
+
+Wall {
+  name "OuterWall3"
+  translation 0 0 10
+  size 20.3 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.7 0.45 0.25
+  }
+}
+
+Wall {
+  name "OuterWall4"
+  translation 10 0 0
+  rotation 0 1 0 1.5708
+  size 19.7 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.7 0.45 0.25
+  }
+}
+
+#
+# Internal Maze Walls
+# We'll place about a dozen to create corridors.
+#
+
+# A corridor near bottom
+Wall {
+  name "InnerWall1"
+  translation -7.5 0 -8
+  rotation 0 1 0 0
+  size 5 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+Wall {
+  name "InnerWall2"
+  translation -5 0 -5.5
+  rotation 0 1 0 1.5708
+  size 5 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+# A corridor dividing lower-left area
+Wall {
+  name "InnerWall3"
+  translation -3 0 -7
+  rotation 0 1 0 0
+  size 4 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+Wall {
+  name "InnerWall4"
+  translation -1 0 -4
+  rotation 0 1 0 1.5708
+  size 6 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+# Center corridor
+Wall {
+  name "InnerWall5"
+  translation 2 0 -2
+  rotation 0 1 0 0
+  size 5 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+# Vertical piece near center
+Wall {
+  name "InnerWall6"
+  translation 4 0 1
+  rotation 0 1 0 1.5708
+  size 6 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+# Another dividing corridor on right side
+Wall {
+  name "InnerWall7"
+  translation 7 0 -3
+  rotation 0 1 0 0
+  size 6 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+# Another horizontal near top left
+Wall {
+  name "InnerWall8"
+  translation -6 0 5
+  rotation 0 1 0 0
+  size 6 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+# Another vertical near top
+Wall {
+  name "InnerWall9"
+  translation -3 0 7
+  rotation 0 1 0 1.5708
+  size 4 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+Wall {
+  name "InnerWall10"
+  translation 3 0 6
+  rotation 0 1 0 1.5708
+  size 7 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+# Some final barriers to create compartments
+Wall {
+  name "InnerWall11"
+  translation 5 0 4
+  rotation 0 1 0 0
+  size 4 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+Wall {
+  name "InnerWall12"
+  translation 8 0 7
+  rotation 0 1 0 1.5708
+  size 4 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}

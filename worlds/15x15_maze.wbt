@@ -1,0 +1,221 @@
+#VRML_SIM R2021a utf8
+WorldInfo {
+  info [
+    "iRobot Create Maze (15x15) environment"
+  ]
+  title "Create 15x15 Maze"
+  coordinateSystem "NUE"
+}
+
+Viewpoint {
+  orientation 1 0 0 4.71238898038469
+  position 0 25 0
+  near 0.1
+  follow "agent"
+  followType "None"
+}
+
+TexturedBackground {
+}
+
+# Make a rectangle arena with 15x15 floor,
+# minimal positive wallThickness and wallHeight to avoid Lua errors
+RectangleArena {
+  floorSize 15 15
+  wallThickness 0.01
+  wallHeight 0.01
+  floorAppearance NULL
+}
+
+# The main robot agent: 'Create' with sensors
+DEF agent Create {
+  translation -6.5 0.04 -6.5
+  rotation 0 1 0 0
+  supervisor TRUE
+  controller "bek_controller" # or your controller name
+
+  bodySlot [
+    Solid {
+      translation 0 0.04 -0.08
+      children [
+        Display {
+          width 100
+          height 100
+        }
+        Compass {
+        }
+        DEF range-finder RangeFinder {
+          fieldOfView 6.28
+          width 720
+          height 1
+          spherical TRUE
+          maxRange 30
+        }
+        Camera {
+          translation -0.002 0.02 0
+          rotation 0 1 0 1.57
+          name "lefteye"
+          fieldOfView 3.14
+          width 720
+          height 360
+          spherical TRUE
+          recognition Recognition {
+          }
+        }
+        Camera {
+          translation 0.002 0.02 0
+          rotation 0 1 0 -1.57
+          name "righteye"
+          fieldOfView 3.14
+          width 720
+          height 360
+          spherical TRUE
+          recognition Recognition {
+          }
+        }
+        Shape {
+          appearance PBRAppearance {
+          }
+          geometry Cylinder {
+            height 0.04
+            radius 0.05
+          }
+        }
+      ]
+    }
+  ]
+}
+
+# DirectionalLight shining downward
+DirectionalLight {
+  direction 0 -1 0
+  intensity 1.0
+}
+
+#
+# Outer Walls (bounding box) - each must have a unique name
+#
+Wall {
+  name "OuterWall1"
+  translation 0 0 -7.5
+  size 15.3 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.7 0.45 0.25
+  }
+}
+
+Wall {
+  name "OuterWall2"
+  translation -7.5 0 0
+  rotation 0 1 0 1.5708
+  size 14.7 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.7 0.45 0.25
+  }
+}
+
+Wall {
+  name "OuterWall3"
+  translation 0 0 7.5
+  size 15.3 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.7 0.45 0.25
+  }
+}
+
+Wall {
+  name "OuterWall4"
+  translation 7.5 0 0
+  rotation 0 1 0 1.5708
+  size 14.7 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.7 0.45 0.25
+  }
+}
+
+
+#
+# Internal Maze Walls
+# (Positions and lengths chosen to form a basic corridor/maze layout)
+# Each also must have a unique 'name'.
+#
+
+Wall {
+  name "InnerWall1"
+  translation -4.5 0 -5.0
+  rotation 0 1 0 1.5708
+  size 2.0 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+Wall {
+  name "InnerWall2"
+  translation -3.0 0 -3.0
+  rotation 0 1 0 0
+  size 3.0 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+Wall {
+  name "InnerWall3"
+  translation -1.5 0 -3.0
+  rotation 0 1 0 1.5708
+  size 3.0 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+Wall {
+  name "InnerWall4"
+  translation 1.5 0 -1.0
+  rotation 0 1 0 0
+  size 5.0 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+Wall {
+  name "InnerWall5"
+  translation 0 0 1.5
+  rotation 0 1 0 1.5708
+  size 3.0 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+Wall {
+  name "InnerWall6"
+  translation -3.0 0 4.0
+  rotation 0 1 0 0
+  size 6.0 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+Wall {
+  name "InnerWall7"
+  translation 5.0 0 2.0
+  rotation 0 1 0 1.5708
+  size 4.0 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+Wall {
+  name "InnerWall8"
+  translation 2.0 0 5.0
+  rotation 0 1 0 0
+  size 3.0 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}

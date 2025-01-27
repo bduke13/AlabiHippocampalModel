@@ -28,6 +28,7 @@ def main():
     w_rec_tripartite = pcn.w_rec_tripartite.numpy()  # Convert to NumPy array
     n_hd, num_pc, _ = w_rec_tripartite.shape
 
+
     # Aggregate over head directions by computing the average
     adjacency_matrix = np.mean(w_rec_tripartite, axis=0)
 
