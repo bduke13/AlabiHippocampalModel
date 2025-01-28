@@ -163,6 +163,8 @@ class Driver(Supervisor):
         self.explore_mthd = explore_mthd
         self.environment_label = environment_label
         self.weight_change_history = []
+        self.metrics_interval = 200
+        self.metrics_over_time = []
 
         # Model parameters
         self.num_place_cells = num_place_cells
@@ -1280,6 +1282,13 @@ class Driver(Supervisor):
         # Increment timestep (unchanged).
         self.step_count += 1
 
+         # NEW CODE: Check if step_count is multiple of metrics_interval
+        if self.step_count % self.metrics_interval == 0:
+            # We compute partial metrics from 0..current step_count
+            partial_metrics = self.compute_place_cell_metrics(partial_step_count=self.step_count)
+            partial_metrics['step'] = self.step_count  # label which step we are at
+            self.metrics_over_time.append(partial_metrics)
+
     ########################################### CHECK GOAL REACHED ###########################################
 
     def check_goal_reached(self):
@@ -1314,7 +1323,6 @@ class Driver(Supervisor):
             )
         elif self.getTime() >= 60 * self.run_time_minutes:
             self.save()
-            self.plot_weight_change_history()
 
     ########################################### AUTO PILOT ###########################################
 
@@ -1497,6 +1505,14 @@ class Driver(Supervisor):
                 pickle.dump(self.rcn, output)
                 files_saved.append("rcn.pkl")
 
+        final_metrics = self.compute_place_cell_metrics()
+        final_metrics['step'] = self.step_count
+
+        data_to_save = {
+            "partial_metrics": self.metrics_over_time,   # the list we built
+            "final_metrics": final_metrics
+        }
+
         # Save the history maps if specified
         if include_hmaps:
             with open("hmap_x.pkl", "wb") as output:
@@ -1518,6 +1534,11 @@ class Driver(Supervisor):
                 pickle.dump(self.visitation_map, output)
             with open("visitation_map_metrics.pkl", "wb") as output:
                 pickle.dump(self.visitation_map_metrics, output)
+            with open("weight_change_history.pkl", "wb") as output:
+                pickle.dump(self.weight_change_history, output)
+            with open("place_cell_metrics_over_time.pkl", "wb") as f:
+                pickle.dump(data_to_save, f)
+                files_saved.append("place_cell_metrics_over_time.pkl")
 
         root = tk.Tk()
         root.withdraw()  # Hide the main window
@@ -1566,3 +1587,61 @@ class Driver(Supervisor):
             plt.title("Oja Weight Change Over Time")
             plt.legend()
             plt.show()
+
+    def compute_place_cell_metrics(self, partial_step_count=None):
+        """
+        Gathers place cell metrics (max_firing, std_size, skewness).
+        If partial_step_count is given, we only use data up to that step.
+        Returns a dict like: {"max_firing": [...], "std_size": [...], "skewness": [...]}
+        """
+        import numpy as np
+        from scipy.stats import skew
+
+        if partial_step_count is None:
+            partial_step_count = self.step_count  # default to full run
+
+        # clamp partial_step_count just in case
+        partial_step_count = min(partial_step_count, self.step_count)
+
+        # 1) subset hmap arrays
+        final_z = self.hmap_z[: partial_step_count]  # shape (partial_steps, num_cells)
+        final_x = self.hmap_x[: partial_step_count]
+        final_y = self.hmap_y[: partial_step_count]
+
+        num_steps, num_cells = final_z.shape
+
+        # (A) Max firing
+        max_firing = np.max(final_z, axis=0)  # shape [num_cells]
+
+        # (B) Weighted place-field size (std) + skew
+        std_size_list = np.zeros(num_cells)
+        skew_list = np.zeros(num_cells)
+
+        for i in range(num_cells):
+            activations = final_z[:, i]
+            mask = activations > 0
+            if np.any(mask):
+                x_vals = final_x[mask]
+                y_vals = final_y[mask]
+                wts = activations[mask]
+
+                mean_x = np.average(x_vals, weights=wts)
+                mean_y = np.average(y_vals, weights=wts)
+                var_x = np.average((x_vals - mean_x)**2, weights=wts)
+                var_y = np.average((y_vals - mean_y)**2, weights=wts)
+                std_field = np.sqrt(var_x + var_y)
+                std_size_list[i] = std_field
+
+                sk_val = skew(activations)  # simple 1D skew measure
+                skew_list[i] = sk_val
+            else:
+                std_size_list[i] = 0
+                skew_list[i] = 0
+
+        metrics_dict = {
+            "max_firing": max_firing.tolist(),
+            "std_size": std_size_list.tolist(),
+            "skewness": skew_list.tolist()
+        }
+
+        return metrics_dict

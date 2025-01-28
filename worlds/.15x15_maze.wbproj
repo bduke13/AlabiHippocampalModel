@@ -9,5 +9,5 @@ textFiles: 0 "controllers/bek_controller/bek_controller.py"
 consoles: Console:All:All
 renderingDevicePerspectives: Create:display;0;1;0;0
 renderingDevicePerspectives: Create:lefteye;0;0.551389;0;0
-renderingDevicePerspectives: Create:range-finder;0;2.21111;0;0
+renderingDevicePerspectives: Create:range-finder;0;32;0;0
 renderingDevicePerspectives: Create:righteye;0;0.551389;0;0
