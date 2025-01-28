@@ -16,11 +16,11 @@ bot = Driver()
 # 4. INTELLIGENT_CURIOSITY
 
 bot.initialization(
-    mode=RobotMode.PLOTTING,
+    mode=RobotMode.LEARN_OJAS,
     randomize_start_loc=True,
-    run_time_hours=10,
+    run_time_hours=2,
     start_loc=[2, -2],
-    explore_mthd=ExploreMethod.RANDOM_WALK,
+    explore_mthd=ExploreMethod.INTELLIGENT_CURIOSITY,
     use_existing_visitation_map=False,
     environment_label="15x15",
     bvc_max_dist=30.0,

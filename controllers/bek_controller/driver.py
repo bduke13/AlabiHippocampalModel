@@ -162,6 +162,7 @@ class Driver(Supervisor):
         self.mode = mode
         self.explore_mthd = explore_mthd
         self.environment_label = environment_label
+        self.weight_change_history = []
 
         # Model parameters
         self.num_place_cells = num_place_cells
@@ -1238,19 +1239,37 @@ class Driver(Supervisor):
     def compute(self):
         """
         Compute the activations of place cells and handle the environment interactions.
+        Logs the weight changes if Oja's rule is enabled, then updates sensor maps.
         """
-        # Compute the place cell network activations
+
+        # NEW CODE: Store old weights if Oja's rule is enabled.
+        old_w_in = None
+        if self.pcn.enable_ojas:
+            # Convert current w_in to a NumPy array for difference comparison later
+            old_w_in = self.pcn.w_in.numpy().copy()
+
+        # Compute the place cell network activations (as in your original code).
+        # This call internally applies Oja's rule if self.pcn.enable_ojas is True.
         self.pcn.get_place_cell_activations(
             input_data=[self.boundaries, np.linspace(0, 2 * np.pi, 720, False)],
             hd_activations=self.hd_activations,
             collided=np.any(self.collided),
         )
 
-        # Advance the timestep and update position
+        # NEW CODE: After get_place_cell_activations(), check how much w_in changed.
+        if self.pcn.enable_ojas and old_w_in is not None:
+            new_w_in = self.pcn.w_in.numpy()
+            # Use Frobenius norm as an example measure of ΔW
+            dw = np.linalg.norm(new_w_in - old_w_in, ord='fro')
+
+            # Append to our weight_change_history (be sure to initialize it in initialization()).
+            self.weight_change_history.append(dw)
+
+        # Advance the timestep and update position (unchanged from your original code).
         self.step(self.timestep)
         curr_pos = self.robot.getField("translation").getSFVec3f()
 
-        # Update place cell and sensor maps
+        # Update place cell and sensor maps (unchanged from your original code).
         if self.step_count < self.num_steps:
             self.hmap_x[self.step_count] = curr_pos[0]
             self.hmap_y[self.step_count] = curr_pos[2]
@@ -1258,7 +1277,7 @@ class Driver(Supervisor):
             self.hmap_h[self.step_count] = self.hd_activations
             self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn.bvc_activations)
 
-        # Increment timestep
+        # Increment timestep (unchanged).
         self.step_count += 1
 
     ########################################### CHECK GOAL REACHED ###########################################
@@ -1295,6 +1314,7 @@ class Driver(Supervisor):
             )
         elif self.getTime() >= 60 * self.run_time_minutes:
             self.save()
+            self.plot_weight_change_history()
 
     ########################################### AUTO PILOT ###########################################
 
@@ -1508,6 +1528,7 @@ class Driver(Supervisor):
         self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
         print(f"Files Saved: {files_saved}")
         print("Saving Done!")
+        
 
     def clear(self):
         """
@@ -1532,3 +1553,16 @@ class Driver(Supervisor):
                 pass  # Ignore if the file does not exist
 
         print("State files cleared.")
+
+        def plot_weight_change_history(self):
+            import matplotlib.pyplot as plt
+            if not self.weight_change_history:
+                print("No weight change history recorded.")
+                return
+            plt.figure(figsize=(8,6))
+            plt.plot(self.weight_change_history, label="Weight Δ (Oja)")
+            plt.xlabel("Update Step")
+            plt.ylabel("||Δw_in||")
+            plt.title("Oja Weight Change Over Time")
+            plt.legend()
+            plt.show()
