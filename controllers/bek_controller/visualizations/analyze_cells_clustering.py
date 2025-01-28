@@ -93,10 +93,10 @@ df = df[df["parent_dir"].isin(allowed_models)]
 # Desired order for environments
 order = ["upright", "inside_shallow", "inside_medium", "inside_steep"]
 
-# Set larger font sizes globally
-plt.rcParams.update({"font.size": 16})
-plt.rcParams.update({"axes.labelsize": 18})
-plt.rcParams.update({"axes.titlesize": 20})
+# Set font sizes globally to 14
+plt.rcParams.update({"font.size": 14})
+plt.rcParams.update({"axes.labelsize": 14})
+plt.rcParams.update({"axes.titlesize": 14})
 plt.rcParams.update({"legend.fontsize": 14})
 plt.rcParams.update({"legend.title_fontsize": 14})
 
@@ -120,10 +120,10 @@ g1 = sns.barplot(
     ax=axes[0],
     order=order,
 )
-axes[0].set_title("", fontsize=18)
-axes[0].set_xticklabels([ENV_NAMES.get(env, env) for env in order], fontsize=16)
-axes[0].set_xlabel("", fontsize=18)
-axes[0].set_ylabel("Proportion", fontsize=18)
+axes[0].set_title("", fontsize=14)
+axes[0].set_xticklabels([ENV_NAMES.get(env, env) for env in order], fontsize=14)
+axes[0].set_xlabel("", fontsize=14)
+axes[0].set_ylabel("Proportion", fontsize=14)
 
 # Get handles and labels from the plot
 handles, _ = axes[0].get_legend_handles_labels()
@@ -144,10 +144,10 @@ g2 = sns.barplot(
     ax=axes[1],
     order=order,
 )
-axes[1].set_title("", fontsize=18)
-axes[1].set_xticklabels([ENV_NAMES.get(env, env) for env in order], fontsize=16)
-axes[1].set_xlabel("", fontsize=18)
-axes[1].set_ylabel("Proportion", fontsize=18)
+axes[1].set_title("", fontsize=14)
+axes[1].set_xticklabels([ENV_NAMES.get(env, env) for env in order], fontsize=14)
+axes[1].set_xlabel("", fontsize=14)
+axes[1].set_ylabel("Proportion", fontsize=14)
 
 # Get handles and labels from the plot
 handles, _ = axes[1].get_legend_handles_labels()
@@ -167,10 +167,10 @@ g3 = sns.barplot(
     ax=axes[2],
     order=order,
 )
-axes[2].set_title("", fontsize=18)
-axes[2].set_xticklabels([ENV_NAMES.get(env, env) for env in order], fontsize=16)
-axes[2].set_xlabel("", fontsize=18)
-axes[2].set_ylabel("Average Clusters", fontsize=18)
+axes[2].set_title("", fontsize=14)
+axes[2].set_xticklabels([ENV_NAMES.get(env, env) for env in order], fontsize=14)
+axes[2].set_xlabel("", fontsize=14)
+axes[2].set_ylabel("Average Clusters", fontsize=14)
 
 # Get handles and labels from the plot
 handles, _ = axes[2].get_legend_handles_labels()

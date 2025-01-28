@@ -1,0 +1,9 @@
+Model Parameters:
+sigma_d: 0.75
+sigma_ang: 1.5707963705062866
+num_place_cells: 250
+num_bvcs: 960
+num_bvc_per_dir: 120
+n_hd: 8
+run_time_hours: 1.5
+num_simulation_steps: 28124

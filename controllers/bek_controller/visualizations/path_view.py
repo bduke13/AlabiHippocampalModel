@@ -47,7 +47,7 @@ def plot_trajectory(
     y_smooth = f_y(t_interp)
 
     # Plot the path
-    plt.plot(x_smooth, y_smooth, "b-", linewidth=1, alpha=0.7, label="Path")
+    plt.plot(x_smooth, y_smooth, "b-", linewidth=1, alpha=0.7)
 
     # Plot points at each x,y coordinate
     plt.plot(hmap_x, hmap_y, "bo", markersize=3, alpha=0.7)
@@ -56,7 +56,6 @@ def plot_trajectory(
     plt.title("", fontsize=16)
     plt.xlabel("", fontsize=16)
     plt.ylabel("", fontsize=18)
-    plt.legend(fontsize=10, loc="upper right")
     plt.grid(True, alpha=0.3)
 
     # Increase tick label sizes

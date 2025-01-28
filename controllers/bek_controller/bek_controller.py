@@ -10,10 +10,10 @@ if __name__ == "__main__":
     run_time_hours = 4
     number_tests = 1
     start_locations = [[4, 4], [-4, 4], [4, -4], [-4, -4]]
-    models = ["3D_2L_250_1"]
-    world_name = "upright_2"
+    models = ["3D_2L_250_2"]
+    world_name = "upright"
 
-    preferred_va = [0.0, 0.1]
+    preferred_va = [0.0, 0.2]
     sigma_d = [0.75] * len(preferred_va)
     sigma_a = [0.1] * len(preferred_va)
     sigma_va = [0.01] * len(preferred_va)
