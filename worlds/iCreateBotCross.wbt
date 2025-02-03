@@ -1,4 +1,11 @@
-#VRML_SIM R2021a utf8
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/robots/irobot/create/protos/Create.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/Roughcast.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/apartment_structure/protos/Wall.proto"
+
 WorldInfo {
   info [
     "iRobot Create simulation"
@@ -9,8 +16,8 @@ WorldInfo {
   coordinateSystem "NUE"
 }
 Viewpoint {
-  orientation 1 0 0 4.71238898038469
-  position 6.176887106309842e-05 26.144258986436746 1.477319981418963e-07
+  orientation 0.39984096582672896 -0.7069053545761305 -0.5834483882215667 3.189317829823339
+  position 35.26957089737569 26.8377382917469 25.617506794485298
   near 0.1
   follow "Create"
   followType "None"
@@ -18,6 +25,7 @@ Viewpoint {
 TexturedBackground {
 }
 RectangleArena {
+  rotation 1 0 0 -1.5707953071795862
   floorSize 10 10
   floorAppearance NULL
 }
@@ -25,21 +33,13 @@ DirectionalLight {
   direction 0 -1 0
 }
 DEF agent Create {
-  hidden position_0_0 -2.061382864404493e-06
-  hidden position_0_1 -2.06138339997608e-06
-  hidden rotation_7 1 0 0 2.0613213140715773e-06
-  hidden rotation_8 1 0 0 2.0613213140715773e-06
-  hidden translation_12 8.815170815523743e-14 -3.136626956126709e-06 4.395268260459773e-09
-  hidden rotation_12 6.953221361291261e-16 1 1.1651220267900555e-15 0.7269320000000004
-  hidden translation_13 8.859579736508749e-14 -3.136626950950294e-06 4.3952684825043775e-09
-  hidden rotation_13 -6.25181634453823e-16 1 7.743103267698813e-16 -0.7269299999999994
-  translation 0.9999992629701326 0.044204196518550766 1.0000001714240532
-  rotation 0.0005714050623704719 0.9999995912866734 -0.0007006587906432647 1.7732797050543787
+  translation 1.00002 0.0642 0.999958
+  rotation 0.4993069634554751 -0.6130839551280804 -0.612225955190878 -2.214285307179586
   controller "bek_controller"
   supervisor TRUE
   bodySlot [
     Solid {
-      translation 0 0.04 -0.08
+      translation 0 0 0.08
       children [
         Display {
           width 100
@@ -51,30 +51,8 @@ DEF agent Create {
           fieldOfView 6.28
           width 720
           height 1
-          spherical TRUE
+          projection "cylindrical"
           maxRange 10
-        }
-        Camera {
-          translation -0.002 0.02 0
-          rotation 0 1 0 1.57
-          name "lefteye"
-          fieldOfView 3.14
-          width 720
-          height 360
-          spherical TRUE
-          recognition Recognition {
-          }
-        }
-        Camera {
-          translation 0.002 0.02 0
-          rotation 0 1 0 -1.57
-          name "righteye"
-          fieldOfView 3.14
-          width 720
-          height 360
-          spherical TRUE
-          recognition Recognition {
-          }
         }
         Shape {
           appearance PBRAppearance {
@@ -89,7 +67,7 @@ DEF agent Create {
   ]
 }
 Wall {
-  translation 0 0 -5
+  translation 0 0 -3.39
   size 10.3 2.4 0.3
   appearance Roughcast {
     colorOverride 0.8 0.45 0.25
@@ -99,7 +77,7 @@ Wall {
   }
 }
 Wall {
-  translation -5 0 0
+  translation -3.21 0 -6.57502e-06
   rotation 0 1 0 1.5708
   name "wall(2)"
   size 9.7 2.4 0.3
@@ -111,7 +89,7 @@ Wall {
   }
 }
 Wall {
-  translation 0 0 5
+  translation 0 0 3.16
   name "wall(3)"
   size 10.3 2.4 0.3
   appearance Roughcast {
@@ -122,7 +100,7 @@ Wall {
   }
 }
 Wall {
-  translation 5 0 0
+  translation 2.87 0 7.82384e-06
   rotation 0 1 0 1.5708
   name "wall(4)"
   size 9.7 2.4 0.3
@@ -134,6 +112,7 @@ Wall {
   }
 }
 Wall {
+  translation 0 5.11 0
   rotation 0 1 0 1.5708
   name "wall(5)"
   size 5 2.4 0.3
@@ -145,6 +124,7 @@ Wall {
   }
 }
 Wall {
+  translation 0 5.07 0
   name "wall(1)"
   size 5 2.4 0.3
   appearance Roughcast {
