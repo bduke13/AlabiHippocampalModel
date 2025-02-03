@@ -14,33 +14,35 @@ class HeadDirectionLayer:
             num_cells: Number of head direction cells, evenly spaced across 360 degrees.
         """
         self.num_cells = num_cells
+        self.hd_activations = None  # Will store the latest activation
 
     def get_hd_activation(self, theta_0: float, v_in: np.ndarray):
         """Computes the activation of head direction cells based on current heading.
 
-        Calculates how much the agent's current heading aligns with each cell's
-        preferred direction using dot product computation.
-
         Args:
-            theta_0: Heading angle of the anchor cue in radians (default is 0).
-            v_in: Vector representing the current heading direction of the agent.
+            theta_0: Heading angle offset (in radians).
+            v_in: 1D array of length 2, representing the current heading (e.g. [cos θ, sin θ]).
 
         Returns:
-            Activation levels of head direction cells as numpy array. Each value
-            indicates alignment between current heading and cell's preferred direction.
+            A 1D NumPy array of shape (num_cells,) containing the activation levels of
+            each head-direction cell.
         """
-        # Create equally spaced angles for HD cells
-        theta_i = np.arange(0, 2 * np.pi, 2 * np.pi / self.num_cells)
+        # This creates exactly 'num_cells' angles evenly spaced from 0 to 2π (exclusive).
+        theta_i = np.linspace(0, 2 * np.pi, self.num_cells, endpoint=False)
 
-        # Generate tuning kernel for directions
+        # Create the tuning kernel: shape (2, num_cells)
+        # First row: cos(θ_i + θ_0), Second row: sin(θ_i + θ_0)
         D = np.stack([np.cos(theta_i + theta_0), np.sin(theta_i + theta_0)], axis=0)
+        # D.shape == (2, num_cells)
 
-        # Compute dot product between current heading and preferred directions
+        # v_in should be shape (2,). Dot product => shape (num_cells,)
+        # np.dot((2,), (2, num_cells)) => ERROR. We need np.dot((2,), (2, num_cells)) to broadcast properly.
+        # Actually we want v_in dot D => shape (num_cells,). We can do:
+        #  activation = v_in.dot(D), but we must transpose D or rearrange arguments:
+        #   - np.dot(v_in, D) => shape (num_cells,) only if D is shape (2, num_cells)
         activation = np.dot(v_in, D)
 
-        self.state = activation
-
-        # Shape: (self.num_cells,)
+        self.hd_activations = activation
         return activation
 
     def plot_activation(self, plot_type: str = "bar", return_plot: bool = False):
@@ -48,20 +50,20 @@ class HeadDirectionLayer:
 
         Args:
             plot_type: Type of plot to create ('bar' or 'radial').
-            return_plot: If True, returns the plot object instead of displaying.
+            return_plot: If True, returns the figure object instead of displaying it.
 
         Returns:
-            plt.Figure if return_plot is True, otherwise None.
+            A matplotlib Figure if return_plot is True, otherwise None.
 
         Raises:
             ValueError: If activation state is not set or plot_type is invalid.
         """
-        if self.state is None or not np.any(self.state):
+        if self.hd_activations is None or not np.any(self.hd_activations):
             raise ValueError(
-                "Activation state is not set. Please call 'get_hd_activation' first to compute activations."
+                "Activation state is not set. Please call 'get_hd_activation' first."
             )
 
-        # Create the labels for each head direction cell based on the evenly spaced angles
+        # Create labels for each head direction cell (e.g. "0°, 45°, 90°...", etc.)
         categories = [
             f"{int(round(np.rad2deg(angle)))}°"
             for angle in np.linspace(0, 2 * np.pi, self.num_cells, endpoint=False)
@@ -69,14 +71,15 @@ class HeadDirectionLayer:
 
         if plot_type == "bar":
             fig, ax = plt.subplots()
-            ax.bar(categories, self.state)
+            ax.bar(categories, self.hd_activations)
             ax.set_xlabel("Head Direction Cells (Degrees)")
-            ax.set_ylabel("Activation Magnitude")
+            ax.set_ylabel("Activation")
             ax.set_title("Head Direction Layer Activation")
-            plt.xticks(rotation=45, ha="right")  # Rotate labels for better readability
+            plt.xticks(rotation=45, ha="right")
+
         elif plot_type == "radial":
             angles = np.linspace(0, 2 * np.pi, self.num_cells, endpoint=False)
-            r = self.state
+            r = self.hd_activations
             fig, ax = plt.subplots(subplot_kw={"projection": "polar"})
             ax.bar(
                 angles, r, width=2 * np.pi / self.num_cells, bottom=0.0, align="center"
@@ -86,13 +89,28 @@ class HeadDirectionLayer:
             ax.set_xticks(angles)
             ax.set_xticklabels(categories)
             plt.title("Head Direction Layer Activation")
+
         else:
             raise ValueError("Invalid plot_type. Choose 'bar' or 'radial'.")
 
         plt.tight_layout()
-
-        # Return the figure object if requested, otherwise show the plot
         if return_plot:
             return fig
         else:
             plt.show()
+
+
+if __name__ == "__main__":
+    # 1. Create a layer with 8 direction cells
+    hd_layer = HeadDirectionLayer(num_cells=8)
+
+    # 2. Suppose our offset (theta_0) is 0, and heading vector is [cos(45°), sin(45°)]
+    theta_0 = 0.0
+    heading_vec = np.array([np.cos(np.pi / 4), np.sin(np.pi / 4)])
+
+    # 3. Compute the activations
+    activations = hd_layer.get_hd_activation(theta_0, heading_vec)
+    print("HD Activations:", activations)
+
+    # 4. Plot them in radial form
+    hd_layer.plot_activation(plot_type="bar")
