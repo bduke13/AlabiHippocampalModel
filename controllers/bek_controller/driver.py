@@ -674,7 +674,7 @@ class Driver(Supervisor):
         Returns:
             float: Bearing angle in degrees (0-360), where 0 is North.
         """
-        rad = np.arctan2(north[0], north[2])
+        rad = np.arctan2(north[1], north[0])
         bearing = (rad - 1.5708) / np.pi * 180.0
         if bearing < 0:
             bearing = bearing + 360.0
