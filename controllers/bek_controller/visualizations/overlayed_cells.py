@@ -1,26 +1,29 @@
 # %%
+from matplotlib.cbook import file_requires_unicode
 import numpy as np
 import matplotlib.pyplot as plt
 import pickle
 import json
 import matplotlib.colors as mcolors
 
-gridsize = 100
-num_cells_to_sample = 100  # Set the number of cells you want to plot
+gridsize = 80
+num_cells_to_sample = 50  # Set the number of cells you want to plot
+
+file_prefix = "controllers/bek_controller/"
 
 # Load the colors list
-with open("visualizations/colors.json", "r") as f:
+with open(f"{file_prefix}visualizations/colors.json", "r") as f:
     colors = json.load(f)
 
 # Convert hex colors to RGB format
 colors_rgb = [mcolors.to_rgb(c) for c in colors]
 
 # Load hmap data
-with open("hmap_x.pkl", "rb") as f:
+with open(f"{file_prefix}hmap_x.pkl", "rb") as f:
     hmap_x = np.array(pickle.load(f))
-with open("hmap_y.pkl", "rb") as f:
+with open(f"{file_prefix}hmap_y.pkl", "rb") as f:
     hmap_y = np.array(pickle.load(f))
-with open("hmap_z.pkl", "rb") as f:
+with open(f"{file_prefix}hmap_z.pkl", "rb") as f:
     hmap_z = np.asarray(pickle.load(f))
 
 # Calculate total activation per cell
