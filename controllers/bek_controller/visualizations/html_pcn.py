@@ -12,7 +12,7 @@ def plot_place_cells_group(
     cell_indices,
     hmap_x,
     hmap_y,
-    hmap_z,
+    hmap_pcn,
     colors_rgb,
     group_index,
     output_dir=None,
@@ -27,7 +27,7 @@ def plot_place_cells_group(
     - cell_index: The index of the place cell to plot.
     - hmap_x: The x coordinates of the grid.
     - hmap_y: The y coordinates of the grid.
-    - hmap_z: The activation data for the place cells (z-axis).
+    - hmap_pcn: The activation data for the place cells (z-axis).
     - colors_rgb: List of RGB colors for plotting.
     - output_dir: Directory to save the plot (default is 'place_cell_images/').
     - save_plot: Boolean flag to save the plot (default is True).
@@ -40,7 +40,7 @@ def plot_place_cells_group(
 
     for idx, (ax, cell_index) in enumerate(zip(axes, cell_indices)):
         # Get activations for this cell
-        activations = hmap_z[:, cell_index]
+        activations = hmap_pcn[:, cell_index]
 
         # Color for this cell
         color_rgb = colors_rgb[
@@ -144,7 +144,7 @@ def generate_html_report(cell_indices, output_dir):
 
 
 def generate_place_cells_report(
-    hmap_x, hmap_y, hmap_z, output_dir="visualizations/outputs/", open_browser=True
+    hmap_x, hmap_y, hmap_pcn, output_dir="visualizations/outputs/", open_browser=True
 ):
     # Create output directory and assets subdirectory
     assets_dir = os.path.join(output_dir, "html_assets")
@@ -155,7 +155,7 @@ def generate_place_cells_report(
     Args:
         hmap_x: The x coordinates of the grid
         hmap_y: The y coordinates of the grid
-        hmap_z: The activation data for the place cells (z-axis)
+        hmap_pcn: The activation data for the place cells (z-axis)
         output_dir: Directory to save the visualizations (default: "visualizations/outputs/")
         open_browser: Whether to automatically open the report in browser (default: True)
 
@@ -181,7 +181,7 @@ def generate_place_cells_report(
         return colors_rgb
 
     # Generate colors for all possible cells
-    num_cells = hmap_z.shape[1]
+    num_cells = hmap_pcn.shape[1]
     colors_rgb = generate_vibrant_colors(num_cells)
 
     # Try to read cells.csv if it exists, otherwise use all cells
@@ -190,7 +190,7 @@ def generate_place_cells_report(
         print(f"Loaded {len(cell_indices)} cell indices from cells.csv")
     else:
         print("cells.csv not found, using all cells")
-        cell_indices = np.arange(hmap_z.shape[1])
+        cell_indices = np.arange(hmap_pcn.shape[1])
 
     # Generate and save plots in groups of 5
     for i in range(0, len(cell_indices), 5):
@@ -204,7 +204,7 @@ def generate_place_cells_report(
             group,
             hmap_x,
             hmap_y,
-            hmap_z,
+            hmap_pcn,
             colors_rgb,
             group_index,
             output_dir=assets_dir,
@@ -231,8 +231,8 @@ if __name__ == "__main__":
     from controllers.bek_controller.visualizations.analysis_utils import *
 
     # Example usage
-    data_path = "controllers/bek_controller/IJCNN/3D_3L_250/upright/"
-    hmap_x, hmap_y, hmap_z = load_hmaps(data_path)
+    data_path = "controllers/bek_controller/"
+    hmap_x, hmap_y, hmap_pcn = load_hmaps(data_path)
 
     # %%
-    generate_place_cells_report(hmap_x, hmap_y, hmap_z, output_dir=data_path)
+    generate_place_cells_report(hmap_x, hmap_y, hmap_pcn, output_dir=data_path)

@@ -5,29 +5,20 @@ import matplotlib.pyplot as plt
 import pickle
 import json
 import matplotlib.colors as mcolors
+from controllers.bek_controller.visualizations.analysis_utils import load_hmaps
 
 gridsize = 80
-num_cells_to_sample = 50  # Set the number of cells you want to plot
+num_cells_to_sample = 150  # Set the number of cells you want to plot
 
-file_prefix = "controllers/bek_controller/"
 
-# Load the colors list
-with open(f"{file_prefix}visualizations/colors.json", "r") as f:
-    colors = json.load(f)
-
-# Convert hex colors to RGB format
-colors_rgb = [mcolors.to_rgb(c) for c in colors]
-
+base_path = "controllers/bek_controller/"
 # Load hmap data
-with open(f"{file_prefix}hmap_x.pkl", "rb") as f:
-    hmap_x = np.array(pickle.load(f))
-with open(f"{file_prefix}hmap_y.pkl", "rb") as f:
-    hmap_y = np.array(pickle.load(f))
-with open(f"{file_prefix}hmap_z.pkl", "rb") as f:
-    hmap_z = np.asarray(pickle.load(f))
+hmap_loc, hmap_pcn = load_hmaps(prefix=base_path, hmap_names=["hmap_loc", "hmap_pcn"])
+hmap_x = hmap_loc[:, 0]
+hmap_y = hmap_loc[:, 2]
 
 # Calculate total activation per cell
-total_activation_per_cell = np.sum(hmap_z, axis=0)
+total_activation_per_cell = np.sum(hmap_pcn, axis=0)
 
 # Get indices of cells with non-zero activation
 nonzero_activation_indices = np.where(total_activation_per_cell > 0)[0]
@@ -63,7 +54,7 @@ counts_per_bin = np.zeros((gridsize, gridsize, num_cells_to_plot))
 # Process each randomly selected cell
 for idx, cell_index in enumerate(cell_indices):
     # Get activations for this cell
-    activations = hmap_z[:, cell_index]
+    activations = hmap_pcn[:, cell_index]
 
     # Positions where activation is greater than zero
     mask = activations > 0
@@ -103,6 +94,9 @@ if max_activation == 0:
     max_activation = 1  # To avoid division by zero
 normalized_activation = max_mean_activation_per_bin / max_activation
 
+# Create a list of distinct colors for each cell
+colors_rgb = plt.cm.rainbow(np.linspace(0, 1, num_cells_to_plot))[:, :3]
+
 # Now, create an image array to store RGB values
 image = np.zeros((gridsize, gridsize, 3))
 
@@ -112,11 +106,11 @@ for i in range(gridsize):
         activation_level = normalized_activation[i, j]
         if activation_level > 0:
             idx = cell_with_max_activation[i, j]
-            color_rgb = colors_rgb[cell_indices[idx]]
-            # Adjust color towards black based on activation level
+            # color_rgb = colors_rgb[idx]    # This is correct
+            color_rgb = colors_rgb[idx]
+
             adjusted_color = activation_level * np.array(color_rgb)
-            image[i, j, :] = adjusted_color
-        # else:
+            image[i, j, :] = adjusted_color  # else:
         # No activation in this bin, leave as black (0,0,0)
 
 # Transpose the image because imshow expects the first axis to be the y-axis
@@ -132,3 +126,7 @@ plt.title(f"Overlay of {num_cells_to_plot} Place Cells with Fading Colors")
 
 # Ensure the plot displays properly
 plt.show()
+
+
+if __name__ == "main":
+    pass

@@ -1,30 +1,35 @@
 # %%
 import numpy as np
 import pickle
-import os
-import re
 from pathlib import Path
 from typing import List
 
 
-def load_hmaps(prefix="three_dim/"):
+def load_hmaps(prefix="three_dim/", hmap_names=["hmap_x", "hmap_y", "hmap_pcn"]):
     """
-    Load heatmap data from pickle files.
+    Load history map (hmap) data from pickle files.
 
     Args:
         prefix (str): Directory prefix where the pickle files are located
 
     Returns:
-        tuple: (hmap_x, hmap_y, hmap_z) arrays containing the heatmap data
+        tuple: (hmap_x, hmap_y, hmap_pcn) arrays containing the heatmap data
     """
-    with open(f"{prefix}hmap_x.pkl", "rb") as f:
-        hmap_x = np.array(pickle.load(f))
-    with open(f"{prefix}hmap_y.pkl", "rb") as f:
-        hmap_y = np.array(pickle.load(f))
-    with open(f"{prefix}hmap_z.pkl", "rb") as f:
-        hmap_z = np.array(pickle.load(f))
+    # make sure end directory is a folder
+    if prefix[-1] != "/":
+        prefix += "/"
 
-    return hmap_x[1:], hmap_y[1:], hmap_z[1:]
+    # collect all hmaps
+    hmaps = []
+    for hmap in hmap_names:
+        with open(f"{prefix}{hmap}.pkl", "rb") as f:
+            # load file
+            temp = np.array(pickle.load(f))
+            # remove first element from temp
+            temp = temp[1:]
+            hmaps.append(temp)
+
+    return hmaps
 
 
 def get_available_directories(root_path: str, max_dirs: int = 200) -> List[str]:

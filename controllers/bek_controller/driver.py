@@ -1,26 +1,25 @@
 import numpy as np
-import tensorflow as tf
 from numpy.random import default_rng
-import matplotlib.pyplot as plt
-from matplotlib.cm import get_cmap
-from astropy.stats import circmean, circvar
 import pickle
 import os
 import tkinter as tk
 from tkinter import N, messagebox
-from typing import Optional, List
-from controller import Supervisor, Robot
+from typing import Optional, List, Union
+import torch
+from torch._C import device
+import torch.nn.functional as F
+from controller import Supervisor
 from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
 from layers.head_direction_layer import HeadDirectionLayer
 from layers.place_cell_layer import PlaceCellLayer
 from layers.reward_cell_layer import RewardCellLayer
 from robot_mode import RobotMode
 
-tf.random.set_seed(5)
+# --- PyTorch seeds / random ---
+torch.manual_seed(5)
+np.random.seed(5)
+rng = default_rng(5)  # or keep it as is
 np.set_printoptions(precision=2)
-PI = tf.constant(np.pi)
-rng = default_rng()  # random number generator
-cmap = get_cmap("plasma")
 
 
 class Driver(Supervisor):
@@ -41,7 +40,7 @@ class Driver(Supervisor):
         hmap_x (ndarray): History of x-coordinates.
         hmap_y (ndarray): History of y-coordinates.
         hmap_pcn (ndarray): History of place cell activations.
-        hmap_h (ndarray): History of head direction activations.
+        hmap_hdn (ndarray): History of head direction activations.
         hmap_g (ndarray): History of goal estimates.
         robot (Robot): Main robot controller instance.
         keyboard (Keyboard): Keyboard input device.
@@ -89,9 +88,10 @@ class Driver(Supervisor):
             None
         """
         self.robot_mode = mode
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         # Model parameters
-        self.num_place_cells = 80
+        self.num_place_cells = 200
         self.num_reward_cells = 1
         self.n_hd = 8
         self.timestep = 32 * 3
@@ -108,17 +108,6 @@ class Driver(Supervisor):
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
         self.goal_r = {"explore": 0.3, "exploit": 0.5}
 
-        self.hmap_x = np.zeros(self.num_steps)  # x-coordinates
-        self.hmap_y = np.zeros(self.num_steps)  # y-coordinates
-        self.hmap_pcn = np.zeros(
-            (self.num_steps, self.num_place_cells)
-        )  # place cell activations
-
-        self.hmap_h = np.zeros(
-            (self.num_steps, self.n_hd)
-        )  # head direction cell activations
-        self.hmap_g = np.zeros(self.num_steps)  # goal estimates
-
         # Initialize hardware components and sensors
         self.robot = self.getFromDef("agent")  # Placeholder for robot instance
         self.keyboard = self.getKeyboard()
@@ -131,7 +120,7 @@ class Driver(Supervisor):
         self.left_bumper.enable(self.timestep)
         self.right_bumper = self.getDevice("bumper_right")
         self.right_bumper.enable(self.timestep)
-        self.collided = tf.Variable(np.zeros(2, np.int32))
+        self.collided = torch.zeros(2, dtype=torch.int32)
         self.rotation_field = self.robot.getField("rotation")
         self.left_motor = self.getDevice("left wheel motor")
         self.right_motor = self.getDevice("right wheel motor")
@@ -145,7 +134,7 @@ class Driver(Supervisor):
 
         # Initialize boundaries
         self.lidar_resolution = 720
-        self.boundary_data = tf.Variable(tf.zeros((self.lidar_resolution, 1)))
+        self.boundary_data = torch.zeros((self.lidar_resolution, 1), device=self.device)
 
         # Initialize layers
         self.load_pcn(
@@ -160,12 +149,9 @@ class Driver(Supervisor):
             num_place_cells=self.num_place_cells,
             num_replay=6,
         )
-        self.head_direction_layer = HeadDirectionLayer(num_cells=self.n_hd)
-        self.hmap_bvc = np.zeros((self.num_steps, self.pcn.bvc_layer.num_bvc))
-
-        self.directional_reward_estimates = tf.zeros(self.n_hd)
-        self.step(self.timestep)
-        self.step_count += 1
+        self.head_direction_layer = HeadDirectionLayer(
+            num_cells=self.n_hd, device="cpu"
+        )
 
         # Initialize goal
         self.goal_location = [-1, 1]
@@ -173,7 +159,7 @@ class Driver(Supervisor):
 
         if randomize_start_loc:
             while True:
-                INITIAL = [rng.uniform(-2.3, 2.3), 0.5, rng.uniform(-2.3, 2.3)]
+                INITIAL = [rng.uniform(-2.3, 2.3), 0, rng.uniform(-2.3, 2.3)]
                 # Check if distance to goal is at least 1 meter
                 dist_to_goal = np.sqrt(
                     (INITIAL[0] - self.goal_location[0]) ** 2
@@ -185,9 +171,34 @@ class Driver(Supervisor):
             self.robot.resetPhysics()
         else:
             self.robot.getField("translation").setSFVec3f(
-                [start_loc[0], 0.5, start_loc[1]]
+                [start_loc[0], 0, start_loc[1]]
             )
             self.robot.resetPhysics()
+
+        # Generate hmaps ("history maps") for different items to record
+        self.hmap_loc = np.zeros(
+            (self.num_steps, 3)
+        )  # coordinates in the format [X, Z, Y]
+        self.hmap_g = np.zeros(self.num_steps)  # goal estimates
+        self.hmap_pcn = torch.zeros(
+            (self.num_steps, self.pcn.num_pc),
+            device=self.device,
+            dtype=torch.float32,
+        )  # Place cell network activation history
+        self.hmap_bvc = torch.zeros(
+            (self.num_steps, self.pcn.bvc_layer.num_bvc),
+            device=self.device,
+            dtype=torch.float32,
+        )  # Boundary Vector Cell Network activation history
+        self.hmap_hdn = torch.zeros(
+            (self.num_steps, self.n_hd),
+            device="cpu",
+            dtype=torch.float32,
+        )  # Head direction network activation history
+
+        self.directional_reward_estimates = torch.zeros(self.n_hd, device=self.device)
+        self.step(self.timestep)
+        self.step_count += 1
 
         self.sense()
         self.compute()
@@ -199,6 +210,7 @@ class Driver(Supervisor):
         timestep: int,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
+        device: str = None,
     ):
         """Loads an existing place cell network from disk or initializes a new one.
 
@@ -214,6 +226,9 @@ class Driver(Supervisor):
         Returns:
             PlaceCellLayer: The loaded or newly initialized place cell network.
         """
+        if not device:
+            device = self.device
+
         try:
             with open("pcn.pkl", "rb") as f:
                 self.pcn = pickle.load(f)
@@ -225,11 +240,17 @@ class Driver(Supervisor):
                 input_dim=self.lidar_resolution,
                 n_hd=n_hd,
                 sigma_ang=90,
-                sigma_d=0.75,
+                sigma_d=0.5,
+                num_bvc_per_dir=50,
+                device=device,
             )
 
             self.pcn = PlaceCellLayer(
-                bvc_layer=bvc, num_pc=num_place_cells, timestep=timestep, n_hd=n_hd
+                bvc_layer=bvc,
+                num_pc=num_place_cells,
+                timestep=timestep,
+                n_hd=n_hd,
+                device=device,
             )
             print("Initialized new Place Cell Network.")
 
@@ -332,18 +353,19 @@ class Driver(Supervisor):
         for s in range(self.tau_w):
             self.sense()
 
+            # TODO Do we need this reward code?
             # Update the reward cell activations
-            self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations)
+            # self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations)
 
             # Determine the actual reward (you may need to define how to calculate this)
-            actual_reward = self.get_actual_reward()
+            # actual_reward = self.get_actual_reward()
 
             # Perform TD update
-            self.rcn.td_update(
-                self.pcn.place_cell_activations, next_reward=actual_reward
-            )
+            # self.rcn.td_update(
+            #    self.pcn.place_cell_activations, next_reward=actual_reward
+            # )
 
-            if np.any(self.collided):
+            if torch.any(self.collided):
                 random_angle = np.random.uniform(
                     -np.pi, np.pi
                 )  # Random angle between -180 and 180 degrees (in radians)
@@ -398,7 +420,7 @@ class Driver(Supervisor):
             )
 
             # Check if the reward is too low; if so, switch to exploration
-            max_reward_activation = tf.reduce_max(self.rcn.reward_cell_activations)
+            max_reward_activation = torch.max(self.rcn.reward_cell_activations)
             if max_reward_activation <= 1e-6:
                 print("Reward too low. Switching to exploration.")
                 self.explore()
@@ -412,9 +434,11 @@ class Driver(Supervisor):
                 self.rcn.update_reward_cell_activations(pcn_activations)
 
                 # Store potential energy and reward
-                pot_e[d] = tf.norm(pcn_activations, ord=1).numpy()
-                pot_rew[d] = tf.reduce_max(
-                    np.nan_to_num(self.rcn.reward_cell_activations)
+                pot_e[d] = torch.norm(pcn_activations, p=1).cpu().numpy()
+                pot_rew[d] = (
+                    torch.max(torch.nan_to_num(self.rcn.reward_cell_activations))
+                    .cpu()
+                    .numpy()
                 )
 
             # Update directional reward estimates based on computed potential rewards
@@ -422,7 +446,12 @@ class Driver(Supervisor):
 
             # Calculate the action angle using circular mean
             angles = np.linspace(0, 2 * np.pi, self.n_hd, endpoint=False)
-            action_angle = circmean(angles, weights=self.directional_reward_estimates)
+            # Calculate circular mean using PyTorch
+            angles_tensor = torch.tensor(angles, device=self.device)
+            weights = self.directional_reward_estimates
+            sin_sum = torch.sum(weights * torch.sin(angles_tensor))
+            cos_sum = torch.sum(weights * torch.cos(angles_tensor))
+            action_angle = torch.atan2(sin_sum, cos_sum).item()
 
             # Determine the maximum reward for the chosen action
             index = int(action_angle // (2 * np.pi / self.n_hd))
@@ -434,7 +463,7 @@ class Driver(Supervisor):
                 return
 
             # Handle collision by turning and updating the reward cell network
-            if np.any(self.collided):
+            if torch.any(self.collided):
                 # Generate a random angle between -180 and 180 degrees (in radians)
                 random_angle = np.random.uniform(-np.pi, np.pi)
                 self.turn(random_angle)
@@ -530,11 +559,11 @@ class Driver(Supervisor):
 
         # 8. Update the collision status using the left bumper sensor.
         # Shape: scalar (int) - 1 if collision detected on the left bumper, 0 otherwise.
-        self.collided.scatter_nd_update([[0]], [int(self.left_bumper.getValue())])
+        self.collided[0] = int(self.left_bumper.getValue())
 
         # 9. Update the collision status using the right bumper sensor.
         # Shape: scalar (int) - 1 if collision detected on the right bumper, 0 otherwise.
-        self.collided.scatter_nd_update([[1]], [int(self.right_bumper.getValue())])
+        self.collided[1] = int(self.right_bumper.getValue())
 
         # 10. Proceed to the next timestep in the robot's control loop.
         self.step(self.timestep)
@@ -553,7 +582,6 @@ class Driver(Supervisor):
         if bearing < 0:
             bearing = bearing + 360.0
 
-        print(north, bearing)
         return bearing
 
     ########################################### COMPUTE ###########################################
@@ -566,25 +594,24 @@ class Driver(Supervisor):
         self.pcn.get_place_cell_activations(
             distances=self.boundaries,
             hd_activations=self.hd_activations,
-            collided=np.any(self.collided),
+            collided=torch.any(self.collided),
         )
 
         # Advance the timestep and update position
         self.step(self.timestep)
-        curr_pos = self.robot.getField("translation").getSFVec3f()
 
         # Update place cell and sensor maps
         if self.step_count < self.num_steps:
-            self.hmap_x[self.step_count] = curr_pos[0]
-            self.hmap_y[self.step_count] = curr_pos[2]
-            self.hmap_pcn[self.step_count] = (
-                self.pcn.place_cell_activations.detach().cpu().numpy()
+            self.hmap_loc[self.step_count] = self.robot.getField(
+                "translation"
+            ).getSFVec3f()
+            # Already on GPU
+            self.hmap_pcn[self.step_count] = self.pcn.place_cell_activations.detach()
+            self.hmap_bvc[self.step_count] = self.pcn.bvc_activations.detach()
+            self.hmap_hdn[self.step_count] = self.hd_activations.detach()
+            self.hmap_g[self.step_count] = float(
+                self.pcn.bvc_activations.detach().cpu().sum()
             )
-            self.hmap_bvc[self.step_count] = (
-                self.pcn.bvc_activations.detach().cpu().numpy()
-            )
-            self.hmap_h[self.step_count] = self.hd_activations.detach().cpu().numpy()
-            self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn.bvc_activations)
 
         # Increment timestep
         self.step_count += 1
@@ -605,15 +632,8 @@ class Driver(Supervisor):
             self.auto_pilot()  # Navigate to the goal slowly and call rcn.replay()
             print("Goal reached")
             print(f"Total distance traveled: {self.compute_path_length()}")
-            print(f"Started at: {np.array([self.hmap_x[0], self.hmap_y[0]])}")
+            print(f"Started at: {np.array([self.hmap_pos[0][0], self.hmap_pos[0][2]])}")
             print(f"Current position: {np.array([curr_pos[0], curr_pos[2]])}")
-            distance_to_goal = (
-                np.linalg.norm(
-                    np.array([self.hmap_x[0], self.hmap_y[0]]) - self.goal_location
-                )
-                - self.goal_r["exploit"]
-            )
-            print(f"Distance to goal: {distance_to_goal}")
             print(f"Time taken: {self.getTime()}")
 
             # Don't save any of the layers during exploit mode
@@ -638,7 +658,9 @@ class Driver(Supervisor):
             delta_y = curr_pos[2] - self.goal_location[1]
 
             if delta_x >= 0:
-                theta = tf.math.atan(abs(delta_y), abs(delta_x))
+                theta = torch.atan2(
+                    torch.abs(torch.tensor(delta_y)), torch.abs(torch.tensor(delta_x))
+                ).item()
                 desired = np.pi * 2 - theta if delta_y >= 0 else np.pi + theta
             elif delta_y >= 0:
                 theta = tf.math.atan(abs(delta_y), abs(delta_x))
@@ -805,23 +827,22 @@ class Driver(Supervisor):
 
         # Save the history maps if specified
         if include_hmaps:
-            with open("hmap_x.pkl", "wb") as output:
-                pickle.dump(self.hmap_x[: self.step_count], output)
-                files_saved.append("hmap_x.pkl")
-            with open("hmap_y.pkl", "wb") as output:
-                pickle.dump(self.hmap_y[: self.step_count], output)
-                files_saved.append("hmap_y.pkl")
+            with open("hmap_loc.pkl", "wb") as output:
+                pickle.dump(self.hmap_loc[: self.step_count], output)
+                files_saved.append("hmap_loc.pkl")
             with open("hmap_pcn.pkl", "wb") as output:
-                pickle.dump(self.hmap_pcn[: self.step_count], output)
+                pcn_cpu = self.hmap_pcn[: self.step_count].cpu().numpy()
+                pickle.dump(pcn_cpu[: self.step_count], output)
                 files_saved.append("hmap_pcn.pkl")
             with open("hmap_g.pkl", "wb") as output:
                 pickle.dump(self.hmap_g[: self.step_count], output)
                 files_saved.append("hmap_g.pkl")
-            with open("hmap_h.pkl", "wb") as output:
-                pickle.dump(self.hmap_h[: self.step_count], output)
-                files_saved.append("hmap_h.pkl")
+            with open("hmap_hdn.pkl", "wb") as output:
+                pickle.dump(self.hmap_hdn[: self.step_count], output)
+                files_saved.append("hmap_hdn.pkl")
             with open("hmap_bvc.pkl", "wb") as output:
-                pickle.dump(self.hmap_bvc[: self.step_count], output)
+                bvc_cpu = self.hmap_bvc[: self.step_count].cpu().numpy()
+                pickle.dump(bvc_cpu, output)
                 files_saved.append("hmap_bvc.pkl")
 
         root = tk.Tk()
@@ -842,12 +863,11 @@ class Driver(Supervisor):
         files_to_remove = [
             "pcn.pkl",
             "rcn.pkl",
-            "hmap_x.pkl",
-            "hmap_y.pkl",
+            "hmap_pos.pkl",
             "hmap_pcn.pkl",
             "hmap_bvc.pkl",
             "hmap_g.pkl",
-            "hmap_h.pkl",
+            "hmap_hdn.pkl",
         ]
 
         for file in files_to_remove:

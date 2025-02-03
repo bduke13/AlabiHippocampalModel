@@ -96,12 +96,6 @@ class PlaceCellLayer:
         # Normalization factor for synaptic weight updates (α_pb in Equation 3.3)
         self.alpha_pb = np.sqrt(0.5)
 
-        # Previous place cell activations
-        # Shape: (num_pc,)
-        self.prev_place_cell_activations = torch.zeros(
-            num_pc, dtype=self.dtype, device=self.device
-        )
-
         # Initial weights for the input connections from BVCs to place cells
         self.initial_w_in = torch.clone(self.w_in.data)
 
@@ -155,9 +149,6 @@ class PlaceCellLayer:
         hd_activations_torch = torch.tensor(
             hd_activations, dtype=self.dtype, device=self.device
         )
-
-        # Store the previous place cell activations
-        self.prev_place_cell_activations = self.place_cell_activations.clone()
 
         # Compute BVC activations based on the input distances
         self.bvc_activations = self.bvc_layer.get_bvc_activation(

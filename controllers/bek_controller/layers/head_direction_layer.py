@@ -2,6 +2,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
+from torch._prims_common import dtype_or_default
 
 
 class HeadDirectionLayer:
@@ -24,6 +25,8 @@ class HeadDirectionLayer:
         """
         self.num_cells = num_cells
         self.theta_0 = theta_0
+        self.dtype = dtype
+        self.device = device
 
         # Create equally spaced angles [0, 2π) for HD cells
         # shape: (num_cells,)
@@ -48,7 +51,7 @@ class HeadDirectionLayer:
         # Will hold the most recent activation vector of shape (num_cells,)
         self.hd_activations = None
 
-    def get_hd_activation(self, v_in: torch.Tensor) -> torch.Tensor:
+    def get_hd_activation(self, v_in: np.ndarray) -> torch.Tensor:
         """Computes the activation of head direction cells given a 2D heading vector.
 
         The activation is calculated via dot product between each cell's preferred
@@ -60,6 +63,7 @@ class HeadDirectionLayer:
         Returns:
             A 1D torch.Tensor of shape (num_cells,) with activation values.
         """
+        v_in = torch.tensor(data=v_in, dtype=self.dtype, device=self.device)
         # Ensure v_in is shape (2,) – not strictly required, but typical
         if v_in.shape != (2,):
             raise ValueError(

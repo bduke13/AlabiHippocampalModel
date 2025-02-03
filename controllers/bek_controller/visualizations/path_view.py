@@ -71,9 +71,9 @@ def plot_trajectory(
 if __name__ == "__main__":
     from controllers.bek_controller.visualizations.analysis_utils import load_hmaps
 
-    base_path = "controllers/bek_controller/IJCNN/2D_250/upright/"
+    base_path = "controllers/bek_controller/"
     # Load hmap data
-    hmap_x, hmap_y, hmap_z = load_hmaps(base_path)
+    hmap_x, hmap_y = load_hmaps(prefix=base_path, hmap_names=["hmap_x", "hmap_y"])
 
     # Plot the trajectory
     plot_trajectory(hmap_x, hmap_y)
