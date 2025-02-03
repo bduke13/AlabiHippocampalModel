@@ -129,7 +129,7 @@ class Driver(Supervisor):
         Returns:
             None
         """
-        self.mode = mode
+        self.robot_mode = mode
 
         # Model parameters
         self.num_place_cells = 300
@@ -181,7 +181,7 @@ class Driver(Supervisor):
         self.right_position_sensor = self.getDevice("right wheel sensor")
         self.right_position_sensor.enable(self.timestep)
 
-        if self.mode == RobotMode.LEARN_OJAS:
+        if self.robot_mode == RobotMode.LEARN_OJAS:
             self.clear()
 
         # Initialize boundaries
@@ -279,15 +279,17 @@ class Driver(Supervisor):
         if enable_ojas is not None:
             self.pcn.enable_ojas = enable_ojas
         elif (
-            self.mode == RobotMode.LEARN_OJAS
-            or self.mode == RobotMode.LEARN_HEBB
-            or self.mode == RobotMode.DMTP
+            self.robot_mode == RobotMode.LEARN_OJAS
+            or self.robot_mode == RobotMode.LEARN_HEBB
+            or self.robot_mode == RobotMode.DMTP
         ):
             self.pcn.enable_ojas = True
 
         if enable_stdp is not None:
             self.pcn.enable_stdp = enable_stdp
-        elif self.mode == RobotMode.LEARN_HEBB or self.mode == RobotMode.DMTP:
+        elif (
+            self.robot_mode == RobotMode.LEARN_HEBB or self.robot_mode == RobotMode.DMTP
+        ):
             self.pcn.enable_stdp = True
 
         return self.pcn
@@ -328,26 +330,26 @@ class Driver(Supervisor):
         - RECORDING: Records sensor data
         """
 
-        print(f"Starting robot in stage {self.mode}")
+        print(f"Starting robot in stage {self.robot_mode}")
         print(f"Goal at {self.goal_location}")
 
         while True:
             # Handle the robot's state
-            if self.mode == RobotMode.MANUAL_CONTROL:
+            if self.robot_mode == RobotMode.MANUAL_CONTROL:
                 self.manual_control()
 
             elif (
-                self.mode == RobotMode.LEARN_OJAS
-                or self.mode == RobotMode.LEARN_HEBB
-                or self.mode == RobotMode.DMTP
-                or self.mode == RobotMode.PLOTTING
+                self.robot_mode == RobotMode.LEARN_OJAS
+                or self.robot_mode == RobotMode.LEARN_HEBB
+                or self.robot_mode == RobotMode.DMTP
+                or self.robot_mode == RobotMode.PLOTTING
             ):
                 self.explore()
 
-            elif self.mode == RobotMode.EXPLOIT:
+            elif self.robot_mode == RobotMode.EXPLOIT:
                 self.exploit()
 
-            elif self.mode == RobotMode.RECORDING:
+            elif self.robot_mode == RobotMode.RECORDING:
                 self.recording()
 
             else:
@@ -392,9 +394,9 @@ class Driver(Supervisor):
                 break
 
             if (
-                self.mode == RobotMode.DMTP
-                or self.mode == RobotMode.LEARN_HEBB
-                or self.mode == RobotMode.EXPLOIT
+                self.robot_mode == RobotMode.DMTP
+                or self.robot_mode == RobotMode.LEARN_HEBB
+                or self.robot_mode == RobotMode.EXPLOIT
             ):
                 self.check_goal_reached()
 
@@ -716,7 +718,7 @@ class Driver(Supervisor):
         curr_pos = self.robot.getField("translation").getSFVec3f()
         # DMTP Mode and exploit mode both stop when they both see the goal
         if (
-            self.mode == RobotMode.EXPLOIT or self.mode == RobotMode.DMTP
+            self.robot_mode == RobotMode.EXPLOIT or self.robot_mode == RobotMode.DMTP
         ) and np.allclose(
             self.goal_location, [curr_pos[0], curr_pos[2]], 0, self.goal_r["exploit"]
         ):
@@ -736,8 +738,8 @@ class Driver(Supervisor):
 
             # Don't save any of the layers during exploit mode
             self.save(
-                include_rcn=(self.mode != RobotMode.EXPLOIT),
-                include_pcn=(self.mode != RobotMode.EXPLOIT),
+                include_rcn=(self.robot_mode != RobotMode.EXPLOIT),
+                include_pcn=(self.robot_mode != RobotMode.EXPLOIT),
             )
         elif self.getTime() >= 60 * self.run_time_minutes:
             self.save()
