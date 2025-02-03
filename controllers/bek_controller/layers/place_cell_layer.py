@@ -1,9 +1,10 @@
 import numpy as np
-import tensorflow as tf
+import torch
 from numpy.random import default_rng
 from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
 
-tf.random.set_seed(5)
+# Set a fixed seed similar to tf.random.set_seed(5)
+torch.manual_seed(5)
 
 
 class PlaceCellLayer:
@@ -24,6 +25,8 @@ class PlaceCellLayer:
         n_hd: int = 8,
         enable_ojas: bool = False,
         enable_stdp: bool = False,
+        device: str = "cpu",
+        dtype: torch.dtype = torch.float32,
     ):
         """Initialize the Place Cell Layer.
 
@@ -34,8 +37,14 @@ class PlaceCellLayer:
             n_hd: Number of head direction cells.
             enable_ojas: Enable weight updates via competition.
             enable_stdp: Enable tripartite synapse weight updates via Spike-Timing-Dependent Plasticity.
+            device: Which device to place the tensors on (e.g., "cpu" or "cuda").
+            dtype: PyTorch data type (e.g., torch.float32).
         """
+        # Set up random generator for binomial initialization
         rng = default_rng()
+
+        self.device = device
+        self.dtype = dtype
 
         # Number of place cells
         self.num_pc = num_pc
@@ -49,24 +58,31 @@ class PlaceCellLayer:
         # Input weight matrix connecting place cells to BVCs
         # Initialized with a 20% probability of connection
         # Shape: (num_pc, num_bvc)
-        self.w_in = tf.Variable(
-            rng.binomial(n=1, p=0.2, size=(num_pc, self.num_bvc)), dtype=tf.float32
-        )
+        w_in_init = rng.binomial(n=1, p=0.2, size=(num_pc, self.num_bvc))
+        w_in_init = torch.tensor(w_in_init, dtype=self.dtype, device=self.device)
+        # We wrap in nn.Parameter so the weights can be learnable if needed
+        self.w_in = torch.nn.Parameter(w_in_init)
 
         # Recurrent weight matrix for head direction and place cell interactions
         # Shape: (n_hd, num_pc, num_pc)
-        self.w_rec_tripartite = tf.zeros(shape=(n_hd, num_pc, num_pc), dtype=tf.float32)
+        self.w_rec_tripartite = torch.zeros(
+            (n_hd, num_pc, num_pc), dtype=self.dtype, device=self.device
+        )
 
         # Activation values for place cells
         # Shape: (num_pc,)
-        self.place_cell_activations = tf.zeros(num_pc, dtype=tf.float32)
+        self.place_cell_activations = torch.zeros(
+            num_pc, dtype=self.dtype, device=self.device
+        )
 
         # Time constant for updating place cell activations
-        self.tau = timestep / 1000  # Convert timestep to seconds
+        self.tau = timestep / 1000.0  # Convert timestep to seconds
 
         # Activation values for boundary vector cells (BVCs)
         # Shape: (num_bvc,)
-        self.bvc_activations = tf.zeros(self.num_bvc, dtype=tf.float32)
+        self.bvc_activations = torch.zeros(
+            self.num_bvc, dtype=self.dtype, device=self.device
+        )
 
         # Coefficient to modify effect of place cell recurrent inhibition (Γ_pp in Equation 3.2a)
         self.gamma_pp = 0.5
@@ -82,15 +98,17 @@ class PlaceCellLayer:
 
         # Previous place cell activations
         # Shape: (num_pc,)
-        self.prev_place_cell_activations = tf.zeros(num_pc, dtype=tf.float32)
+        self.prev_place_cell_activations = torch.zeros(
+            num_pc, dtype=self.dtype, device=self.device
+        )
 
         # Initial weights for the input connections from BVCs to place cells
-        self.initial_w_in = tf.Variable(self.w_in)
+        self.initial_w_in = torch.clone(self.w_in.data)
 
         # Temporary variable for the current activation update step
         # Shape: (num_pc,)
-        self.activation_update = tf.zeros_like(
-            self.place_cell_activations, dtype=tf.float32
+        self.activation_update = torch.zeros_like(
+            self.place_cell_activations, dtype=self.dtype, device=self.device
         )
 
         # Head direction modulation (if applicable)
@@ -98,14 +116,18 @@ class PlaceCellLayer:
 
         # Boundary cell activation values (if any boundary cells are used)
         # Shape: (n_hd, num_pc)
-        self.boundary_cell_activations = tf.zeros((n_hd, num_pc))
+        self.boundary_cell_activations = torch.zeros(
+            (n_hd, num_pc), dtype=self.dtype, device=self.device
+        )
 
         # Trace of place cell activations for eligibility tracking
-        self.place_cell_trace = tf.zeros_like(self.place_cell_activations)
+        self.place_cell_trace = torch.zeros_like(self.place_cell_activations)
 
         # Trace of head direction cells for eligibility tracking
         # Shape: (n_hd, 1, 1)
-        self.hd_cell_trace = tf.zeros((n_hd, 1, 1), tf.float64)
+        self.hd_cell_trace = torch.zeros(
+            (n_hd, 1, 1), dtype=torch.float64, device=self.device
+        )
 
         # Enables/disables updating weights to spread place cells through environment via competition
         self.enable_ojas = enable_ojas
@@ -114,36 +136,47 @@ class PlaceCellLayer:
         self.enable_stdp = enable_stdp
 
     def get_place_cell_activations(
-        self, distances, hd_activations, collided: bool = False
+        self,
+        distances: np.ndarray,
+        hd_activations: np.ndarray,
+        collided: bool = False,
     ):
         """Compute place cell activations from BVC and head direction inputs.
 
         Args:
-            input_data: Tuple of (distances, angles) as input to BVC layer.
-            hd_activations: Head direction cell activations.
-            collided: Whether agent has collided with obstacle.
+            distances: 1D NumPy array of distance readings (to be fed into the BVC layer).
+            hd_activations: 1D NumPy array of head direction cell activations.
+            collided: Whether the agent has collided with an obstacle.
         """
-        # Store the previous place cell activations
-        self.prev_place_cell_activations = tf.identity(self.place_cell_activations)
+        # Convert distances to torch tensor on proper device
+        distances_torch = torch.tensor(distances, dtype=self.dtype, device=self.device)
 
-        # Compute BVC activations based on the input distances and angles
-        self.bvc_activations = self.bvc_layer.get_bvc_activation(distances=distances)
-
-        # Compute the input to place cells by taking the dot product of the input weights and BVC activations
-        # Afferent excitation term: ∑_j W_ij^{pb} v_j^b (Equation 3.2a)
-        afferent_excitation = tf.tensordot(self.w_in, self.bvc_activations, axes=1)
-
-        # Compute the total BVC activity for afferent inhibition
-        # Afferent inhibition term: Γ^{pb} ∑_j v_j^b (Equation 3.2a)
-        afferent_inhibition = self.gamma_pb * tf.reduce_sum(self.bvc_activations)
-
-        # Compute the total place cell activity for recurrent inhibition
-        # Recurrent inhibition term: Γ^{pp} ∑_j v_j^p (Equation 3.2a)
-        recurrent_inhibition = self.gamma_pp * tf.reduce_sum(
-            tf.cast(self.place_cell_activations, tf.float32)
+        # Convert head direction activations to torch, same device
+        hd_activations_torch = torch.tensor(
+            hd_activations, dtype=self.dtype, device=self.device
         )
 
-        # Update the activation variable `activation_update` with the new input, applying the membrane potential dynamics
+        # Store the previous place cell activations
+        self.prev_place_cell_activations = self.place_cell_activations.clone()
+
+        # Compute BVC activations based on the input distances
+        self.bvc_activations = self.bvc_layer.get_bvc_activation(
+            distances=distances_torch
+        )
+
+        # Compute the input to place cells by taking the dot product of input weights and BVC activations
+        # Afferent excitation term: ∑_j W_ij^{pb} v_j^b (Equation 3.2a)
+        afferent_excitation = torch.matmul(self.w_in, self.bvc_activations)
+
+        # Compute total BVC activity for afferent inhibition
+        # Afferent inhibition term: Γ^{pb} ∑_j v_j^b (Equation 3.2a)
+        afferent_inhibition = self.gamma_pb * torch.sum(self.bvc_activations)
+
+        # Compute total place cell activity for recurrent inhibition
+        # Recurrent inhibition term: Γ^{pp} ∑_j v_j^p (Equation 3.2a)
+        recurrent_inhibition = self.gamma_pp * torch.sum(self.place_cell_activations)
+
+        # Update the activation_update variable
         # Equation (3.2a): τ_p (ds_i^p/dt) = -s_i^p + afferent_excitation - afferent_inhibition - recurrent_inhibition
         self.activation_update += self.tau_p * (
             -self.activation_update
@@ -152,69 +185,84 @@ class PlaceCellLayer:
             - recurrent_inhibition
         )
 
-        # Apply ReLU followed by tanh to compute the new place cell activations
+        # Apply ReLU then tanh to compute new place cell activations
         # Equation (3.2b): v_i^p = tanh([ψ s_i^p]_+)
         # Here, ψ is implicitly set to 1
-        self.place_cell_activations = tf.tanh(tf.nn.relu(self.activation_update))
+        self.place_cell_activations = torch.tanh(torch.relu(self.activation_update))
 
-        # Update the eligibility trace and weights
-        if self.enable_stdp and np.any(self.place_cell_activations) and not collided:
-            # Update the eligibility trace for place cells and head direction cells
-            # Eligibility traces are used for temporal difference learning and sequence encoding
+        # Check STDP updates if enabled and no collision occurred
+        if (
+            self.enable_stdp
+            and torch.any(self.place_cell_activations != 0)
+            and not collided
+        ):
+            # Update eligibility trace for place cells
             if self.place_cell_trace is None:
-                self.place_cell_trace = tf.zeros_like(self.place_cell_activations)
-            self.place_cell_trace += (
-                self.tau / 3 * (self.place_cell_activations - self.place_cell_trace)
+                self.place_cell_trace = torch.zeros_like(self.place_cell_activations)
+            self.place_cell_trace += (self.tau / 3) * (
+                self.place_cell_activations - self.place_cell_trace
             )
-            self.hd_cell_trace += (
-                self.tau
-                / 3
-                * (
-                    np.nan_to_num(hd_activations)[:, np.newaxis, np.newaxis]
-                    - self.hd_cell_trace
-                )
+
+            # Update eligibility trace for head direction cells
+            # Convert hd_activations to avoid NaNs if needed
+            hd_activations_no_nan = torch.nan_to_num(hd_activations_torch)
+            # Expand to shape (n_hd, 1, 1)
+            hd_activations_no_nan = hd_activations_no_nan.unsqueeze(1).unsqueeze(2)
+            self.hd_cell_trace += (self.tau / 3) * (
+                hd_activations_no_nan - self.hd_cell_trace
             )
 
             # Update recurrent weights for place cell interactions modulated by head direction
-            # This implements sequence learning and is similar to STDP
-            self.w_rec_tripartite += tf.cast(
-                np.nan_to_num(hd_activations)[:, np.newaxis, np.newaxis], tf.float32
-            ) * (
-                tf.tensordot(
-                    self.place_cell_activations[:, np.newaxis],
-                    self.place_cell_trace[np.newaxis, :],
-                    axes=1,
-                )
-                - tf.tensordot(
-                    self.place_cell_trace[:, np.newaxis],
-                    self.place_cell_activations[np.newaxis, :],
-                    axes=1,
+            # STDP-like update
+            # w_rec_tripartite[hd, i, j] += ...
+            # We'll need to broadcast across direction dimension if we want to handle all directions at once
+            # Or if we only have 1D hd_activations, we might do something else.
+            #
+            # For simplicity, we handle all HD cells in one go, shape (n_hd, num_pc, num_pc):
+            hd_contrib = (
+                torch.nan_to_num(hd_activations_torch).unsqueeze(-1).unsqueeze(-1)
+            )
+            # place_cell_activations shape: (num_pc,)
+            # place_cell_trace shape:       (num_pc,)
+            # Outer products: (num_pc x num_pc)
+            # We'll replicate across the head direction dimension
+            pc_act_mat = torch.ger(self.place_cell_activations, self.place_cell_trace)
+            pc_trace_mat = torch.ger(self.place_cell_trace, self.place_cell_activations)
+
+            # Each head direction is used as a scalar factor per slice
+            # shape broadcast: (n_hd, 1, 1) * (num_pc, num_pc) => (n_hd, num_pc, num_pc)
+            update_rec = hd_contrib * (pc_act_mat - pc_trace_mat)
+
+            self.w_rec_tripartite += update_rec.type(self.dtype)
+
+        # Check Oja's rule for input weights if enabled
+        if self.enable_ojas and torch.any(self.place_cell_activations != 0):
+            # (num_pc, 1)
+            pc_activations_col = self.place_cell_activations.unsqueeze(1)
+            # (1, num_bvc)
+            bvc_activations_row = self.bvc_activations.unsqueeze(0)
+
+            # Equation (3.3)
+            # weight_update[i, j] = tau * ( v_i^p [v_j^b - (1/alpha_pb) v_i^p * w_in[i,j]] )
+            weight_update = self.tau * (
+                pc_activations_col
+                * (
+                    bvc_activations_row
+                    - (1 / self.alpha_pb) * pc_activations_col * self.w_in
                 )
             )
 
-        # Update the input weights based on the current activations and BVC activations
-        # This is the competitive learning rule from Equation (3.3)
-        if self.enable_ojas and np.any(self.place_cell_activations):
-            # Compute the weight update according to Oja's rule (Equation 3.3)
-            weight_update = self.tau * (
-                self.place_cell_activations[:, np.newaxis]
-                * (
-                    self.bvc_activations[np.newaxis, :]
-                    - (1 / self.alpha_pb)
-                    * self.place_cell_activations[:, np.newaxis]
-                    * self.w_in
-                )
-            )
-            # Update the input weights from BVCs to place cells
-            self.w_in.assign_add(weight_update)
+            # In PyTorch, we can update the data directly or reassign
+            with torch.no_grad():
+                self.w_in.data += weight_update
 
     def reset_activations(self):
         """Reset place cell activations and related variables to zero."""
-        self.place_cell_activations *= 0
-        self.activation_update *= 0
-        self.place_cell_trace = None
+        self.place_cell_activations.zero_()
+        self.activation_update.zero_()
+        self.place_cell_trace = None  # As in original code
 
-    def preplay(self, direction, num_steps=1):
+    def preplay(self, direction: int, num_steps: int = 1) -> torch.Tensor:
         """Simulate preplay of place cell activations using recurrent weights.
 
         Used to predict future states without actual movement.
@@ -228,25 +276,27 @@ class PlaceCellLayer:
         """
         # Copy the current place cell activations
         # Shape: (num_pc,)
-        place_cell_activations = tf.identity(self.place_cell_activations)
+        place_cell_activations = self.place_cell_activations.clone()
 
         # Iterate to update the place cell activations
         for _ in range(num_steps):
             # Store previous activations
-            previous_activations = tf.identity(place_cell_activations)
+            previous_activations = place_cell_activations.clone()
 
             # Compute new activations based on recurrent weights and previous activations
             # The recurrent weights are modulated by the specified head direction
-            place_cell_activations = tf.tanh(
-                tf.nn.relu(
-                    tf.tensordot(
-                        tf.cast(self.w_rec_tripartite[direction], tf.float32),
-                        previous_activations,
-                        axes=1,
-                    )
-                    - previous_activations
-                )
+            # shape: (num_pc,)
+            # w_rec_tripartite[direction] shape: (num_pc, num_pc)
+            # previous_activations shape: (num_pc,)
+            # torch.matmul -> (num_pc,)
+            updated = torch.matmul(
+                self.w_rec_tripartite[direction], previous_activations
             )
 
-        # Return the updated place cell activations
+            # Subtractive term: - previous_activations
+            updated = updated - previous_activations
+
+            # Apply ReLU and then tanh
+            place_cell_activations = torch.tanh(torch.relu(updated))
+
         return place_cell_activations

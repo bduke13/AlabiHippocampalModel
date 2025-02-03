@@ -1,10 +1,18 @@
+# %%
 import numpy as np
 import matplotlib.pyplot as plt
+import torch
 
 
 class HeadDirectionLayer:
-    def __init__(self, num_cells: int) -> None:
-        """Initializes a layer of head direction cells.
+    def __init__(
+        self,
+        num_cells: int,
+        theta_0: float = 0.0,
+        dtype: torch.dtype = torch.float32,
+        device="cpu",
+    ) -> None:
+        """Initializes a layer of head direction cells using PyTorch.
 
         Creates a layer of cells that represent the agent's heading in a discretized way.
         Each cell has a preferred direction, with activations based on the proximity
@@ -12,56 +20,88 @@ class HeadDirectionLayer:
 
         Args:
             num_cells: Number of head direction cells, evenly spaced across 360 degrees.
+            theta_0: Optional anchor angle in radians to offset all preferred directions.
         """
         self.num_cells = num_cells
+        self.theta_0 = theta_0
 
-    def get_hd_activation(self, theta_0: float, v_in: np.ndarray):
-        """Computes the activation of head direction cells based on current heading.
+        # Create equally spaced angles [0, 2π) for HD cells
+        # shape: (num_cells,)
+        theta_i = torch.linspace(
+            start=0,
+            end=2 * torch.pi,
+            steps=self.num_cells + 1,
+            dtype=dtype,
+            device=device,
+        )[:-1]
 
-        Calculates how much the agent's current heading aligns with each cell's
-        preferred direction using dot product computation.
+        # Stack cos and sin into shape (num_cells, 2)
+        # Each row = [cos(θ_i + θ0), sin(θ_i + θ0)]
+        self.tuning_kernel = torch.stack(
+            [
+                torch.cos(theta_i + self.theta_0),
+                torch.sin(theta_i + self.theta_0),
+            ],
+            dim=1,
+        ).to(dtype=dtype, device=device)
+
+        # Will hold the most recent activation vector of shape (num_cells,)
+        self.hd_activations = None
+
+    def get_hd_activation(self, v_in: torch.Tensor) -> torch.Tensor:
+        """Computes the activation of head direction cells given a 2D heading vector.
+
+        The activation is calculated via dot product between each cell's preferred
+        direction and the current heading vector.
 
         Args:
-            theta_0: Heading angle of the anchor cue in radians (default is 0).
-            v_in: Vector representing the current heading direction of the agent.
+            v_in: A 2-element torch.Tensor representing the current heading direction (e.g., [cos θ, sin θ]).
 
         Returns:
-            Activation levels of head direction cells as numpy array. Each value
-            indicates alignment between current heading and cell's preferred direction.
+            A 1D torch.Tensor of shape (num_cells,) with activation values.
         """
-        # Create equally spaced angles for HD cells
-        theta_i = np.arange(0, 2 * np.pi, 2 * np.pi / self.num_cells)
+        # Ensure v_in is shape (2,) – not strictly required, but typical
+        if v_in.shape != (2,):
+            raise ValueError(
+                "v_in should be a 2-element torch.Tensor, e.g. [cosθ, sinθ]."
+            )
 
-        # Generate tuning kernel for directions
-        D = np.stack([np.cos(theta_i + theta_0), np.sin(theta_i + theta_0)], axis=0)
+        # Dot product => (num_cells,) = (num_cells,2) x (2,)
+        activation = torch.matmul(self.tuning_kernel, v_in)
 
-        # Compute dot product between current heading and preferred directions
-        activation = np.dot(v_in, D)
-
-        self.state = activation
-
-        # Shape: (self.num_cells,)
+        self.hd_activations = activation
         return activation
 
     def plot_activation(self, plot_type: str = "bar", return_plot: bool = False):
         """Plots the activation levels of head direction cells.
 
+        Converts self.hd_activations to a NumPy array for plotting.
+
         Args:
             plot_type: Type of plot to create ('bar' or 'radial').
-            return_plot: If True, returns the plot object instead of displaying.
+            return_plot: If True, returns the plot object instead of displaying it.
 
         Returns:
-            plt.Figure if return_plot is True, otherwise None.
+            The matplotlib Figure if return_plot is True, otherwise None.
 
         Raises:
             ValueError: If activation state is not set or plot_type is invalid.
         """
-        if self.state is None or not np.any(self.state):
+        if self.hd_activations is None:
             raise ValueError(
-                "Activation state is not set. Please call 'get_hd_activation' first to compute activations."
+                "Activation state is not set. Please call 'get_hd_activation' first."
             )
 
-        # Create the labels for each head direction cell based on the evenly spaced angles
+        # Check if there's any nonzero activation
+        if not torch.any(self.hd_activations):
+            raise ValueError(
+                "Current activation is zero or empty. Did you provide a valid heading vector?"
+            )
+
+        # Convert to CPU NumPy for plotting
+        activations_np = self.hd_activations.detach().cpu().numpy()
+
+        # Create the labels (e.g., 0°, 45°, 90°, etc.) for each head direction cell
         categories = [
             f"{int(round(np.rad2deg(angle)))}°"
             for angle in np.linspace(0, 2 * np.pi, self.num_cells, endpoint=False)
@@ -69,30 +109,48 @@ class HeadDirectionLayer:
 
         if plot_type == "bar":
             fig, ax = plt.subplots()
-            ax.bar(categories, self.state)
+            ax.bar(categories, activations_np)
             ax.set_xlabel("Head Direction Cells (Degrees)")
-            ax.set_ylabel("Activation Magnitude")
+            ax.set_ylabel("Activation")
             ax.set_title("Head Direction Layer Activation")
-            plt.xticks(rotation=45, ha="right")  # Rotate labels for better readability
+            plt.xticks(rotation=45, ha="right")
+
         elif plot_type == "radial":
+            # For radial, we need angles from 0 to 2π
             angles = np.linspace(0, 2 * np.pi, self.num_cells, endpoint=False)
-            r = self.state
             fig, ax = plt.subplots(subplot_kw={"projection": "polar"})
             ax.bar(
-                angles, r, width=2 * np.pi / self.num_cells, bottom=0.0, align="center"
+                angles, activations_np, width=2 * np.pi / self.num_cells, align="center"
             )
             ax.set_theta_zero_location("N")
             ax.set_theta_direction(-1)
             ax.set_xticks(angles)
             ax.set_xticklabels(categories)
-            plt.title("Head Direction Layer Activation")
+            ax.set_title("Head Direction Layer Activation")
+
         else:
             raise ValueError("Invalid plot_type. Choose 'bar' or 'radial'.")
 
         plt.tight_layout()
-
-        # Return the figure object if requested, otherwise show the plot
         if return_plot:
             return fig
         else:
             plt.show()
+
+
+if __name__ == "__main__":
+    # Example usage
+    # 1. Create a layer with 8 direction cells
+    hd_layer = HeadDirectionLayer(num_cells=8, theta_0=0.0)
+
+    # 2. Suppose current heading vector is [cos(45°), sin(45°)] = [√2/2, √2/2]
+    heading_vec = torch.tensor(
+        [np.cos(np.pi / 4), np.sin(np.pi / 4)], dtype=torch.float32
+    )
+
+    # 3. Compute the activations
+    activations = hd_layer.get_hd_activation(heading_vec)
+    print("HD Activations:", activations)
+
+    # 4. Plot them in radial form
+    hd_layer.plot_activation(plot_type="bar")
