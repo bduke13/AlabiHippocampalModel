@@ -1,6 +1,7 @@
 """my_controller_iCreate controller."""
 
-from driver import Driver, RobotMode
+from driver import Driver
+from robot_mode import RobotMode
 
 bot = Driver()
 # 1. LEARN_OJAS

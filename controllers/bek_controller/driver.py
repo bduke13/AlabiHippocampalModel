@@ -6,62 +6,21 @@ from matplotlib.cm import get_cmap
 from astropy.stats import circmean, circvar
 import pickle
 import os
-import time
 import tkinter as tk
 from tkinter import N, messagebox
 from typing import Optional, List
 from controller import Supervisor, Robot
-from enum import Enum, auto
 from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
 from layers.head_direction_layer import HeadDirectionLayer
 from layers.place_cell_layer import PlaceCellLayer
 from layers.reward_cell_layer import RewardCellLayer
+from robot_mode import RobotMode
 
 tf.random.set_seed(5)
 np.set_printoptions(precision=2)
 PI = tf.constant(np.pi)
 rng = default_rng()  # random number generator
 cmap = get_cmap("plasma")
-
-
-class RobotMode(Enum):
-    """Defines the different operating modes for the robot's behavior and learning.
-
-    The robot can operate in several modes that control its behavior, learning mechanisms,
-    and data collection. These modes determine how the robot explores its environment,
-    learns from experiences, and utilizes learned information.
-
-    Modes:
-        LEARN_OJAS: Initial learning phase where the robot randomly explores while only
-            enabling competition (Oja's rule) between place cells. Runs until time limit.
-
-        LEARN_HEBB: Secondary learning phase with both Oja's rule and tripartite (Hebbian)
-            learning enabled during random exploration. Must run after LEARN_OJAS since
-            place cells need to stabilize first.
-
-        DMTP: Delayed Matching to Place task. Random exploration with both learning rules
-            enabled until goal is reached, then updates reward map in reward cell network.
-
-        EXPLOIT: Goal-directed navigation using the learned reward map. Both learning
-            rules remain enabled while the robot navigates to known goals.
-
-        PLOTTING: Random exploration mode with all learning disabled in both place cell
-            and reward cell networks. Used for visualization and analysis.
-
-        MANUAL_CONTROL: Enables direct user control of the robot in the Webots simulator
-            through keyboard inputs.
-
-        RECORDING: Random exploration with learning disabled, focused on collecting and
-            saving sensor data for offline analysis or training.
-    """
-
-    LEARN_OJAS = auto()
-    LEARN_HEBB = auto()
-    DMTP = auto()
-    EXPLOIT = auto()
-    PLOTTING = auto()
-    MANUAL_CONTROL = auto()
-    RECORDING = auto()
 
 
 class Driver(Supervisor):
@@ -81,7 +40,7 @@ class Driver(Supervisor):
         num_steps (int): Total number of simulation steps.
         hmap_x (ndarray): History of x-coordinates.
         hmap_y (ndarray): History of y-coordinates.
-        hmap_z (ndarray): History of place cell activations.
+        hmap_pcn (ndarray): History of place cell activations.
         hmap_h (ndarray): History of head direction activations.
         hmap_g (ndarray): History of goal estimates.
         robot (Robot): Main robot controller instance.
@@ -132,7 +91,7 @@ class Driver(Supervisor):
         self.robot_mode = mode
 
         # Model parameters
-        self.num_place_cells = 300
+        self.num_place_cells = 80
         self.num_reward_cells = 1
         self.n_hd = 8
         self.timestep = 32 * 3
@@ -151,7 +110,7 @@ class Driver(Supervisor):
 
         self.hmap_x = np.zeros(self.num_steps)  # x-coordinates
         self.hmap_y = np.zeros(self.num_steps)  # y-coordinates
-        self.hmap_z = np.zeros(
+        self.hmap_pcn = np.zeros(
             (self.num_steps, self.num_place_cells)
         )  # place cell activations
 
@@ -187,7 +146,6 @@ class Driver(Supervisor):
         # Initialize boundaries
         self.lidar_resolution = 720
         self.boundary_data = tf.Variable(tf.zeros((self.lidar_resolution, 1)))
-        self.lidar_angles = np.linspace(0, 2 * np.pi, self.lidar_resolution, False)
 
         # Initialize layers
         self.load_pcn(
@@ -267,8 +225,7 @@ class Driver(Supervisor):
                 input_dim=self.lidar_resolution,
                 n_hd=n_hd,
                 sigma_ang=90,
-                sigma_d=0.5,
-                lidar_angles=self.lidar_angles,
+                sigma_d=0.75,
             )
 
             self.pcn = PlaceCellLayer(
@@ -525,84 +482,6 @@ class Driver(Supervisor):
         else:
             return 0.0  # No reward otherwise
 
-    ########################################### RECORDING ###########################################
-
-    def record_sensor_data(self):
-        """Records sensor data during robot operation.
-
-        Stores:
-            - Current position coordinates
-            - Heading angle in degrees
-            - LiDAR range readings
-
-        The data is stored in the sensor_data dictionary with keys:
-        'positions', 'headings', and 'lidar'.
-
-        Returns:
-            None
-        """
-        # Get current position
-        curr_pos = self.robot.getField("translation").getSFVec3f()
-        self.sensor_data["positions"].append([curr_pos[0], curr_pos[2]])
-
-        # Get current heading angle in degrees
-        current_heading_deg = int(self.get_bearing_in_degrees(self.compass.getValues()))
-        self.sensor_data["headings"].append(current_heading_deg)
-
-        # Get LiDAR readings
-        lidar_readings = self.range_finder.getRangeImage()
-        self.sensor_data["lidar"].append(
-            lidar_readings.copy()
-        )  # Copy to avoid referencing issues
-
-    def save_sensor_data(self):
-        """
-        Saves the recorded sensor data to files for later use.
-        """
-        # Convert lists to NumPy arrays
-        positions = np.array(self.sensor_data["positions"])
-        headings = np.array(self.sensor_data["headings"])
-        lidar_data = np.array(self.sensor_data["lidar"])
-
-        # Save data to files
-        np.save("recorded_positions.npy", positions)
-        np.save("recorded_headings.npy", headings)
-        np.save("recorded_lidar.npy", lidar_data)
-
-        print("Sensor data saved.")
-
-    def recording(self):
-        """
-        Handles the logic for recording sensor data without using place fields.
-        """
-        # Sense the environment
-        self.sense()
-
-        # Record sensor data
-        self.record_sensor_data()
-
-        # Move the robot forward
-        if not np.any(self.collided):
-            self.forward()
-        else:
-            # If collided, turn by a random angle to avoid obstacle
-            self.turn(np.random.uniform(-np.pi / 2, np.pi / 2))
-            self.collided.assign([0, 0])  # Reset collision status
-
-        # Introduce a 5% chance to rotate randomly
-        if rng.uniform(0, 1) < 0.05:  # 5% probability
-            self.turn(
-                np.random.normal(0, np.deg2rad(30))
-            )  # Random turn with normal distribution
-
-        # Increment the step count
-        self.step_count += 1
-
-        # Check if the maximum number of steps has been reached
-        if self.step_count >= self.num_steps:
-            self.save()
-            print("Data recording complete.")
-
     ########################################### SENSE ###########################################
 
     def sense(self):
@@ -641,18 +520,13 @@ class Driver(Supervisor):
         # Shape: scalar (float) - Current heading of the robot in radians.
         current_heading_rad = np.deg2rad(self.current_heading_deg)
 
-        # 5. Define the anchor direction (theta_0) as 0 radians for now, meaning no offset is applied.
-        theta_0 = 0
-
         # 6. Calculate the current heading vector from the heading in radians.
         # Shape: (2,) - A 2D vector representing the robot's current heading direction: [cos(theta), sin(theta)].
         v_in = np.array([np.cos(current_heading_rad), np.sin(current_heading_rad)])
 
         # 7. Compute the activations of the head direction cells based on the current heading vector (v_in).
         # Shape: (self.num_cells,) - A 1D array where each element represents the activation of a head direction cell.
-        self.hd_activations = self.head_direction_layer.get_hd_activation(
-            theta_0=theta_0, v_in=v_in
-        )
+        self.hd_activations = self.head_direction_layer.get_hd_activation(v_in=v_in)
 
         # 8. Update the collision status using the left bumper sensor.
         # Shape: scalar (int) - 1 if collision detected on the left bumper, 0 otherwise.
@@ -678,6 +552,8 @@ class Driver(Supervisor):
         bearing = (rad - 1.5708) / np.pi * 180.0
         if bearing < 0:
             bearing = bearing + 360.0
+
+        print(north, bearing)
         return bearing
 
     ########################################### COMPUTE ###########################################
@@ -701,9 +577,13 @@ class Driver(Supervisor):
         if self.step_count < self.num_steps:
             self.hmap_x[self.step_count] = curr_pos[0]
             self.hmap_y[self.step_count] = curr_pos[2]
-            self.hmap_z[self.step_count] = self.pcn.place_cell_activations
-            self.hmap_bvc[self.step_count] = self.pcn.bvc_activations
-            self.hmap_h[self.step_count] = self.hd_activations
+            self.hmap_pcn[self.step_count] = (
+                self.pcn.place_cell_activations.detach().cpu().numpy()
+            )
+            self.hmap_bvc[self.step_count] = (
+                self.pcn.bvc_activations.detach().cpu().numpy()
+            )
+            self.hmap_h[self.step_count] = self.hd_activations.detach().cpu().numpy()
             self.hmap_g[self.step_count] = tf.reduce_sum(self.pcn.bvc_activations)
 
         # Increment timestep
@@ -931,9 +811,9 @@ class Driver(Supervisor):
             with open("hmap_y.pkl", "wb") as output:
                 pickle.dump(self.hmap_y[: self.step_count], output)
                 files_saved.append("hmap_y.pkl")
-            with open("hmap_z.pkl", "wb") as output:
-                pickle.dump(self.hmap_z[: self.step_count], output)
-                files_saved.append("hmap_z.pkl")
+            with open("hmap_pcn.pkl", "wb") as output:
+                pickle.dump(self.hmap_pcn[: self.step_count], output)
+                files_saved.append("hmap_pcn.pkl")
             with open("hmap_g.pkl", "wb") as output:
                 pickle.dump(self.hmap_g[: self.step_count], output)
                 files_saved.append("hmap_g.pkl")
@@ -964,7 +844,7 @@ class Driver(Supervisor):
             "rcn.pkl",
             "hmap_x.pkl",
             "hmap_y.pkl",
-            "hmap_z.pkl",
+            "hmap_pcn.pkl",
             "hmap_bvc.pkl",
             "hmap_g.pkl",
             "hmap_h.pkl",
