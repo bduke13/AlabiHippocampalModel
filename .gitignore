@@ -19,6 +19,7 @@ main.py
 *.hmap_*.pkl
 *.pkl
 *.wbproj
+*cell_names.txt
 
 # Ignore images in any output directory
 *.jpg
@@ -27,3 +28,7 @@ main.py
 *.npy
 *.keras
 *.html
+
+
+#Data directory for Thesis
+*IJCNN*
