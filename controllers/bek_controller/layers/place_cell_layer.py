@@ -61,7 +61,7 @@ class PlaceCellLayer:
         w_in_init = rng.binomial(n=1, p=0.2, size=(num_pc, self.num_bvc))
         w_in_init = torch.tensor(w_in_init, dtype=self.dtype, device=self.device)
         # We wrap in nn.Parameter so the weights can be learnable if needed
-        self.w_in = torch.nn.Parameter(w_in_init)
+        self.w_in = torch.nn.Parameter(w_in_init, requires_grad=False)
 
         # Recurrent weight matrix for head direction and place cell interactions
         # Shape: (n_hd, num_pc, num_pc)
@@ -245,7 +245,7 @@ class PlaceCellLayer:
 
             # In PyTorch, we can update the data directly or reassign
             with torch.no_grad():
-                self.w_in.data += weight_update
+                self.w_in += weight_update
 
     def reset_activations(self):
         """Reset place cell activations and related variables to zero."""
