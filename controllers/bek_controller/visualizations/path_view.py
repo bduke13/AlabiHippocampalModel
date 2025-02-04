@@ -73,7 +73,9 @@ if __name__ == "__main__":
 
     base_path = "controllers/bek_controller/"
     # Load hmap data
-    hmap_x, hmap_y = load_hmaps(prefix=base_path, hmap_names=["hmap_x", "hmap_y"])
+    hmap_loc = load_hmaps(prefix=base_path, hmap_names=["hmap_loc"])
+    hmap_x = hmap_loc[0][:, 0]
+    hmap_y = hmap_loc[0][:, 2]
 
     # Plot the trajectory
     plot_trajectory(hmap_x, hmap_y)

@@ -16,8 +16,6 @@ def load_hmaps(prefix="three_dim/", hmap_names=["hmap_x", "hmap_y", "hmap_pcn"])
         tuple: (hmap_x, hmap_y, hmap_pcn) arrays containing the heatmap data
     """
     # make sure end directory is a folder
-    if prefix[-1] != "/":
-        prefix += "/"
 
     # collect all hmaps
     hmaps = []

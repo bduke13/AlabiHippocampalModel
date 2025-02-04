@@ -1,3 +1,4 @@
+# %%
 # tripartite_directional.py
 
 import sys
@@ -18,13 +19,13 @@ def weighted_mean(data, weights):
     return np.sum(data * weights) / np.sum(weights)
 
 
-def compute_place_cell_centers(hmap_x, hmap_y, hmap_z):
+def compute_place_cell_centers(hmap_x, hmap_y, hmap_pcn):
     """Compute the centers of place fields based on place cell activations."""
-    num_cells = hmap_z.shape[1]
+    num_cells = hmap_pcn.shape[1]
     centers = np.zeros((num_cells, 2))
 
     for i in range(num_cells):
-        activations = hmap_z[:, i]
+        activations = hmap_pcn[:, i]
         mask = activations > 0
         if not np.any(mask):
             centers[i] = np.nan, np.nan
@@ -45,21 +46,29 @@ def load_data():
         hmap_x = np.array(pickle.load(f))
     with open(os.path.join(bek_controller_dir, "hmap_y.pkl"), "rb") as f:
         hmap_y = np.array(pickle.load(f))
-    with open(os.path.join(bek_controller_dir, "hmap_z.pkl"), "rb") as f:
-        hmap_z = np.asarray(pickle.load(f))
+    with open(os.path.join(bek_controller_dir, "hmap_pcn.pkl"), "rb") as f:
+        hmap_pcn = np.asarray(pickle.load(f))
 
-    return pcn, hmap_x, hmap_y, hmap_z
+    return pcn, hmap_x, hmap_y, hmap_pcn
 
 
-def main():
+if __name__ == "__main__":
     # Load data
-    pcn, hmap_x, hmap_y, hmap_z = load_data()
+    from visualizations.analysis_utils import load_hmaps
+    from layers.place_cell_layer import PlaceCellLayer
+
+    hmap_loc, hmap_pcn = load_hmaps("", ["hmap_loc", "hmap_pcn"])
+    hmap_x = hmap_loc[:, 0]
+    hmap_y = hmap_loc[:, 2]
+    with open("pcn.pkl", "rb") as f:
+        pcn = pickle.load(f)
 
     # Compute place cell centers
-    place_cell_centers = compute_place_cell_centers(hmap_x, hmap_y, hmap_z)
+    place_cell_centers = compute_place_cell_centers(hmap_x, hmap_y, hmap_pcn)
 
+    # %%
     # Extract tripartite connections
-    w_rec_tripartite = pcn.w_rec_tripartite.numpy()
+    w_rec_tripartite = pcn.w_rec_tripartite.cpu().detach().numpy()
     n_hd, num_pc, _ = w_rec_tripartite.shape
 
     # Normalize weights per head direction
@@ -70,7 +79,7 @@ def main():
 
     # Define threshold for edges
     non_zero_weights = w_rec_tripartite_normalized[w_rec_tripartite_normalized > 0]
-    threshold = np.percentile(non_zero_weights, 99) if non_zero_weights.size > 0 else 0
+    threshold = np.percentile(non_zero_weights, 90) if non_zero_weights.size > 0 else 0
 
     # Define colors for head directions
     cmap = plt.cm.get_cmap("hsv", n_hd)
@@ -122,7 +131,3 @@ def main():
     plt.gca().set_aspect("equal", adjustable="box")
     plt.tight_layout(rect=[0, 0, 0.85, 1])  # Adjust layout to make space for the legend
     plt.show()
-
-
-if __name__ == "__main__":
-    main()
