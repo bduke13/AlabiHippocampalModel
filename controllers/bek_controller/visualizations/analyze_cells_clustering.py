@@ -10,6 +10,11 @@ import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+# Set global font to Times New Roman
+plt.rcParams["font.family"] = "serif"
+plt.rcParams["font.serif"] = ["Times New Roman"]
+plt.rcParams["mathtext.fontset"] = "dejavuserif"
+
 # Set pandas display options
 pd.set_option("display.max_rows", None)
 pd.set_option("display.max_columns", None)
@@ -93,12 +98,19 @@ df = df[df["parent_dir"].isin(allowed_models)]
 # Desired order for environments
 order = ["upright", "inside_shallow", "inside_medium", "inside_steep"]
 
-# Set font sizes globally to 14
-plt.rcParams.update({"font.size": 14})
-plt.rcParams.update({"axes.labelsize": 14})
-plt.rcParams.update({"axes.titlesize": 14})
-plt.rcParams.update({"legend.fontsize": 14})
-plt.rcParams.update({"legend.title_fontsize": 14})
+# Set font family and sizes globally
+plt.rcParams.update(
+    {
+        "font.family": "serif",
+        "font.serif": ["Times New Roman"],
+        "mathtext.fontset": "dejavuserif",
+        "font.size": 14,
+        "axes.labelsize": 14,
+        "axes.titlesize": 14,
+        "legend.fontsize": 14,
+        "legend.title_fontsize": 14,
+    }
+)
 
 # Create subplots in a single row with wider aspect ratio
 fig, axes = plt.subplots(1, 3, figsize=(24, 4))  # Made wider to achieve 1:2 ratio
@@ -120,10 +132,10 @@ g1 = sns.barplot(
     ax=axes[0],
     order=order,
 )
-axes[0].set_title("", fontsize=14)
-axes[0].set_xticklabels([ENV_NAMES.get(env, env) for env in order], fontsize=14)
-axes[0].set_xlabel("", fontsize=14)
-axes[0].set_ylabel("Proportion", fontsize=14)
+axes[0].set_title("", fontsize=18)
+axes[0].set_xticklabels([ENV_NAMES.get(env, env) for env in order], fontsize=18)
+axes[0].set_xlabel("", fontsize=18)
+axes[0].set_ylabel("Proportion", fontsize=18)
 
 # Get handles and labels from the plot
 handles, _ = axes[0].get_legend_handles_labels()
@@ -144,10 +156,10 @@ g2 = sns.barplot(
     ax=axes[1],
     order=order,
 )
-axes[1].set_title("", fontsize=14)
-axes[1].set_xticklabels([ENV_NAMES.get(env, env) for env in order], fontsize=14)
-axes[1].set_xlabel("", fontsize=14)
-axes[1].set_ylabel("Proportion", fontsize=14)
+axes[1].set_title("", fontsize=18)
+axes[1].set_xticklabels([ENV_NAMES.get(env, env) for env in order], fontsize=18)
+axes[1].set_xlabel("", fontsize=18)
+axes[1].set_ylabel("Proportion", fontsize=18)
 
 # Get handles and labels from the plot
 handles, _ = axes[1].get_legend_handles_labels()
@@ -167,10 +179,10 @@ g3 = sns.barplot(
     ax=axes[2],
     order=order,
 )
-axes[2].set_title("", fontsize=14)
-axes[2].set_xticklabels([ENV_NAMES.get(env, env) for env in order], fontsize=14)
-axes[2].set_xlabel("", fontsize=14)
-axes[2].set_ylabel("Average Clusters", fontsize=14)
+axes[2].set_title("", fontsize=18)
+axes[2].set_xticklabels([ENV_NAMES.get(env, env) for env in order], fontsize=18)
+axes[2].set_xlabel("", fontsize=18)
+axes[2].set_ylabel("Average Clusters", fontsize=18)
 
 # Get handles and labels from the plot
 handles, _ = axes[2].get_legend_handles_labels()

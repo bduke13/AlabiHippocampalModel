@@ -4,8 +4,12 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+from matplotlib import rcParams
 
 if __name__ == "__main__":
+    # Set global font to Times New Roman
+    plt.rcParams["font.family"] = "Times New Roman"
+    plt.rcParams["mathtext.fontset"] = "dejavuserif"  # For math text
 
     # Load your CSV
     input_csv = "controllers/bek_controller/analysis_results/cosine_similarities.csv"
@@ -94,7 +98,7 @@ if __name__ == "__main__":
                 )
                 scatter_obj = sc
             else:
-                ax.text(0.5, 0.5, "No data", ha="center", va="center", fontsize=14)
+                ax.text(0.5, 0.5, "No data", ha="center", va="center", fontsize=18)
 
             # Make each subplot square, remove ticks and spines
             ax.set_aspect("equal", "box")
@@ -106,10 +110,10 @@ if __name__ == "__main__":
 
             # Titles/labels with font sizes using mapped names
             if r == 0:
-                ax.set_title(ENV_NAMES[env_name], fontsize=12)
+                ax.set_title(ENV_NAMES[env_name], fontsize=15)
             if c == 0:
                 ax.set_ylabel(
-                    MODEL_NAMES[model_name], rotation=90, labelpad=10, fontsize=12
+                    MODEL_NAMES[model_name], rotation=90, labelpad=10, fontsize=15
                 )
 
     # Shrink the plotting area to 88% of figure width, 95% of figure height, with reduced spacing
@@ -128,7 +132,7 @@ if __name__ == "__main__":
 
     # Create bar plot of sums with square aspect ratio
     fig, ax = plt.subplots(figsize=(9, 4.5))
-    fig.suptitle("Mean Aliasing Index by Environment", fontsize=14)
+    fig.suptitle("Mean Aliasing Index by Environment", fontsize=18)
 
     # Calculate sums for each model and environment
     sum_data = []
@@ -153,10 +157,10 @@ if __name__ == "__main__":
     sns.barplot(data=sum_df, x="Environment", y="Total Sum", hue="Model", ax=ax)
 
     # Customize plot
-    ax.set_xlabel("", fontsize=14)
-    ax.set_ylabel("MSAI", fontsize=14)
+    ax.set_xlabel("", fontsize=18)
+    ax.set_ylabel("MSAI", fontsize=18)
     ax.tick_params(labelsize=14)
-    ax.legend(title="Model", fontsize=14, title_fontsize=14, loc="lower left")
+    ax.legend(title="Model", fontsize=18, title_fontsize=18, loc="lower left")
 
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.show()
