@@ -1,3 +1,4 @@
+# %%
 from typing import Union
 import numpy as np
 import matplotlib.pyplot as plt
@@ -103,7 +104,7 @@ class BoundaryVectorCellLayer:
             The matplotlib Figure object if return_plot is True, otherwise None.
         """
         # Get BVC activations based on distances and angles
-        activations = self.get_bvc_activation(distances, angles).numpy()
+        activations = self.get_bvc_activation(distances).numpy()
 
         # Create a polar plot
         fig = plt.figure(figsize=(8, 8))
@@ -149,26 +150,28 @@ class BoundaryVectorCellLayer:
 
 if __name__ == "__main__":
     # Generate a synthetic star-shaped boundary (without defaults)
-    n_points: int = 720
-    max_r: float = 10
-    min_r: float = 5
-    n_star_peaks: int = 5
+    n_points = 720  # LiDAR resolution
+    max_r = 10
+    min_r = 5
+    n_star_peaks = 5
 
-    angles: np.ndarray = np.linspace(0, 2 * np.pi, n_points, endpoint=False)
-    distances: np.ndarray = np.ones(n_points) * min_r  # Start with min_r
-
-    # Create star peaks by alternating between max_r and min_r
-    star_interval: int = n_points // (
-        n_star_peaks * 2
-    )  # Each peak consists of a far and near point
+    # Create star-shaped LiDAR distance pattern
+    distances = np.ones(n_points) * min_r
+    star_interval = n_points // (n_star_peaks * 2)
     for i in range(0, n_star_peaks * 2, 2):
         start_idx = i * star_interval
         distances[start_idx : start_idx + star_interval] = max_r
+    lidar_angles = np.linspace(0, 2 * np.pi, n_points, False)
 
     # Initialize BVC layer
     bvc_layer_with_activation = BoundaryVectorCellLayer(
-        max_dist=12, input_dim=720, n_hd=8, sigma_ang=90, sigma_d=0.5
+        max_dist=12,
+        input_dim=720,
+        n_hd=8,
+        sigma_ang=90,
+        sigma_d=0.5,
+        lidar_angles=angles,
     )
 
     # Plot BVC activation with the star-shaped boundary
-    bvc_layer_with_activation.plot_activation(distances, angles)
+    bvc_layer_with_activation.plot_activation(distances)
