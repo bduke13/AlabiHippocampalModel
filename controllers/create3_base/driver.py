@@ -560,8 +560,8 @@ class Driver(Supervisor):
 
         # 3. Roll the LiDAR data based on the current heading to align the 'front' with index 0.
         # Shape: (720,) - LiDAR data remains 720 points, but shifted according to the robot's current heading.
-        boundaries = np.roll(boundaries, 2 * self.current_heading_deg)
-        self.boundaries = torch.tensor(boundaries, dtype=self.dtype, device=self.device)
+        self.boundaries = np.roll(boundaries, 2 * self.current_heading_deg)
+        # self.boundaries = torch.tensor(boundaries, dtype=self.dtype, device=self.device)
 
         # 4. Convert the current heading from degrees to radians.
         # Shape: scalar (float) - Current heading of the robot in radians.

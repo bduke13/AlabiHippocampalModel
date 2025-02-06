@@ -131,8 +131,8 @@ class PlaceCellLayer:
 
     def get_place_cell_activations(
         self,
-        distances: torch.tensor,
-        hd_activations: torch.tensor,
+        distances: np.ndarray,
+        hd_activations: np.ndarray,
         collided: bool = False,
     ):
         """Compute place cell activations from BVC and head direction inputs.
@@ -142,8 +142,18 @@ class PlaceCellLayer:
             hd_activations: 1D NumPy array of head direction cell activations.
             collided: Whether the agent has collided with an obstacle.
         """
+        # Convert distances to torch tensor on proper device
+        distances_torch = torch.tensor(distances, dtype=self.dtype, device=self.device)
+
+        # Convert head direction activations to torch, same device
+        hd_activations_torch = torch.as_tensor(
+            hd_activations, dtype=self.dtype, device=self.device
+        )
+
         # Compute BVC activations based on the input distances
-        self.bvc_activations = self.bvc_layer.get_bvc_activation(distances=distances)
+        self.bvc_activations = self.bvc_layer.get_bvc_activation(
+            distances=distances_torch
+        )
 
         # Compute the input to place cells by taking the dot product of input weights and BVC activations
         # Afferent excitation term: ∑_j W_ij^{pb} v_j^b (Equation 3.2a)
@@ -186,7 +196,7 @@ class PlaceCellLayer:
 
             # Update eligibility trace for head direction cells
             # Convert hd_activations to avoid NaNs if needed
-            hd_activations_no_nan = torch.nan_to_num(hd_activations)
+            hd_activations_no_nan = torch.nan_to_num(hd_activations_torch)
             # Expand to shape (n_hd, 1, 1)
             hd_activations_no_nan = hd_activations_no_nan.unsqueeze(1).unsqueeze(2)
             self.hd_cell_trace += (self.tau / 3) * (
