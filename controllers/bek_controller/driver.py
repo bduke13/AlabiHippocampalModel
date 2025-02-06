@@ -6,7 +6,6 @@ import tkinter as tk
 from tkinter import N, messagebox
 from typing import Optional, List, Union
 import torch
-from torch._C import device
 import torch.nn.functional as F
 from controller import Supervisor
 from layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
@@ -95,7 +94,7 @@ class Driver(Supervisor):
         self.num_reward_cells = 1
         self.n_hd = 8
         self.timestep = 32 * 3
-        self.tau_w = 10  # time constant for the window function
+        self.tau_w = 5  # time constant for the window function
 
         # Robot parameters
         self.max_speed = 16
@@ -292,6 +291,7 @@ class Driver(Supervisor):
                 num_reward_cells=num_reward_cells,
                 input_dim=num_place_cells,
                 num_replay=num_replay,
+                device=self.device,
             )
             print("Initialized new Reward Cell Network.")
         return self.rcn
@@ -446,11 +446,19 @@ class Driver(Supervisor):
 
             # Calculate the action angle using circular mean
             angles = np.linspace(0, 2 * np.pi, self.n_hd, endpoint=False)
-            # Calculate circular mean using PyTorch
-            angles_tensor = torch.tensor(angles, device=self.device)
-            weights = self.directional_reward_estimates
-            sin_sum = torch.sum(weights * torch.sin(angles_tensor))
-            cos_sum = torch.sum(weights * torch.cos(angles_tensor))
+            angles_tensor = torch.tensor(
+                angles, device=self.device, dtype=torch.float32
+            )
+
+            # Convert the directional reward estimates (a NumPy array) into a PyTorch tensor.
+            weights_tensor = torch.tensor(
+                self.directional_reward_estimates,
+                device=self.device,
+                dtype=torch.float32,
+            )
+
+            sin_sum = torch.sum(weights_tensor * torch.sin(angles_tensor))
+            cos_sum = torch.sum(weights_tensor * torch.cos(angles_tensor))
             action_angle = torch.atan2(sin_sum, cos_sum).item()
 
             # Determine the maximum reward for the chosen action
@@ -632,14 +640,19 @@ class Driver(Supervisor):
             self.auto_pilot()  # Navigate to the goal slowly and call rcn.replay()
             print("Goal reached")
             print(f"Total distance traveled: {self.compute_path_length()}")
-            print(f"Started at: {np.array([self.hmap_pos[0][0], self.hmap_pos[0][2]])}")
+            print(f"Started at: {np.array([self.hmap_loc[0][0], self.hmap_loc[0][2]])}")
             print(f"Current position: {np.array([curr_pos[0], curr_pos[2]])}")
             print(f"Time taken: {self.getTime()}")
 
-            # Don't save any of the layers during exploit mode
+            if self.robot_mode == RobotMode.DMTP:
+                include_hmaps = False
+            else:
+                include_hmaps = True
+
             self.save(
                 include_rcn=(self.robot_mode != RobotMode.EXPLOIT),
                 include_pcn=(self.robot_mode != RobotMode.EXPLOIT),
+                include_hmaps=include_hmaps,
             )
         elif self.getTime() >= 60 * self.run_time_minutes:
             self.save()
@@ -663,10 +676,14 @@ class Driver(Supervisor):
                 ).item()
                 desired = np.pi * 2 - theta if delta_y >= 0 else np.pi + theta
             elif delta_y >= 0:
-                theta = tf.math.atan(abs(delta_y), abs(delta_x))
+                theta = torch.atan2(
+                    torch.abs(torch.tensor(delta_y)), torch.abs(torch.tensor(delta_x))
+                ).item()
                 desired = np.pi / 2 - theta
             else:
-                theta = tf.math.atan(abs(delta_x), abs(delta_y))
+                theta = torch.atan2(
+                    torch.abs(torch.tensor(delta_x)), torch.abs(torch.tensor(delta_y))
+                ).item()
                 desired = np.pi - theta
             self.turn(-(desired - np.deg2rad(self.current_heading_deg)))
 
@@ -791,9 +808,13 @@ class Driver(Supervisor):
             float: Total path length computed from the differences in consecutive coordinates.
         """
         path_length = 0
-        for i in range(self.hmap_x.shape[0] - 1):
-            current_position = np.array([self.hmap_y[i], self.hmap_x[i]])
-            next_position = np.array([self.hmap_y[i + 1], self.hmap_x[i + 1]])
+        for i in range(self.hmap_loc[:, 0].shape[0] - 1):
+            current_position = np.array(
+                [self.hmap_loc[:, 2][i], self.hmap_loc[:, 0][i]]
+            )
+            next_position = np.array(
+                [self.hmap_loc[:, 2][i + 1], self.hmap_loc[:, 0][i + 1]]
+            )
             path_length += np.linalg.norm(next_position - current_position)
 
         return path_length
@@ -863,7 +884,7 @@ class Driver(Supervisor):
         files_to_remove = [
             "pcn.pkl",
             "rcn.pkl",
-            "hmap_pos.pkl",
+            "hmap_loc.pkl",
             "hmap_pcn.pkl",
             "hmap_bvc.pkl",
             "hmap_g.pkl",
