@@ -1,3 +1,4 @@
+# %%
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -134,7 +135,7 @@ if __name__ == "__main__":
     n_points = 720  # LiDAR resolution
     max_r = 10
     min_r = 5
-    n_star_peaks = 5
+    n_star_peaks = 8
 
     # Create star-shaped LiDAR distance pattern
     distances = np.ones(n_points) * min_r
@@ -148,7 +149,7 @@ if __name__ == "__main__":
         max_dist=12,
         n_res=n_points,
         n_hd=8,
-        sigma_theta=90,  # Angular tuning width
+        sigma_theta=1,  # Angular tuning width
         sigma_r=1,  # Distance tuning width
         num_bvc_per_dir=50,
     )
