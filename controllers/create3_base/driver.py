@@ -244,11 +244,11 @@ class Driver(Supervisor):
                 print("Loaded existing Place Cell Network.")
         except:
             bvc = BoundaryVectorCellLayer(
-                max_dist=10,
-                input_dim=self.lidar_resolution,
+                n_res=self.lidar_resolution,
                 n_hd=n_hd,
-                sigma_ang=90,
-                sigma_d=0.5,
+                sigma_theta=1,
+                sigma_r=0.5,
+                max_dist=10,
                 num_bvc_per_dir=50,
                 device=device,
             )
@@ -614,6 +614,7 @@ class Driver(Supervisor):
             hd_activations=self.hd_activations,
             collided=torch.any(self.collided),
         )
+        # self.pcn.bvc_layer.plot_activation(distances=self.boundaries)
 
         # Advance the timestep and update position
         self.step(self.timestep)
