@@ -228,11 +228,16 @@ def generate_place_cells_report(
 
 # %%
 if __name__ == "__main__":
-    from controllers.bek_controller.visualizations.analysis_utils import *
+
+    from visualizations.analysis_utils import load_hmaps
 
     # Example usage
-    data_path = "controllers/bek_controller/"
-    hmap_x, hmap_y, hmap_pcn = load_hmaps(data_path)
+    data_path = "controllers/create3_base/"
+    hmap_loc, hmap_pcn = load_hmaps(
+        prefix=data_path, hmap_names=["hmap_loc", "hmap_pcn"]
+    )
+    hmap_x = hmap_loc[:, 0]
+    hmap_y = hmap_loc[:, 2]
 
     # %%
     generate_place_cells_report(hmap_x, hmap_y, hmap_pcn, output_dir=data_path)

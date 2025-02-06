@@ -2,21 +2,22 @@
 from matplotlib.cbook import file_requires_unicode
 import numpy as np
 import matplotlib.pyplot as plt
-import pickle
-import json
 import matplotlib.colors as mcolors
-from controllers.bek_controller.visualizations.analysis_utils import load_hmaps
+
+from visualizations.analysis_utils import load_hmaps
+
 
 gridsize = 80
 num_cells_to_sample = 150  # Set the number of cells you want to plot
 
 
-base_path = "controllers/bek_controller/"
+base_path = "controllers/create3_base/"
 # Load hmap data
 hmap_loc, hmap_pcn = load_hmaps(prefix=base_path, hmap_names=["hmap_loc", "hmap_pcn"])
 hmap_x = hmap_loc[:, 0]
 hmap_y = hmap_loc[:, 2]
 
+# %%
 # Calculate total activation per cell
 total_activation_per_cell = np.sum(hmap_pcn, axis=0)
 
