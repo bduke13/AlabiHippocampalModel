@@ -226,8 +226,8 @@ DEF agent Create {
           translation 0 0.3 0
           name "frontCamera"
           fieldOfView 6.28319
-          width 360
-          height 180
+          width 100
+          height 50
           spherical TRUE
           recognition Recognition {
           }

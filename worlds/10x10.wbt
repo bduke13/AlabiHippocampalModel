@@ -10,7 +10,7 @@ WorldInfo {
 }
 Viewpoint {
   orientation 1 0 0 4.71238898038469
-  position 6.176887106309842e-05 41.226862758576175 1.4773199537135838e-07
+  position 6.176887106309842e-05 34.48299579083618 1.477319966101457e-07
   near 0.1
   follow "Create"
   followType "None"
@@ -25,9 +25,16 @@ DirectionalLight {
   direction 0 -1 0
 }
 DEF agent Create {
-  translation 1 0.042985 1
-  rotation 0.0005780983762818881 0.9999995813385393 -0.0007093130574921395 1.7732797145942794
-  controller "my_controller_iCreate"
+  hidden position_0_0 45249.17206706551
+  hidden position_0_1 41597.76782541959
+  hidden rotation_7 0.9999999999999999 0 0 2.3285152418695696
+  hidden translation_12 -6.9630044556845405e-06 -5.603289767057429e-06 -7.3141562086931344e-06
+  hidden rotation_12 -7.097505350068368e-11 0.9999999999999999 -1.473530977373584e-10 0.7269319989228774
+  hidden translation_13 -3.1769309627449616e-07 -6.2142113273974675e-06 6.965599044228554e-07
+  hidden rotation_13 1.0737594881207881e-07 0.9999999999999902 8.831825317408958e-08 -0.7269304932988185
+  translation 0.4015795866619077 0.04413785767817583 4.673422345889612
+  rotation -0.0007384019371796149 0.999998101604535 -0.001803205452893127 -2.2756754662412746
+  controller "bek_controller"
   supervisor TRUE
   bodySlot [
     Solid {
@@ -47,23 +54,11 @@ DEF agent Create {
           maxRange 10
         }
         Camera {
-          translation -0.002 0.02 0
-          rotation 0 1 0 1.57
-          name "lefteye"
-          fieldOfView 3.14
-          width 720
-          height 360
-          spherical TRUE
-          recognition Recognition {
-          }
-        }
-        Camera {
-          translation 0.002 0.02 0
-          rotation 0 1 0 -1.57
-          name "righteye"
-          fieldOfView 3.14
-          width 720
-          height 360
+          translation 0 0.3 0
+          name "frontCamera"
+          fieldOfView 1.0472
+          width 96
+          height 96
           spherical TRUE
           recognition Recognition {
           }
@@ -74,6 +69,16 @@ DEF agent Create {
           geometry Cylinder {
             height 0.04
             radius 0.05
+          }
+        }
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.8 0.8 0.8
+            roughness 0.3
+            metalness 0.5
+          }
+          geometry Sphere {
+            radius 0.03
           }
         }
       ]

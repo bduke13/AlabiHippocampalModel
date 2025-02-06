@@ -626,6 +626,8 @@ class Driver(Supervisor):
             if self.step_count < self.num_steps:
                 self.hmap_images[self.step_count] = wrapped_image
 
+            self.last_image = wrapped_image
+
             # Optionally display the wrapped image
             # plt.imshow(wrapped_image)
             # plt.title(f"Wrapped Camera Image (Heading: {self.current_heading_deg}°)")
@@ -671,6 +673,7 @@ class Driver(Supervisor):
         # Compute the place cell network activations
         self.pcn.get_place_cell_activations(
             distances=self.boundaries,
+            image=self.last_image,
             hd_activations=self.hd_activations,
             collided=np.any(self.collided),
         )

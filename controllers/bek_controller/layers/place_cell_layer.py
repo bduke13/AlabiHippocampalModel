@@ -19,6 +19,7 @@ class PlaceCellLayer:
     def __init__(
         self,
         bvc_layer: BoundaryVectorCellLayer,
+        cnn_model: tf.model,
         num_pc: int = 200,
         timestep: int = 32 * 3,
         n_hd: int = 8,
@@ -44,7 +45,9 @@ class PlaceCellLayer:
         self.bvc_layer = bvc_layer
 
         # Number of BVCs (Boundary Vector Cells)
-        self.num_bvc = self.bvc_layer.num_bvc
+        self.num_combined_layer = (
+            self.bvc_layer.num_bvc + self.cnn_model.last_layer_size
+        )
 
         # Input weight matrix connecting place cells to BVCs
         # Initialized with a 20% probability of connection
@@ -114,7 +117,7 @@ class PlaceCellLayer:
         self.enable_stdp = enable_stdp
 
     def get_place_cell_activations(
-        self, distances, hd_activations, collided: bool = False
+        self, distances, image, hd_activations, collided: bool = False
     ):
         """Compute place cell activations from BVC and head direction inputs.
 
@@ -129,13 +132,17 @@ class PlaceCellLayer:
         # Compute BVC activations based on the input distances and angles
         self.bvc_activations = self.bvc_layer.get_bvc_activation(distances)
 
+        self.cnn_output = self.cnn_model.predict(image)  # weights output
+
+        total_output = tf.concat(self.bvc_activations, self.cnn_output)
+
         # Compute the input to place cells by taking the dot product of the input weights and BVC activations
         # Afferent excitation term: ∑_j W_ij^{pb} v_j^b (Equation 3.2a)
-        afferent_excitation = tf.tensordot(self.w_in, self.bvc_activations, axes=1)
+        afferent_excitation = tf.tensordot(self.w_in, total_output, axes=1)
 
         # Compute the total BVC activity for afferent inhibition
         # Afferent inhibition term: Γ^{pb} ∑_j v_j^b (Equation 3.2a)
-        afferent_inhibition = self.gamma_pb * tf.reduce_sum(self.bvc_activations)
+        afferent_inhibition = self.gamma_pb * tf.reduce_sum(total_output)
 
         # Compute the total place cell activity for recurrent inhibition
         # Recurrent inhibition term: Γ^{pp} ∑_j v_j^p (Equation 3.2a)
