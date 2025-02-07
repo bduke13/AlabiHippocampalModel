@@ -74,6 +74,7 @@ class Driver(Supervisor):
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
         enable_multiscale: Optional[bool] = False,
+        large_scale_only: Optional[bool] = False,
         stats_collector: Optional[stats_collector] = None,
         trial_id: Optional[str] = None,
     ):
@@ -111,6 +112,8 @@ class Driver(Supervisor):
         if self.mode == RobotMode.EXPLOIT:
             self.tau_w = 10
         self.enable_multiscale = enable_multiscale
+
+        self.large_scale_only = large_scale_only
 
         self.force_explore_count = 0
         self.rotation_accumulator = 0.0
@@ -672,11 +675,25 @@ class Driver(Supervisor):
         If single-scale, alpha is returned as 1.0 (unused).
         """
         if self.enable_multiscale:
-            # Compute multi-scale
-            combined_pot_rew, alpha = self._calculate_multiscale_rewards()
-            # Also store directional estimates for angle-blending
-            self.directional_reward_estimates_small = self._preplay_rewards(self.pcn_small, self.rcn_small)
-            self.directional_reward_estimates_large = self._preplay_rewards(self.pcn_large, self.rcn_large)
+            if self.large_scale_only == True: # Single scale large
+                pot_rew_large = self._preplay_rewards(self.pcn_large, self.rcn_large)
+                pot_rew_large /= (np.max(pot_rew_large) + 1e-6)
+                combined_pot_rew = pot_rew_large
+                alpha = 0.0
+                # For internal consistency, set directional_reward_estimates_small/large
+                # so that we don't break the rest of the code.
+                self.directional_reward_estimates_small = np.copy(pot_rew_large)
+                self.directional_reward_estimates_large = np.copy(pot_rew_large)
+
+                return combined_pot_rew, alpha
+            else:                
+                # Compute multi-scale
+                combined_pot_rew, alpha = self._calculate_multiscale_rewards()
+                # Also store directional estimates for angle-blending
+                self.directional_reward_estimates_small = self._preplay_rewards(self.pcn_small, self.rcn_small)
+                self.directional_reward_estimates_large = self._preplay_rewards(self.pcn_large, self.rcn_large)
+
+                return combined_pot_rew, alpha
         else:
             # Single-scale only
             combined_pot_rew = self._calculate_single_scale_rewards()
@@ -684,42 +701,8 @@ class Driver(Supervisor):
             # Provide placeholders
             self.directional_reward_estimates_small = np.copy(combined_pot_rew)
             self.directional_reward_estimates_large = np.copy(combined_pot_rew)
+
         return combined_pot_rew, alpha
-    
-    # Single scale large
-    # def _compute_potential_rewards(self):
-    #     """
-    #     Depending on whether multiscale is enabled, compute a single-scale or 
-    #     combined multi-scale reward map. Returns (combined_pot_rew, alpha).
-    #     If single-scale, alpha is returned as 1.0 (unused).
-    #     """
-
-    #     if self.enable_multiscale:
-    #         # ===============================
-    #         # ONLY use the LARGE scale here
-    #         # ===============================
-    #         pot_rew_large = self._preplay_rewards(self.pcn_large, self.rcn_large)
-    #         pot_rew_large /= (np.max(pot_rew_large) + 1e-6)
-
-    #         # Return large-scale as combined
-    #         combined_pot_rew = pot_rew_large
-    #         alpha = 1.0  # or you could keep it as 0.0 if you want, but 1.0 is fine
-
-    #         # For internal consistency, set directional_reward_estimates_small/large
-    #         # so that we don't break the rest of the code.
-    #         self.directional_reward_estimates_small = np.copy(pot_rew_large)
-    #         self.directional_reward_estimates_large = np.copy(pot_rew_large)
-
-    #     else:
-    #         # ===============================
-    #         # SINGLE-SCALE = small scale only
-    #         # ===============================
-    #         combined_pot_rew = self._calculate_single_scale_rewards()
-    #         alpha = 1.0
-    #         self.directional_reward_estimates_small = np.copy(combined_pot_rew)
-    #         self.directional_reward_estimates_large = np.copy(combined_pot_rew)
-
-    #     return combined_pot_rew, alpha
 
     def _detect_excessive_rotation_cooldown(self):
         """
@@ -898,7 +881,7 @@ class Driver(Supervisor):
         alpha = grad_small / (grad_small + grad_large + 1e-6)
 
         # Add bias towards small scale
-        bias = 0.2  # Adjust this value to control the bias strength
+        bias = -0.05  # Adjust this value to control the bias strength
         alpha = min(max(alpha + bias, 0.0), 1.0)
 
         combined = alpha * pot_rew_small + (1 - alpha) * pot_rew_large
@@ -1099,7 +1082,7 @@ class Driver(Supervisor):
                     visit=True
                 )                
                 self.rcn_small.replay(pcn=self.pcn_small)
-            self.save(include_hmaps=False)
+            self.save(include_pcn=False, include_rcn=False, include_hmaps=False, save_dmtp_path=True)
 
         elif self.mode == RobotMode.EXPLOIT and (
             self.getTime() >= time_limit * 60 or 
@@ -1330,6 +1313,7 @@ class Driver(Supervisor):
         include_rcn: bool = True,
         include_hmaps: bool = True,
         save_path: bool = False,
+        save_dmtp_path: bool = False,
     ):
         """
         Saves the state of the PCN (Place Cell Network), RCN (Reward Cell Network), 
@@ -1397,7 +1381,7 @@ class Driver(Supervisor):
             # Determine the base directory based on multiscale or vanilla mode
             base_stats_dir = os.path.join(
                 "analysis", "stats",
-                "multiscale" if self.enable_multiscale else "vanilla",
+                "large_scale" if self.large_scale_only else ("multiscale" if self.enable_multiscale else "vanilla"),
                 world_name
             )
             hmaps_path_dir = os.path.join(base_stats_dir, "hmaps")
@@ -1422,6 +1406,25 @@ class Driver(Supervisor):
 
             print(f"Saved path data for trial {trial_id}.")
             return
+        
+        if save_dmtp_path:
+            # Determine the base directory
+            base_stats_dir = os.path.join("analysis", "stats", "multiscale", world_name)
+            paths_dir = os.path.join(base_stats_dir, "DMTP_paths")
+            os.makedirs(paths_dir, exist_ok=True)
+
+            # Trial ID-based filenames
+            trial_id = getattr(self, "trial_id", "default")
+            hmap_x_file = os.path.join(paths_dir, f"{trial_id}_hmap_x_dmtp.pkl")
+            hmap_y_file = os.path.join(paths_dir, f"{trial_id}_hmap_y_dmtp.pkl")
+
+            # Save only up to the current step count
+            with open(hmap_x_file, "wb") as fx:
+                pickle.dump(self.hmap_x[:self.step_count], fx)
+            with open(hmap_y_file, "wb") as fy:
+                pickle.dump(self.hmap_y[:self.step_count], fy)
+
+            print(f"Saved DMTP path data.")
 
         # User confirmation dialog
         root = tk.Tk()

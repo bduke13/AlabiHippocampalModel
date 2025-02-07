@@ -1,5 +1,6 @@
 """my_controller_iCreate controller."""
 
+from math import e
 import os
 import pickle
 from driver import Driver, RobotMode
@@ -38,9 +39,10 @@ def run_learn_or_dmtp(mode, run_time_hours, start_loc, randomize_start_loc, enab
         randomize_start_loc=randomize_start_loc,
         enable_multiscale=enable_multiscale,
     )
+    bot.trial_id = f"{start_loc[0]}_{start_loc[1]}"
     bot.run()
 
-def run_exploit(corner, enable_multiscale, save_data=False):
+def run_exploit(corner, enable_multiscale, large_scale_only, save_data=False):
     bot = Driver()
     corner_tuple = tuple(corner)
     bot.trial_indices = {}
@@ -77,6 +79,7 @@ def run_exploit(corner, enable_multiscale, save_data=False):
         run_time_hours=1,
         start_loc=corner,
         enable_multiscale=enable_multiscale,
+        large_scale_only=large_scale_only,
         randomize_start_loc=False,
         stats_collector=stats_collector_instance,
     )
@@ -88,7 +91,7 @@ def run_exploit(corner, enable_multiscale, save_data=False):
     # Pause simulation (manual reload expected)
     bot.simulationSetMode(bot.SIMULATION_MODE_PAUSE)
 
-def run_exploit_save(corners, enable_multiscale, num_loops=10, save_data=True):
+def run_exploit_save(corners, enable_multiscale, large_scale_only=False, num_loops=10, save_data=True):
     bot = Driver()
 
     # Dynamically determine the world name
@@ -97,11 +100,14 @@ def run_exploit_save(corners, enable_multiscale, num_loops=10, save_data=True):
 
     # Define the stats folder path based on the world name
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    if enable_multiscale:
-        stats_folder = os.path.join(current_dir, "analysis", "stats", "multiscale", world_name, "JSON")
+    if large_scale_only:
+        stats_folder = os.path.join(current_dir, "analysis", "stats", "large_scale", world_name, "JSON")
     else:
-        stats_folder = os.path.join(current_dir, "analysis", "stats", "vanilla", world_name, "JSON")
-    os.makedirs(stats_folder, exist_ok=True)
+        if enable_multiscale:
+            stats_folder = os.path.join(current_dir, "analysis", "stats", "multiscale", world_name, "JSON")
+        else:
+            stats_folder = os.path.join(current_dir, "analysis", "stats", "vanilla", world_name, "JSON")
+        os.makedirs(stats_folder, exist_ok=True)
 
     # Initialize stats collector if saving data
     stats_collector_instance = None
@@ -132,6 +138,7 @@ def run_exploit_save(corners, enable_multiscale, num_loops=10, save_data=True):
                 run_time_hours=1,
                 start_loc=corner,
                 enable_multiscale=enable_multiscale,
+                large_scale_only=large_scale_only,
                 randomize_start_loc=False,
                 stats_collector=stats_collector_instance,
             )
@@ -148,19 +155,30 @@ def run_exploit_save(corners, enable_multiscale, num_loops=10, save_data=True):
     
 # Define the mode to run
 SELECTED_MODE = "EXPLOIT_SAVE"  # Options: LEARN_OJAS, DMTP, EXPLOIT, EXPLOIT_SAVE, PLOTTING
-run_time_hours = 4
-num_loops = 5
-start_loc = [-5.1, 5.1]
+run_time_hours = 1
+num_loops = 10
+start_loc = [-9, 9]
 randomize_start_loc = False
-enable_multiscale = True
+large_scale_only = False
+enable_multiscale = False
 
-corners = [[9, -9], [-9, -9], [9, 9]]
-# corners = [[2, -2], [-2, -2], [2, 2], [-2, 2]]
-# corners = [[9, -9]]
+# world0_20x20-goalBehindWall
+# corners = [[8, -8], [0, -8], [-8, -8], [8, 0], [8, 8], [2, -2]]
+
+# world0_20x20-obstacles
+# corners = [[8, -8], [0, -8], [8, 0], [2, -2]]
+
+# world0_20x20
+# corners = [[8, -8], [-8, -8], [8, 8]]
+
+# world0_20x20-2obstacles
+# corners = [[8, -8], [0, -8], [8, 0]]
+
+corners = [[8,-8]]
 
 # Main function
 if __name__ == "__main__":
-    # selected_corner = corners[1]
+    selected_corner = corners[0]
     # selected_corner = [4.6, 0.63]
     # selected_corner = [1.45, 0.96]
     if SELECTED_MODE == "LEARN_OJAS":
@@ -184,10 +202,12 @@ if __name__ == "__main__":
     elif SELECTED_MODE == "EXPLOIT":
         run_exploit(corner=selected_corner, 
                     enable_multiscale=enable_multiscale,
+                    large_scale_only=large_scale_only,
                     save_data=False)
     elif SELECTED_MODE == "EXPLOIT_SAVE":
         run_exploit_save(corners=corners, 
-                         enable_multiscale=enable_multiscale, 
+                         enable_multiscale=enable_multiscale,
+                         large_scale_only=large_scale_only, 
                          num_loops=num_loops,
                          save_data=True)
     elif SELECTED_MODE == "PLOTTING":
