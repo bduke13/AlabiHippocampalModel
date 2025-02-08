@@ -13,7 +13,7 @@ from controller import Supervisor
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]  # Moves two levels up
+PROJECT_ROOT = Path(__file__).resolve().parents[3]  # Moves two levels up
 sys.path.append(str(PROJECT_ROOT))  # Add project root to sys.path
 
 from core.layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
@@ -614,7 +614,6 @@ class Driver(Supervisor):
             hd_activations=self.hd_activations,
             collided=torch.any(self.collided),
         )
-        # self.pcn.bvc_layer.plot_activation(distances=self.boundaries)
 
         # Advance the timestep and update position
         self.step(self.timestep)

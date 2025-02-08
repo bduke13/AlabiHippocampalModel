@@ -1,3 +1,4 @@
+# %%
 import sys
 import types
 import matplotlib.pyplot as plt
@@ -88,7 +89,7 @@ def plot_rcn_activation(context=0):
 
 if __name__ == "__main__":
     # This should be the absolute path to controllers/bek_controller
-    bek_controller_dir = os.path.join(os.getcwd(), "controllers", "bek_controller")
+    bek_controller_dir = os.path.join(os.getcwd(), "controllers", "create3_base")
 
     # Change into that directory
     os.chdir(bek_controller_dir)

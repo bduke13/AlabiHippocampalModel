@@ -6,7 +6,7 @@ from driver import Driver
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]  # Moves two levels up
+PROJECT_ROOT = Path(__file__).resolve().parents[3]  # Moves two levels up
 sys.path.append(str(PROJECT_ROOT))  # Add project root to sys.path
 
 from core.robot.robot_mode import RobotMode

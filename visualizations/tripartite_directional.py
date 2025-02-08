@@ -8,11 +8,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import networkx as nx
 
-# Adjust the Python path to include the 'bek_controller' directory
-current_dir = os.path.dirname(os.path.abspath(__file__))
-bek_controller_dir = os.path.abspath(os.path.join(current_dir, ".."))
-sys.path.insert(0, bek_controller_dir)
-
 
 def weighted_mean(data, weights):
     """Calculate the weighted mean of data using the provided weights."""
@@ -37,30 +32,17 @@ def compute_place_cell_centers(hmap_x, hmap_y, hmap_pcn):
     return centers
 
 
-def load_data():
-    """Load necessary data for analysis and visualization."""
-    with open(os.path.join(bek_controller_dir, "pcn.pkl"), "rb") as f:
-        pcn = pickle.load(f)
-
-    with open(os.path.join(bek_controller_dir, "hmap_x.pkl"), "rb") as f:
-        hmap_x = np.array(pickle.load(f))
-    with open(os.path.join(bek_controller_dir, "hmap_y.pkl"), "rb") as f:
-        hmap_y = np.array(pickle.load(f))
-    with open(os.path.join(bek_controller_dir, "hmap_pcn.pkl"), "rb") as f:
-        hmap_pcn = np.asarray(pickle.load(f))
-
-    return pcn, hmap_x, hmap_y, hmap_pcn
-
-
 if __name__ == "__main__":
     # Load data
     from visualizations.analysis_utils import load_hmaps
-    from layers.place_cell_layer import PlaceCellLayer
+    from core.layers.place_cell_layer import PlaceCellLayer
 
-    hmap_loc, hmap_pcn = load_hmaps("", ["hmap_loc", "hmap_pcn"])
+    hmap_loc, hmap_pcn = load_hmaps(
+        "controllers/create3_base/", ["hmap_loc", "hmap_pcn"]
+    )
     hmap_x = hmap_loc[:, 0]
     hmap_y = hmap_loc[:, 2]
-    with open("pcn.pkl", "rb") as f:
+    with open("controllers/create3_base/pcn.pkl", "rb") as f:
         pcn = pickle.load(f)
 
     # Compute place cell centers

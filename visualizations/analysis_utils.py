@@ -5,7 +5,11 @@ from pathlib import Path
 from typing import List
 
 
-def load_hmaps(prefix="three_dim/", hmap_names=["hmap_loc", "hmap_pcn"]):
+def load_pcn_pkl():
+    pass
+
+
+def load_hmaps(prefix="controllers/create3_base/", hmap_names=["hmap_loc", "hmap_pcn"]):
     """
     Load history map (hmap) data from pickle files.
 
