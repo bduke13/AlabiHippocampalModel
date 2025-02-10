@@ -57,7 +57,7 @@ class PlaceCellLayer:
         # Input weight matrix connecting place cells to BVCs
         # Initialized with a 20% probability of connection
         # Shape: (num_pc, num_bvc)
-        w_in_init = rng.binomial(n=1, p=0.2, size=(num_pc, self.num_bvc))
+        w_in_init = rng.binomial(n=1, p=0.25, size=(num_pc, self.num_bvc))
         w_in_init = torch.tensor(w_in_init, dtype=self.dtype, device=self.device)
         # We wrap in nn.Parameter so the weights can be learnable if needed
         self.w_in = torch.nn.Parameter(w_in_init, requires_grad=False)
