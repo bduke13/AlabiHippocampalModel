@@ -1,4 +1,11 @@
-#VRML_SIM R2021a utf8
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/robots/irobot/create/protos/Create.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/Roughcast.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/apartment_structure/protos/Wall.proto"
+
 WorldInfo {
   info [
     "iRobot Create simulation"
@@ -9,8 +16,8 @@ WorldInfo {
   coordinateSystem "NUE"
 }
 Viewpoint {
-  orientation 1 0 0 4.71238898038469
-  position 6.176886993727666e-05 36.89185696687141 1.4773086333963546e-07
+  orientation 0.40560973388137067 -0.7069849465119786 -0.5793557017809855 3.1044716795129297
+  position 22.340284914116484 19.131931131702025 13.47359510182746
   near 0.1
   follow "Create"
   followType "Pan and Tilt Shot"
@@ -18,6 +25,7 @@ Viewpoint {
 TexturedBackground {
 }
 RectangleArena {
+  rotation 1 0 0 -1.5707953071795862
   floorSize 10 10
   floorAppearance NULL
 }
@@ -25,21 +33,13 @@ DirectionalLight {
   direction 0 -1 0
 }
 DEF agent Create {
-  hidden position_0_0 19531.182472103224
-  hidden position_0_1 16835.913242473587
-  hidden rotation_7 -0.9999999999999999 0 0 3.0425373890696568
-  hidden rotation_8 1 0 0 3.023380767704597
-  hidden translation_12 -2.272666232983056e-08 -3.139251867748105e-06 -2.3056272113741727e-08
-  hidden rotation_12 -9.279933910297603e-13 1 -1.1796806389759887e-12 0.726932000003301
-  hidden translation_13 2.5833130301577967e-08 -3.139246998309919e-06 -2.0276033241284352e-08
-  hidden rotation_13 9.639814381511498e-13 1 -1.4164499368227461e-12 -0.7269299999966989
-  translation 3.47607 0.0403051 3.52398
-  rotation 0.0005780983762818881 0.9999995813385393 -0.0007093130574921395 1.7732797145942794
+  translation 3.47674 0.640305 3.52391
+  rotation 0.4993030405998298 -0.6130910498522746 -0.6122220497816135 -2.2142753071795864
   controller "my_controller_iCreate"
   supervisor TRUE
   bodySlot [
     Solid {
-      translation 0 0.04 -0.08
+      translation 0 0 0.05
       children [
         Display {
           width 100
@@ -51,7 +51,7 @@ DEF agent Create {
           fieldOfView 6.28
           width 720
           height 1
-          spherical TRUE
+          projection "cylindrical"
           maxRange 10
         }
         Camera {
@@ -61,7 +61,7 @@ DEF agent Create {
           fieldOfView 3.14
           width 720
           height 360
-          spherical TRUE
+          projection "cylindrical"
           recognition Recognition {
           }
         }
@@ -72,7 +72,7 @@ DEF agent Create {
           fieldOfView 3.14
           width 720
           height 360
-          spherical TRUE
+          projection "cylindrical"
           recognition Recognition {
           }
         }
