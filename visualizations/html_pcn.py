@@ -232,7 +232,7 @@ if __name__ == "__main__":
     from visualizations.analysis_utils import load_hmaps
 
     # Example usage
-    data_path = "controllers/create3_base/"
+    data_path = "webots/controllers/create3_base/"
     hmap_loc, hmap_pcn = load_hmaps(
         prefix=data_path, hmap_names=["hmap_loc", "hmap_pcn"]
     )
