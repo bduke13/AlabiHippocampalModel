@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 from numpy.random import default_rng
-from core.layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
 
 # Set a fixed seed similar to tf.random.set_seed(5)
 torch.manual_seed(5)
@@ -19,7 +18,7 @@ class PlaceCellLayer:
 
     def __init__(
         self,
-        bvc_layer: BoundaryVectorCellLayer,
+        bvc_layer,
         num_pc: int = 200,
         timestep: int = 32 * 3,
         n_hd: int = 8,
