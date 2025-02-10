@@ -8,6 +8,8 @@ from typing import Optional, List, Union
 import torch
 import torch.nn.functional as F
 from controller import Supervisor
+from astropy.stats import circmean, circvar
+import random
 
 # Add root directory to python to be able to import
 import sys
@@ -23,9 +25,9 @@ from core.layers.reward_cell_layer import RewardCellLayer
 from core.robot.robot_mode import RobotMode
 
 # --- PyTorch seeds / random ---
-torch.manual_seed(5)
-np.random.seed(5)
-rng = default_rng(5)  # or keep it as is
+# torch.manual_seed(5)
+# np.random.seed(5)
+# rng = default_rng(5)  # or keep it as is
 np.set_printoptions(precision=2)
 
 
@@ -167,7 +169,7 @@ class Driver(Supervisor):
 
         if randomize_start_loc:
             while True:
-                INITIAL = [rng.uniform(-2.3, 2.3), 0, rng.uniform(-2.3, 2.3)]
+                INITIAL = [random.uniform(-2.3, 2.3), 0, random.uniform(-2.3, 2.3)]
                 # Check if distance to goal is at least 1 meter
                 dist_to_goal = np.sqrt(
                     (INITIAL[0] - self.goal_location[0]) ** 2
@@ -409,7 +411,6 @@ class Driver(Supervisor):
         Returns:
             None
         """
-
         # Stop movement and update sensor readings
         self.stop()
         self.sense()
@@ -418,8 +419,7 @@ class Driver(Supervisor):
 
         # Proceed only if enough steps have been taken
         if self.step_count > self.tau_w:
-            # Initialize variables
-            action_angle, max_reward, num_steps = 0, 0, 1
+            num_steps = 1
             pot_rew = np.empty(self.n_hd)
             pot_e = np.empty(self.n_hd)
 
@@ -441,7 +441,6 @@ class Driver(Supervisor):
                 pcn_activations = self.pcn.preplay(d, num_steps=num_steps)
                 # Update reward cell activations based on the simulated activations
                 self.rcn.update_reward_cell_activations(pcn_activations)
-
                 # Store potential energy and reward
                 pot_e[d] = torch.norm(pcn_activations, p=1).cpu().numpy()
                 pot_rew[d] = (
@@ -455,20 +454,7 @@ class Driver(Supervisor):
 
             # Calculate the action angle using circular mean
             angles = np.linspace(0, 2 * np.pi, self.n_hd, endpoint=False)
-            angles_tensor = torch.tensor(
-                angles, device=self.device, dtype=torch.float32
-            )
-
-            # Convert the directional reward estimates (a NumPy array) into a PyTorch tensor.
-            weights_tensor = torch.tensor(
-                self.directional_reward_estimates,
-                device=self.device,
-                dtype=torch.float32,
-            )
-
-            sin_sum = torch.sum(weights_tensor * torch.sin(angles_tensor))
-            cos_sum = torch.sum(weights_tensor * torch.cos(angles_tensor))
-            action_angle = torch.atan2(sin_sum, cos_sum).item()
+            action_angle = circmean(angles, weights=self.directional_reward_estimates)
 
             # Determine the maximum reward for the chosen action
             index = int(action_angle // (2 * np.pi / self.n_hd))
@@ -481,7 +467,6 @@ class Driver(Supervisor):
 
             # Handle collision by turning and updating the reward cell network
             if torch.any(self.collided):
-                # Generate a random angle between -180 and 180 degrees (in radians)
                 random_angle = np.random.uniform(-np.pi, np.pi)
                 self.turn(random_angle)
                 self.stop()
@@ -502,10 +487,7 @@ class Driver(Supervisor):
                 self.sense()
                 self.compute()
                 self.forward()
-                # Accumulate place cell activations
                 self.check_goal_reached()
-
-                # Update reward cell activations and perform TD update
                 self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations)
                 actual_reward = self.get_actual_reward()
                 self.rcn.td_update(
