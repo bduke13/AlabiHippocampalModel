@@ -49,7 +49,6 @@ if __name__ == "__main__":
     # Compute place cell centers
     place_cell_centers = compute_place_cell_centers(hmap_x, hmap_y, hmap_pcn)
 
-    # %%
     # Extract tripartite connections
     w_rec_tripartite = pcn.w_rec_tripartite.cpu().detach().numpy()
     n_hd, num_pc, _ = w_rec_tripartite.shape
