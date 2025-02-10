@@ -229,7 +229,7 @@ def generate_place_cells_report(
 # %%
 if __name__ == "__main__":
 
-    from visualizations.analysis_utils import load_hmaps
+    from analysis_utils import load_hmaps
 
     # Example usage
     data_path = "webots/controllers/create3_base/"
@@ -240,4 +240,6 @@ if __name__ == "__main__":
     hmap_y = hmap_loc[:, 2]
 
     # %%
-    generate_place_cells_report(hmap_x, hmap_y, hmap_pcn, output_dir=data_path)
+    generate_place_cells_report(
+        hmap_x, hmap_y, hmap_pcn, output_dir=data_path + "html_report_outputs/"
+    )

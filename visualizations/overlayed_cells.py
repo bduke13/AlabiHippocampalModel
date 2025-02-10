@@ -3,8 +3,12 @@ from matplotlib.cbook import file_requires_unicode
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import os
 
-from visualizations.analysis_utils import load_hmaps
+print(os.listdir())
+
+
+from analysis_utils import load_hmaps
 
 
 gridsize = 80
