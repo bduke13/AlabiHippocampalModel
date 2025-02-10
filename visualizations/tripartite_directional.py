@@ -34,16 +34,17 @@ def compute_place_cell_centers(hmap_x, hmap_y, hmap_pcn):
 
 if __name__ == "__main__":
     # Load data
-    from visualizations.analysis_utils import load_hmaps
-    from core.layers.place_cell_layer import PlaceCellLayer
-
-    hmap_loc, hmap_pcn = load_hmaps(
-        "controllers/create3_base/", ["hmap_loc", "hmap_pcn"]
+    from visualizations.analysis_utils import (
+        load_hmaps,
+        convert_xyz_hmaps,
+        load_layer_pkl,
     )
-    hmap_x = hmap_loc[:, 0]
-    hmap_y = hmap_loc[:, 2]
-    with open("controllers/create3_base/pcn.pkl", "rb") as f:
-        pcn = pickle.load(f)
+
+    prefix = "webots/controllers/create3_base/"
+
+    hmap_loc, hmap_pcn = load_hmaps(prefix=prefix, hmap_names=["hmap_loc", "hmap_pcn"])
+    hmap_x, hmap_z, hmap_y = convert_xyz_hmaps(hmap_loc=hmap_loc)
+    pcn = load_layer_pkl(prefix=prefix, layer_name="pcn.pkl")
 
     # Compute place cell centers
     place_cell_centers = compute_place_cell_centers(hmap_x, hmap_y, hmap_pcn)

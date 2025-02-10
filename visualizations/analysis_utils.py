@@ -5,11 +5,19 @@ from pathlib import Path
 from typing import List
 
 
-def load_pcn_pkl():
-    pass
+def load_layer_pkl(
+    prefix: str = "webots/controllers/create3_base/", layer_name: str = ""
+):
+    """Loads the layer class object"""
+    with open(prefix + layer_name, "rb") as f:
+        layer = pickle.load(f)
+    return layer
 
 
-def load_hmaps(prefix="controllers/create3_base/", hmap_names=["hmap_loc", "hmap_pcn"]):
+def load_hmaps(
+    prefix: str = "webots/controllers/create3_base/",
+    hmap_names: List[str] = ["hmap_loc", "hmap_pcn"],
+) -> List[np.ndarray]:
     """
     Load history map (hmap) data from pickle files.
 
@@ -32,6 +40,11 @@ def load_hmaps(prefix="controllers/create3_base/", hmap_names=["hmap_loc", "hmap
             hmaps.append(temp)
 
     return hmaps
+
+
+def convert_xyz_hmaps(hmap_loc: np.ndarray) -> List[np.ndarray]:
+    """Utility method that splits hmap_x, hmap_z, and hmap_y from the hmap_loc file output by webots"""
+    return hmap_loc[:, 0], hmap_loc[:, 1], hmap_loc[:, 2]
 
 
 def get_available_directories(root_path: str, max_dirs: int = 200) -> List[str]:
