@@ -57,7 +57,7 @@ DEF agent Create {
   supervisor TRUE
   bodySlot [
     Solid {
-      translation 0 0 0.08
+      translation 0 0 0
       children [
         Display {
           width 100
@@ -66,14 +66,14 @@ DEF agent Create {
         Compass {
         }
         DEF vertical-range-finder RangeFinder {
-          translation 0 0.1 0
-          rotation 1 0 0 0
+          translation 0 0 0.1
+          rotation 0 0 0 0
           name "vertical-range-finder"
           fieldOfView 6.28
           width 180
           height 90
-          projection "spherical"
-          maxRange 20
+          projection "cylindrical"
+          maxRange 10
         }
       ]
     }

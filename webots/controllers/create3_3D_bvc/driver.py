@@ -246,23 +246,23 @@ class Driver(Supervisor):
                 print("Loaded existing Place Cell Network.")
         except:
 
-            preferred_vertical_angles = [0, 0.15, 0.3]
-            sigma_d_list = [0.5] * 3
-            sigma_ang_list = [0.02] * 3
-            sigma_vert_list = [0.02] * 3
-            scaling_factors = [1.0] * 3
+            preferred_vertical_angles = [0, 0.1, 0.2, 0.3, 0.4]
+            sigma_d_list = [0.75] * len(preferred_vertical_angles)
+            sigma_ang_list = [0.02] * len(preferred_vertical_angles)
+            sigma_vert_list = [0.02] * len(preferred_vertical_angles)
+            scaling_factors = [1.0] * len(preferred_vertical_angles)
             num_rows = 90
             num_cols = 180
 
             bvc = BoundaryVectorCellLayer3D(
-                max_dist=12.0,
+                max_dist=8.0,
                 n_hd=8,
                 preferred_vertical_angles=preferred_vertical_angles,
                 sigma_d_list=sigma_d_list,
                 sigma_ang_list=sigma_ang_list,
                 sigma_vert_list=sigma_vert_list,
                 scaling_factors=scaling_factors,
-                num_bvc_per_dir=50,
+                num_bvc_per_dir=25,
                 num_rows=num_rows,
                 num_cols=num_cols,
                 top_cutoff_percentage=0.0,

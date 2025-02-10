@@ -19,7 +19,7 @@ bot = Driver()
 # 4. (optional) PLOTTING
 
 bot.initialization(
-    mode=RobotMode.PLOTTING,
+    mode=RobotMode.LEARN_OJAS,
     randomize_start_loc=True,
     run_time_hours=1,
     start_loc=[4, -4],
