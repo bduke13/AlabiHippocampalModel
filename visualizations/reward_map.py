@@ -18,17 +18,17 @@ def plot_rcn_activation(context=0):
     """
     print(os.listdir())
     # Load the RCN layer (reward cell network)
-    rcn_path = os.path.join("rcn.pkl")
+    rcn_path = os.path.join("webots/controllers/create3_base/rcn.pkl")
     with open(rcn_path, "rb") as f:
         rc_net = pickle.load(f)
 
     # Load the hmap_z
-    hmap_pcn_path = os.path.join("hmap_pcn.pkl")
+    hmap_pcn_path = os.path.join("webots/controllers/create3_base/hmap_pcn.pkl")
     with open(hmap_pcn_path, "rb") as f:
         hmap_z = pickle.load(f)
 
     # Load hmap_x and hmap_y locations
-    hmap_loc_path = os.path.join("hmap_loc.pkl")
+    hmap_loc_path = os.path.join("webots/controllers/create3_base/hmap_loc.pkl")
     with open(hmap_loc_path, "rb") as f:
         hmap_loc = pickle.load(f)
 
@@ -89,18 +89,18 @@ def plot_rcn_activation(context=0):
 
 if __name__ == "__main__":
     # This should be the absolute path to controllers/bek_controller
-    bek_controller_dir = os.path.join(os.getcwd(), "controllers", "create3_base")
+    # bek_controller_dir = os.path.join(os.getcwd(), "controllers", "create3_base")
 
     # Change into that directory
-    os.chdir(bek_controller_dir)
+    # os.chdir(bek_controller_dir)
 
     # Now we expect rcn.pkl to be in this directory
-    print("Current directory is:", os.getcwd())
-    print("Contents:", os.listdir())  # Check if 'rcn.pkl' is here
+    # print("Current directory is:", os.getcwd())
+    # print("Contents:", os.listdir())  # Check if 'rcn.pkl' is here
 
-    rcn_path = "rcn.pkl"  # or just use the string directly
-    with open(rcn_path, "rb") as f:
-        rc_net = pickle.load(f)
+    # rcn_path = "rcn.pkl"  # or just use the string directly
+    # with open(rcn_path, "rb") as f:
+    #    rc_net = pickle.load(f)
 
     # Set up the colormap and default settings
     cmap = cm.get_cmap("plasma")
