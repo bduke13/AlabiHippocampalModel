@@ -11,7 +11,7 @@ gridsize = 80
 num_cells_to_sample = 150  # Set the number of cells you want to plot
 
 
-base_path = "controllers/create3_base/"
+base_path = "webots/controllers/create3_base/"
 # Load hmap data
 hmap_loc, hmap_pcn = load_hmaps(prefix=base_path, hmap_names=["hmap_loc", "hmap_pcn"])
 hmap_x = hmap_loc[:, 0]
