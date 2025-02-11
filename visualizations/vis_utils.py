@@ -3,12 +3,20 @@ import numpy as np
 import pickle
 from pathlib import Path
 from typing import List
+import sys
+from pathlib import Path
+
+# Get the absolute path of the project root
+# The following two lines helps load pkl files for layers to recognize "core.layers"
+project_root = Path(__file__).resolve().parent.parent  # Adjust this if needed
+sys.path.append(str(project_root))
 
 
 def load_layer_pkl(
     prefix: str = "webots/controllers/create3_base/", layer_name: str = ""
 ):
     """Loads the layer class object"""
+
     with open(prefix + layer_name, "rb") as f:
         layer = pickle.load(f)
     return layer
@@ -38,6 +46,9 @@ def load_hmaps(
             # remove first element from temp
             temp = temp[1:]
             hmaps.append(temp)
+
+    if len(hmap_names) == 1:
+        return hmaps[0]
 
     return hmaps
 
@@ -81,6 +92,40 @@ def get_available_directories(root_path: str, max_dirs: int = 200) -> List[str]:
                 )
 
     return sorted(directories)
+
+
+def generate_random_colors(num_cells: int) -> np.ndarray:
+    """
+    Generate random vibrant colors for visualization.
+
+    Args:
+        num_cells (int): Number of colors to generate
+
+    Returns:
+        np.ndarray: Array of shape (num_cells, 3) containing RGB colors
+
+    Example:
+        >>> colors = generate_random_colors(5)
+        >>> print(colors.shape)
+        (5, 3)
+    """
+    # Initialize random colors array
+    colors = np.zeros((num_cells, 3))
+
+    for i in range(num_cells):
+        while True:
+            # Generate random RGB values
+            color = np.random.random(3)
+
+            # Ensure at least one channel is very vibrant (>0.8)
+            color[np.random.randint(3)] = np.random.uniform(0.8, 1.0)
+
+            # Ensure the color isn't too dark (sum of channels > 1.2)
+            if np.sum(color) > 1.2:
+                colors[i] = color
+                break
+
+    return colors
 
 
 def filter_directories(directories: List[str], substrings: List[str]) -> List[str]:

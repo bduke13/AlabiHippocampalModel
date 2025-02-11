@@ -1,6 +1,6 @@
+# %%
 import numpy as np
 import matplotlib.pyplot as plt
-import pickle
 import os
 from typing import Optional, List
 
@@ -71,7 +71,7 @@ def plot_place_fields(
 def get_place_field_centers(
     hmap_x,
     hmap_y,
-    hmap_z,
+    hmap_pcn,
     cell_indices: Optional[List[int]] = None,
     image_path="",
     save_plot=True,
@@ -83,7 +83,7 @@ def get_place_field_centers(
     Args:
     - hmap_x: Array of x coordinates.
     - hmap_y: Array of y coordinates.
-    - hmap_z: Activation map (z-axis data).
+    - hmap_pcn: Activation map (z-axis data).
     - cell_indices: Optional list of cell indices to plot. If None, plots all cells.
     - image_path: Path to the background image (optional).
     - save_plot: Boolean flag to save the plot (default is True).
@@ -92,7 +92,7 @@ def get_place_field_centers(
     Returns:
     - valid_means: Numpy array of valid place field centers.
     """
-    num_cells = hmap_z.shape[-1]
+    num_cells = hmap_pcn.shape[-1]
 
     if cell_indices is None:
         cell_indices = list(
@@ -103,8 +103,8 @@ def get_place_field_centers(
 
     for i, cell_index in enumerate(cell_indices):
         try:
-            x_mean = weighted_mean(hmap_x, weights=hmap_z[:, cell_index])
-            y_mean = weighted_mean(hmap_y, weights=hmap_z[:, cell_index])
+            x_mean = weighted_mean(hmap_x, weights=hmap_pcn[:, cell_index])
+            y_mean = weighted_mean(hmap_y, weights=hmap_pcn[:, cell_index])
             means[i] = x_mean, y_mean
         except:
             means[i] = np.nan, np.nan  # Handle case with no firing
@@ -120,13 +120,15 @@ def get_place_field_centers(
 
 
 if __name__ == "__main__":
+    from vis_utils import load_hmaps, convert_xyz_hmaps
+
     # Load hmap data
-    with open("hmap_x.pkl", "rb") as f:
-        hmap_x = np.array(pickle.load(f))
-    with open("hmap_y.pkl", "rb") as f:
-        hmap_y = np.array(pickle.load(f))
-    with open("hmap_z.pkl", "rb") as f:
-        hmap_z = np.asarray(pickle.load(f))
+    base_path = "webots/controllers/create3_base/"
+    # Load hmap data
+    hmap_loc, hmap_pcn = load_hmaps(
+        prefix=base_path, hmap_names=["hmap_loc", "hmap_pcn"]
+    )
+    hmap_x, hmap_z, hmap_y = convert_xyz_hmaps(hmap_loc)
 
     # Optional specific cell indices (e.g., [0, 5, 10]) or None to plot all
     specific_cells = None  # Replace with a list of specific cell indices if needed
@@ -138,7 +140,7 @@ if __name__ == "__main__":
     get_place_field_centers(
         hmap_x,
         hmap_y,
-        hmap_z,
+        hmap_pcn,
         cell_indices=specific_cells,
         image_path=image_path,
         save_plot=False,

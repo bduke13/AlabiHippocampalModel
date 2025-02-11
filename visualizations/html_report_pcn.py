@@ -1,10 +1,7 @@
 # %%
 import numpy as np
 import matplotlib.pyplot as plt
-import pickle
-import json
 import os
-import matplotlib.colors as mcolors
 import webbrowser
 
 
@@ -229,7 +226,7 @@ def generate_place_cells_report(
 # %%
 if __name__ == "__main__":
 
-    from analysis_utils import load_hmaps
+    from vis_utils import load_hmaps
 
     # Example usage
     data_path = "webots/controllers/create3_base/"

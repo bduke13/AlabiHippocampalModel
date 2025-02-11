@@ -1,9 +1,4 @@
 # %%
-# tripartite_directional.py
-
-import sys
-import os
-import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -14,7 +9,7 @@ def weighted_mean(data, weights):
     return np.sum(data * weights) / np.sum(weights)
 
 
-def compute_place_cell_centers(hmap_x, hmap_y, hmap_pcn):
+def compute_place_cell_centers(hmap_pcn, hmap_x, hmap_y):
     """Compute the centers of place fields based on place cell activations."""
     num_cells = hmap_pcn.shape[1]
     centers = np.zeros((num_cells, 2))
@@ -32,22 +27,11 @@ def compute_place_cell_centers(hmap_x, hmap_y, hmap_pcn):
     return centers
 
 
-if __name__ == "__main__":
-    # Load data
-    from visualizations.analysis_utils import (
-        load_hmaps,
-        convert_xyz_hmaps,
-        load_layer_pkl,
-    )
-
-    prefix = "webots/controllers/create3_base/"
-
-    hmap_loc, hmap_pcn = load_hmaps(prefix=prefix, hmap_names=["hmap_loc", "hmap_pcn"])
-    hmap_x, hmap_z, hmap_y = convert_xyz_hmaps(hmap_loc=hmap_loc)
-    pcn = load_layer_pkl(prefix=prefix, layer_name="pcn.pkl")
-
+def plot_pcn_adjacencies(pcn, hmap_x, hmap_y, hmap_pcn):
     # Compute place cell centers
-    place_cell_centers = compute_place_cell_centers(hmap_x, hmap_y, hmap_pcn)
+    place_cell_centers = compute_place_cell_centers(
+        hmap_pcn=hmap_pcn, hmap_x=hmap_x, hmap_y=hmap_y
+    )
 
     # Extract tripartite connections
     w_rec_tripartite = pcn.w_rec_tripartite.cpu().detach().numpy()
@@ -113,3 +97,20 @@ if __name__ == "__main__":
     plt.gca().set_aspect("equal", adjustable="box")
     plt.tight_layout(rect=[0, 0, 0.85, 1])  # Adjust layout to make space for the legend
     plt.show()
+
+
+if __name__ == "__main__":
+    # Load data
+    from vis_utils import (
+        load_hmaps,
+        convert_xyz_hmaps,
+        load_layer_pkl,
+    )
+
+    prefix = "webots/controllers/create3_base/"
+
+    hmap_loc, hmap_pcn = load_hmaps(prefix=prefix, hmap_names=["hmap_loc", "hmap_pcn"])
+    hmap_x, hmap_z, hmap_y = convert_xyz_hmaps(hmap_loc=hmap_loc)
+    pcn = load_layer_pkl(prefix=prefix, layer_name="pcn.pkl")
+
+    plot_pcn_adjacencies(pcn=pcn, hmap_x=hmap_x, hmap_y=hmap_y, hmap_pcn=hmap_pcn)
