@@ -12,7 +12,7 @@ if __name__ == "__main__":
     plt.rcParams["mathtext.fontset"] = "dejavuserif"  # For math text
 
     # Load your CSV
-    input_csv = "controllers/bek_controller/analysis_results/cosine_similarities.csv"
+    input_csv = "webots/controllers/create3_3D_bvc/visualizations_3D_bvc/outputs/cosine_similarities.csv"
     df = pd.read_csv(input_csv)
     print(f"Loaded data from: {input_csv}")
     print(df.head())

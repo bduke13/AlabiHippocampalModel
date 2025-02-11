@@ -5,17 +5,8 @@ import pandas as pd
 from multiprocessing import Pool, cpu_count
 from functools import partial
 
-# Rely on your project methods (no re-declaration):
-from controllers.bek_controller.visualizations.analysis_utils import (
-    load_hmaps,
-    get_available_directories,
-    filter_directories,
-)
-from controllers.bek_controller.visualizations.hexbins import (
-    create_hexbin,
-    stack_binned_data_by_location,
-    compute_cosine_similarity_sums,
-)
+from visualizations.vis_utils import *
+from webots.controllers.create3_3D_bvc.visualizations_3D_bvc.hexbins import *
 
 
 def parse_path_for_model_and_env(full_path: str):
@@ -38,13 +29,13 @@ def process_hmap(path):
         model_name, env_name = parse_path_for_model_and_env(path)
 
         # Load data
-        hmap_x, hmap_y, hmap_z = load_hmaps(
+        hmap_x, hmap_y, hmap_pcn = load_hmaps(
             path, hmap_names=["hmap_x", "hmap_y", "hmap_pcn"]
         )
-        if hmap_z is None or not isinstance(hmap_z, np.ndarray):
-            raise ValueError(f"hmap_z not loaded or invalid for {path}")
+        if hmap_pcn is None or not isinstance(hmap_pcn, np.ndarray):
+            raise ValueError(f"hmap_pcn not loaded or invalid for {path}")
 
-        num_cells = hmap_z.shape[1]
+        num_cells = hmap_pcn.shape[1]
         all_binned_data_for_env = []
 
         # Process all cells
@@ -53,7 +44,7 @@ def process_hmap(path):
                 cell_index=cell_index,
                 hmap_x=hmap_x,
                 hmap_y=hmap_y,
-                hmap_z=hmap_z,
+                hmap_pcn=hmap_pcn,
                 normalize=True,
                 filter_bottom_ratio=0.1,
                 analyze=True,
@@ -83,7 +74,7 @@ def process_hmap(path):
 if __name__ == "__main__":
 
     # Parameters
-    root_path = "controllers/bek_controller/IJCNN"
+    root_path = "IJCNN"
     desired_path_ends = ["inside_shallow", "inside_medium", "inside_steep", "upright"]
 
     # Get and filter directories
@@ -130,7 +121,7 @@ if __name__ == "__main__":
 
     # Save results to CSV
     df = pd.DataFrame(data_rows)
-    output_dir = "controllers/bek_controller/analysis_results"
+    output_dir = "webots/controllers/create3_3D_bvc/visualizations_3D_bvc/outputs/"
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, "cosine_similarities.csv")
     df.to_csv(output_path, index=False)
