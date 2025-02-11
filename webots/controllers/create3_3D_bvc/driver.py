@@ -275,6 +275,7 @@ class Driver(Supervisor):
                 num_pc=num_place_cells,
                 timestep=timestep,
                 n_hd=n_hd,
+                w_in_init_ratio=0.7,
                 device=device,
             )
             print("Initialized new Place Cell Network.")
