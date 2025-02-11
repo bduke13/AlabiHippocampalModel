@@ -1,0 +1,9 @@
+Model Parameters:
+sigma_d: tensor([0.5000, 0.5000, 0.5000,  ..., 0.5000, 0.5000, 0.5000], device='cuda:0')
+sigma_ang: tensor([0.2000, 0.2000, 0.2000,  ..., 0.2000, 0.2000, 0.2000], device='cuda:0')
+num_place_cells: 500
+num_bvcs: 2400
+num_bvc_per_dir: 60
+n_hd: 8
+run_time_hours: 1.0
+num_simulation_steps: 18749
