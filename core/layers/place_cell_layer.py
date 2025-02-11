@@ -24,6 +24,7 @@ class PlaceCellLayer:
         n_hd: int = 8,
         enable_ojas: bool = False,
         enable_stdp: bool = False,
+        w_in_init_ratio: float = 0.25,
         device: str = "cpu",
         dtype: torch.dtype = torch.float32,
     ):
@@ -36,6 +37,7 @@ class PlaceCellLayer:
             n_hd: Number of head direction cells.
             enable_ojas: Enable weight updates via competition.
             enable_stdp: Enable tripartite synapse weight updates via Spike-Timing-Dependent Plasticity.
+            w_in_init_ratio: What proportion of the weights of BVC -> PCN are active initially
             device: Which device to place the tensors on (e.g., "cpu" or "cuda").
             dtype: PyTorch data type (e.g., torch.float32).
         """
@@ -55,9 +57,8 @@ class PlaceCellLayer:
         self.num_bvc = self.bvc_layer.num_bvc
 
         # Input weight matrix connecting place cells to BVCs
-        # Initialized with a 20% probability of connection
         # Shape: (num_pc, num_bvc)
-        w_in_init = rng.binomial(n=1, p=0.25, size=(num_pc, self.num_bvc))
+        w_in_init = rng.binomial(n=1, p=w_in_init_ratio, size=(num_pc, self.num_bvc))
         w_in_init = torch.tensor(w_in_init, dtype=self.dtype, device=self.device)
         # We wrap in nn.Parameter so the weights can be learnable if needed
         self.w_in = torch.nn.Parameter(w_in_init, requires_grad=False)
