@@ -132,7 +132,7 @@ class PlaceCellLayer:
     def get_place_cell_activations(
         self,
         distances: np.ndarray,
-        hd_activations: np.ndarray,
+        hd_activations: np.ndarray | None = None,
         collided: bool = False,
     ):
         """Compute place cell activations from BVC and head direction inputs.
@@ -146,9 +146,10 @@ class PlaceCellLayer:
         distances_torch = torch.tensor(distances, dtype=self.dtype, device=self.device)
 
         # Convert head direction activations to torch, same device
-        hd_activations_torch = torch.as_tensor(
-            hd_activations, dtype=self.dtype, device=self.device
-        )
+        if hd_activations is not None:
+            hd_activations_torch = torch.as_tensor(
+                hd_activations, dtype=self.dtype, device=self.device
+            )
 
         # Compute BVC activations based on the input distances
         self.bvc_activations = self.bvc_layer.get_bvc_activation(
