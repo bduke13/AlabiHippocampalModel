@@ -72,7 +72,7 @@ def plot_3d_trajectory_with_pcn(
 if __name__ == "__main__":
     from visualizations.vis_utils import (
         load_hmaps,
-        convert_xyz_hmaps,
+        convert_xzy_hmaps,
         generate_random_colors,
     )
 
@@ -81,7 +81,7 @@ if __name__ == "__main__":
     hmap_loc, hmap_pcn = load_hmaps(
         prefix=data_path, hmap_names=["hmap_loc", "hmap_pcn"]
     )
-    hmap_x, hmap_z, hmap_y = convert_xyz_hmaps(hmap_loc)
+    hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
 
     plot_3d_trajectory_with_pcn(
         hmap_x=hmap_x,

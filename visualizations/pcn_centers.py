@@ -120,7 +120,7 @@ def get_place_field_centers(
 
 
 if __name__ == "__main__":
-    from vis_utils import load_hmaps, convert_xyz_hmaps
+    from vis_utils import load_hmaps, convert_xzy_hmaps
 
     # Load hmap data
     base_path = "webots/controllers/create3_base/"
@@ -128,7 +128,7 @@ if __name__ == "__main__":
     hmap_loc, hmap_pcn = load_hmaps(
         prefix=base_path, hmap_names=["hmap_loc", "hmap_pcn"]
     )
-    hmap_x, hmap_z, hmap_y = convert_xyz_hmaps(hmap_loc)
+    hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
 
     # Optional specific cell indices (e.g., [0, 5, 10]) or None to plot all
     specific_cells = None  # Replace with a list of specific cell indices if needed

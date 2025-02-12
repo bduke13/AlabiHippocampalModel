@@ -1,5 +1,4 @@
 # %%
-from os import wait
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Optional
@@ -139,9 +138,9 @@ def plot_overlayed_cells(
 
 
 if __name__ == "__main__":
-    from vis_utils import load_hmaps, convert_xyz_hmaps, generate_random_colors
+    from vis_utils import load_hmaps, convert_xzy_hmaps, generate_random_colors
 
-    gridsize = 80
+    gridsize = 100
     # Set to None to plot all cells, or specify a number to sample that many cells
     num_cells_to_sample = None  # Will use all cells with non-zero activation
 
@@ -150,7 +149,11 @@ if __name__ == "__main__":
     hmap_loc, hmap_pcn = load_hmaps(
         prefix=base_path, hmap_names=["hmap_loc", "hmap_pcn"]
     )
-    hmap_x, hmap_z, hmap_y = convert_xyz_hmaps(hmap_loc)
+    hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
+    
+    import os
+    print(os.listdir())
+    print(os.listdir('webots/controllers/create3_base/'))
 
     # Example usage with all parameters
     plot_overlayed_cells(

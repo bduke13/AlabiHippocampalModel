@@ -53,7 +53,7 @@ def load_hmaps(
     return hmaps
 
 
-def convert_xyz_hmaps(hmap_loc: np.ndarray) -> List[np.ndarray]:
+def convert_xzy_hmaps(hmap_loc: np.ndarray) -> List[np.ndarray]:
     """Utility method that splits hmap_x, hmap_z, and hmap_y from the hmap_loc file output by webots"""
     return hmap_loc[:, 0], hmap_loc[:, 1], hmap_loc[:, 2]
 

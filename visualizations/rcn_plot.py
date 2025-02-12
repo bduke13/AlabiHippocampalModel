@@ -75,7 +75,7 @@ def plot_rcn_activation(
 if __name__ == "__main__":
     from vis_utils import (
         load_hmaps,
-        convert_xyz_hmaps,
+        convert_xzy_hmaps,
         load_layer_pkl,
     )
 
@@ -84,7 +84,7 @@ if __name__ == "__main__":
     hmap_loc, hmap_pcn = load_hmaps(
         prefix=base_path, hmap_names=["hmap_loc", "hmap_pcn"]
     )
-    hmap_x, hmap_z, hmap_y = convert_xyz_hmaps(hmap_loc)
+    hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
     rcn = load_layer_pkl(prefix=base_path, layer_name="rcn.pkl")
 
     # Set up the colormap and default settings

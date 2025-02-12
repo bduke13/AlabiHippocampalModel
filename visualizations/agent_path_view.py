@@ -69,12 +69,12 @@ def plot_trajectory(
 
 
 if __name__ == "__main__":
-    from vis_utils import load_hmaps, convert_xyz_hmaps
+    from vis_utils import load_hmaps, convert_xzy_hmaps
 
     base_path = "webots/controllers/create3_base/"
     # Load hmap data
     hmap_loc = load_hmaps(prefix=base_path, hmap_names=["hmap_loc"])
-    hmap_x, hmap_z, hmap_y = convert_xyz_hmaps(hmap_loc)
+    hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
 
     # Plot the trajectory
     plot_trajectory(hmap_x, hmap_y)

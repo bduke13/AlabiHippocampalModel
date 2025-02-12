@@ -103,14 +103,14 @@ if __name__ == "__main__":
     # Load data
     from vis_utils import (
         load_hmaps,
-        convert_xyz_hmaps,
+        convert_xzy_hmaps,
         load_layer_pkl,
     )
 
     prefix = "webots/controllers/create3_base/"
 
     hmap_loc, hmap_pcn = load_hmaps(prefix=prefix, hmap_names=["hmap_loc", "hmap_pcn"])
-    hmap_x, hmap_z, hmap_y = convert_xyz_hmaps(hmap_loc=hmap_loc)
+    hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc=hmap_loc)
     pcn = load_layer_pkl(prefix=prefix, layer_name="pcn.pkl")
 
     plot_pcn_adjacencies(pcn=pcn, hmap_x=hmap_x, hmap_y=hmap_y, hmap_pcn=hmap_pcn)
