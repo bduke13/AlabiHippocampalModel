@@ -88,5 +88,5 @@ if __name__ == "__main__":
         hmap_z=hmap_z,
         hmap_y=hmap_y,
         hmap_pcn=hmap_pcn,
-        cell_indices_to_plot=range(1, 30),
+        cell_indices_to_plot=range(10, 50),
     )
