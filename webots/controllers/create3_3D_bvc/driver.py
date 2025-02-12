@@ -316,7 +316,7 @@ class Driver(Supervisor):
         except:
             self.rcn = RewardCellLayer(
                 num_reward_cells=num_reward_cells,
-                input_dim=num_place_cells,
+                num_place_cells=num_place_cells,
                 num_replay=num_replay,
                 device=self.device,
             )
