@@ -38,6 +38,7 @@ class DriverFlying(Supervisor):
         start_loc: Optional[List[int]] = None,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
+        visual_bvc: bool = None,
         file_prefix: str = "",
     ):
         self.robot_mode = mode
@@ -48,12 +49,13 @@ class DriverFlying(Supervisor):
         self.num_place_cells = 500
         self.num_reward_cells = 1
         self.n_hd = 8
-        self.timestep = 32 * 3
+        self.timestep = 32 * 6
         self.tau_w = 10  # time constant for the window function
 
         # Parameters for 3D BVC
         # Define preferred vertical angles and corresponding sigma values
         self.preferred_vertical_angles = preferred_va
+        self.visual_bvc = visual_bvc
 
         self.sigma_d_list = (
             sigma_d
@@ -142,8 +144,7 @@ class DriverFlying(Supervisor):
         self.head_direction_layer = HeadDirectionLayer(num_cells=self.n_hd)
 
         # Initialize boundaries
-        self.boundary_data = torch.zeros((720, 1))
-        self.vertical_boundary_data = torch.zeros((720, 360))  # For vertical range data
+        self.vertical_boundaries = torch.zeros((720, 360))
 
         self.step(self.timestep)
         self.step_count += 1
@@ -188,7 +189,7 @@ class DriverFlying(Supervisor):
 
             # Initialize BVC layer with per-layer sigma values
             bvc = BoundaryVectorCellLayer3D(
-                max_dist=12,
+                max_dist=5,
                 n_hd=8,
                 preferred_vertical_angles=preferred_vertical_angles,
                 sigma_d_list=sigma_d_list,
@@ -197,6 +198,7 @@ class DriverFlying(Supervisor):
                 scaling_factors=scaling_factors,
                 num_bvc_per_dir=num_bvc_per_dir,
                 device=self.device,
+                bottom_cutoff_percentage=1.0,
             )
 
             self.pcn = PlaceCellLayer(
@@ -301,7 +303,9 @@ class DriverFlying(Supervisor):
         # Get the range finder data and roll to align with heading
         vertical_data = self.vertical_range_finder.getRangeImage()
         if vertical_data is not None:
-            vertical_boundaries_tf = torch.tensor(vertical_data, dtype=torch.float32)
+            vertical_boundaries_tf = torch.tensor(
+                vertical_data, dtype=torch.float32, device=self.device
+            )
             vertical_boundaries_tf = vertical_boundaries_tf.reshape(90, 180)
             self.vertical_boundaries = torch.roll(
                 vertical_boundaries_tf, shifts=int(self.current_heading_deg / 2), dims=1
@@ -342,7 +346,8 @@ class DriverFlying(Supervisor):
             collided=torch.any(self.collided).item(),
         )
 
-        # self.pcn.bvc_layer.plot_activation(self.vertical_boundaries)
+        if self.visual_bvc:
+            self.pcn.bvc_layer.plot_activation(self.vertical_boundaries)
 
         # Advance the timestep and update position
         self.step(self.timestep)

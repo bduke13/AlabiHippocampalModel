@@ -14,11 +14,12 @@ if __name__ == "__main__":
 
     run_time_hours = 1
 
-    preferred_va = [-0.8, -0.4, 0.0, 0.4, 0.8]
-    sigma_d = [0.5] * len(preferred_va)
+    preferred_va = [-1.2, -0.6, 0.0, 0.6, 1.2]
+    sigma_d = [0.25] * len(preferred_va)
     sigma_a = [0.2] * len(preferred_va)
     sigma_va = [0.05] * len(preferred_va)
-    num_bvc_per_dir = 60
+    num_bvc_per_dir = 25
+    visual_bvc = False
 
     bot = DriverFlying()
     # Create walls with angles for this trial
@@ -36,6 +37,7 @@ if __name__ == "__main__":
         sigma_a=sigma_a,
         num_bvc_per_dir=num_bvc_per_dir,
         file_prefix=file_path,
+        visual_bvc=visual_bvc,
     )
 
     bot.run()
