@@ -46,7 +46,7 @@ class DriverFlying(Supervisor):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         # Model parameters
-        self.num_place_cells = 500
+        self.num_place_cells = 5000
         self.num_reward_cells = 1
         self.n_hd = 8
         self.timestep = 32 * 6
@@ -287,6 +287,30 @@ class DriverFlying(Supervisor):
             self.reposition_away_from_obstacle(current_pos)
             self.reflect_velocity()
             return
+
+        # Random walk behavior - 5% chance to adjust direction
+        if random.random() < 0.15:  # 5% chance each step
+            # Add Gaussian noise to each velocity component
+            # Using smaller std dev for vertical (y) component
+            noise = [
+                np.random.normal(0, 0.05),  # x component
+                np.random.normal(0, 0.02),  # y component (less variation)
+                np.random.normal(0, 0.05),  # z component
+            ]
+
+            # Add noise to current velocity
+            self.velocity = [v + n for v, n in zip(self.velocity, noise)]
+
+            # Normalize to maintain constant speed
+            magnitude = np.sqrt(sum(v * v for v in self.velocity))
+            self.velocity = [v / magnitude * self.speed for v in self.velocity]
+
+            # Recalculate next position with new velocity
+            next_pos = [
+                current_pos[0] + self.velocity[0],
+                current_pos[1] + self.velocity[1],
+                current_pos[2] + self.velocity[2],
+            ]
 
         # Move the robot if no collisions detected
         self.robot.getField("translation").setSFVec3f(next_pos)
