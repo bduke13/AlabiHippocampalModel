@@ -8,7 +8,7 @@ from typing import Optional, List, Union
 import torch
 import torch.nn.functional as F
 from controller import Supervisor
-from astropy.stats import circmean, circvar
+from astropy.stats import circmean 
 import random
 
 # Add root directory to python to be able to import
@@ -97,12 +97,11 @@ class Driver(Supervisor):
             None
         """
         self.robot_mode = mode
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         self.dtype = torch.float32
 
         # Model parameters
         self.num_place_cells = 200
-        self.num_reward_cells = 1
         self.n_hd = 8
         self.timestep = 32 * 3
         self.tau_w = 5  # time constant for the window function
@@ -155,7 +154,6 @@ class Driver(Supervisor):
             enable_stdp=enable_stdp,
         )
         self.load_rcn(
-            num_reward_cells=self.num_reward_cells,
             num_place_cells=self.num_place_cells,
             num_replay=6,
         )
@@ -282,11 +280,10 @@ class Driver(Supervisor):
 
         return self.pcn
 
-    def load_rcn(self, num_reward_cells: int, num_place_cells: int, num_replay: int):
+    def load_rcn(self, num_place_cells: int, num_replay: int):
         """Loads or initializes the reward cell network.
 
         Args:
-            num_reward_cells (int): Number of reward cells in the network.
             num_place_cells (int): Number of place cells providing input.
             num_replay (int): Number of replay iterations for memory consolidation.
 
@@ -299,9 +296,9 @@ class Driver(Supervisor):
                 print("Loaded existing Reward Cell Network.")
         except:
             self.rcn = RewardCellLayer(
-                num_reward_cells=num_reward_cells,
-                input_dim=num_place_cells,
+                num_place_cells=num_place_cells,
                 num_replay=num_replay,
+                learning_rate=0.1,
                 device=self.device,
             )
             print("Initialized new Reward Cell Network.")
@@ -397,294 +394,257 @@ class Driver(Supervisor):
         self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
 
     ########################################### EXPLOIT ###########################################
-
     def exploit(self):
-        """Executes goal-directed navigation using learned reward maps.
-
-        The robot:
-        - Computes potential rewards in different directions
-        - Selects movement direction with highest expected reward
-        - Updates place and reward cell activations during movement
-        - Monitors goal proximity and collision status
-        - Switches to exploration if reward expectations are too low
-
-        Returns:
-            None
         """
-        # Stop movement and update sensor readings
-        self.stop()
-        self.sense()
+        Minimal exploit method to compute a circular mean of directional rewards
+        and turn accordingly, verifying alignment with the global heading system.
+        """
+        #-------------------------------------------------------------------
+        # 1) Sense and compute: update heading, place/boundary cell activations
+        #-------------------------------------------------------------------
+        self.sense()       # Updates self.current_heading_deg
         self.compute()
         self.check_goal_reached()
 
-        # Proceed only if enough steps have been taken
-        if self.step_count > self.tau_w:
-            num_steps = 1
-            pot_rew = np.empty(self.n_hd)
-            pot_e = np.empty(self.n_hd)
+        #-------------------------------------------------------------------
+        # 2) Calculate potential reward for each possible head direction
+        #-------------------------------------------------------------------
+        num_steps_preplay = 1  # Number of future steps to "preplay"
+        pot_rew = torch.empty(self.n_hd, dtype=self.dtype, device=self.device)
 
-            # Update reward cell network based on current place cell activations
-            self.rcn.update_reward_cell_activations(
-                self.pcn.place_cell_activations, visit=True
-            )
+        # For each head direction index 'd', do a preplay and estimate reward
+        for d in range(self.n_hd):
+            # Predicted place-cell activation for direction 'd'
+            pcn_activations = self.pcn.preplay(d, num_steps=num_steps_preplay)
 
-            # Check if the reward is too low; if so, switch to exploration
-            max_reward_activation = torch.max(self.rcn.reward_cell_activations)
-            if max_reward_activation <= 1e-6:
-                print("Reward too low. Switching to exploration.")
-                self.explore()
-                return
+            # Update reward cell activations (depending on your RCN implementation)
+            self.rcn.update_reward_cell_activations(pcn_activations, visit=False)
 
-            # Calculate potential reward and energy for each direction
-            for d in range(self.n_hd):
-                # Simulate future place cell activations in direction 'd'
-                pcn_activations = self.pcn.preplay(d, num_steps=num_steps)
-                # Update reward cell activations based on the simulated activations
-                self.rcn.update_reward_cell_activations(pcn_activations)
-                # Store potential energy and reward
-                pot_e[d] = torch.norm(pcn_activations, p=1).cpu().numpy()
-                pot_rew[d] = (
-                    torch.max(torch.nan_to_num(self.rcn.reward_cell_activations))
-                    .cpu()
-                    .numpy()
-                )
+            # Example: take the maximum activation in reward cells as the "reward estimate"
+            pot_rew[d] = torch.max(torch.nan_to_num(self.rcn.reward_cell_activations))
 
-            # Update directional reward estimates based on computed potential rewards
-            self.directional_reward_estimates = pot_rew
+        #-------------------------------------------------------------------
+        # 3) Prepare angles for computing the circular mean (no debug prints)
+        #-------------------------------------------------------------------
+        angles = torch.linspace(
+            0,
+            2 * np.pi * (1 - 1 / self.n_hd),
+            self.n_hd,
+            device=self.device,
+            dtype=self.dtype
+        )
 
-            # Calculate the action angle using circular mean
-            angles = np.linspace(0, 2 * np.pi, self.n_hd, endpoint=False)
-            action_angle = circmean(angles, weights=self.directional_reward_estimates)
+        #-------------------------------------------------------------------
+        # 4) Compute circular mean of angles, weighted by the reward estimates
+        #-------------------------------------------------------------------
+        angles_np = angles.cpu().numpy()
+        weights_np = pot_rew.cpu().numpy()
 
-            # Determine the maximum reward for the chosen action
-            index = int(action_angle // (2 * np.pi / self.n_hd))
-            max_reward = pot_rew[index]
+        sin_component = np.sum(np.sin(angles_np) * weights_np)
+        cos_component = np.sum(np.cos(angles_np) * weights_np)
+        action_angle = np.arctan2(sin_component, cos_component)
 
-            # If the max reward is too low, switch to exploration
-            if max_reward <= 1e-3:
-                self.explore()
-                return
+        # Normalize angle to [0, 2π)
+        if action_angle < 0:
+            action_angle += 2 * np.pi
 
-            # Handle collision by turning and updating the reward cell network
-            if torch.any(self.collided):
-                random_angle = np.random.uniform(-np.pi, np.pi)
-                self.turn(random_angle)
-                self.stop()
-                self.rcn.td_update(self.pcn.place_cell_activations, max_reward)
-                return
-            else:
-                # Adjust the action angle if necessary
-                if abs(action_angle) > np.pi:
-                    action_angle -= np.sign(action_angle) * 2 * np.pi
-                # Calculate the angle to turn towards the desired heading
-                angle_to_turn = -np.deg2rad(
-                    np.rad2deg(action_angle) - self.current_heading_deg
-                ) % (2 * np.pi)
-                self.turn(angle_to_turn)
+        #-------------------------------------------------------------------
+        # 5) Convert action angle to a turn relative to the current global heading
+        #-------------------------------------------------------------------
+        angle_to_turn_deg = np.rad2deg(action_angle) - self.current_heading_deg
+        angle_to_turn_deg = (angle_to_turn_deg + 180) % 360 - 180
+        angle_to_turn = np.deg2rad(angle_to_turn_deg)
 
-            # Move forward for a set duration while updating the place cell state
-            for s in range(self.tau_w):
-                self.sense()
-                self.compute()
-                self.forward()
-                self.check_goal_reached()
-                self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations)
-                actual_reward = self.get_actual_reward()
-                self.rcn.td_update(
-                    self.pcn.place_cell_activations, next_reward=actual_reward
-                )
+        #-------------------------------------------------------------------
+        # 6) Execute the turn and optionally move forward
+        #-------------------------------------------------------------------
+        self.turn(angle_to_turn)
+        self.forward()
+
+        # (Optional) Re-sense and compute after movement
+        self.sense()
+        self.compute()
 
     def get_actual_reward(self):
-        """Determines the actual reward for the agent at the current state.
-
-        Returns:
-            float: The actual reward value (1.0 if at goal, 0.0 otherwise)
         """
+        Computes the actual reward based on current distance to the goal.
+        """
+        # Get current position from the robot node
         curr_pos = self.robot.getField("translation").getSFVec3f()
-        distance_to_goal = np.linalg.norm(
-            [curr_pos[0] - self.goal_location[0], curr_pos[2] - self.goal_location[1]]
+
+        # Distance from current position to goal location
+        distance_to_goal = torch.norm(
+            torch.tensor(
+                [
+                    curr_pos[0] - self.goal_location[0],
+                    curr_pos[2] - self.goal_location[1]
+                ],
+                dtype=self.dtype,
+                device=self.device
+            )
         )
 
+        # Return 1.0 reward if within goal radius, else 0.0
         if distance_to_goal <= self.goal_r["exploit"]:
-            return 1.0  # Reward for reaching the goal
+            return 1.0
         else:
-            return 0.0  # No reward otherwise
+            return 0.0
 
     ########################################### SENSE ###########################################
-
     def sense(self):
-        """Updates the robot's perception of its environment.
-
-        Updates orientation, distance to obstacles (boundaries), head direction cell
-        activations, and collision detection. The method performs the following steps:
-        1. Captures LiDAR data for obstacle distances
-        2. Gets robot heading and aligns LiDAR data
-        3. Computes head direction vector and cell activations
-        4. Updates collision status from bumper sensors
-        5. Advances to next timestep
-
-        Updates the following instance variables:
-            boundaries: LiDAR range data (720 points)
-            current_heading_deg: Current heading in degrees
-            hd_activations: Head direction cell activations
-            collided: Collision status from bumpers
         """
-
-        # 1. Capture distance data from the range finder (LiDAR), which provides 720 points around the robot.
-        # Shape: (720,)
+        Uses sensors to update range-image, heading, boundary data, collision flags, etc.
+        """
+        # Get the latest boundary data from range finder
         boundaries = self.range_finder.getRangeImage()
 
-        # 2. Get the robot's current heading in degrees using the compass and convert it to an integer.
-        # Shape: scalar (int)
-        self.current_heading_deg = int(
-            self.get_bearing_in_degrees(self.compass.getValues())
+        # Update global heading (0–360)
+        self.current_heading_deg = int(self.get_bearing_in_degrees(self.compass.getValues()))
+
+        # Shift boundary data based on global heading
+        self.boundaries = torch.roll(
+            torch.tensor(boundaries, dtype=self.dtype, device=self.device),
+            2 * self.current_heading_deg
         )
 
-        # 3. Roll the LiDAR data based on the current heading to align the 'front' with index 0.
-        # Shape: (720,) - LiDAR data remains 720 points, but shifted according to the robot's current heading.
-        self.boundaries = np.roll(boundaries, 2 * self.current_heading_deg)
-        # self.boundaries = torch.tensor(boundaries, dtype=self.dtype, device=self.device)
-
-        # 4. Convert the current heading from degrees to radians.
-        # Shape: scalar (float) - Current heading of the robot in radians.
+        # Convert heading to radians for HD-layer input
         current_heading_rad = np.deg2rad(self.current_heading_deg)
+        v_in = torch.tensor([np.cos(current_heading_rad), np.sin(current_heading_rad)],
+                            dtype=self.dtype, device=self.device)
 
-        # 6. Calculate the current heading vector from the heading in radians.
-        # Shape: (2,) - A 2D vector representing the robot's current heading direction: [cos(theta), sin(theta)].
-        v_in = np.array([np.cos(current_heading_rad), np.sin(current_heading_rad)])
-
-        # 7. Compute the activations of the head direction cells based on the current heading vector (v_in).
-        # Shape: (self.num_cells,) - A 1D array where each element represents the activation of a head direction cell.
+        # Update head direction layer activations
         self.hd_activations = self.head_direction_layer.get_hd_activation(v_in=v_in)
 
-        # 8. Update the collision status using the left bumper sensor.
-        # Shape: scalar (int) - 1 if collision detected on the left bumper, 0 otherwise.
+        # Check for collisions via bumpers
         self.collided[0] = int(self.left_bumper.getValue())
-
-        # 9. Update the collision status using the right bumper sensor.
-        # Shape: scalar (int) - 1 if collision detected on the right bumper, 0 otherwise.
         self.collided[1] = int(self.right_bumper.getValue())
 
-        # 10. Proceed to the next timestep in the robot's control loop.
+        # Advance simulation one timestep
         self.step(self.timestep)
 
     def get_bearing_in_degrees(self, north: List[float]) -> float:
-        """Converts compass readings to bearing in degrees.
-
-        Args:
-            north (List[float]): List containing the compass sensor values [x, y, z].
-
-        Returns:
-            float: Bearing angle in degrees (0-360), where 0 is North.
         """
+        Converts a 'north' vector (from compass) to a global heading in degrees [0, 360).
+        The simulator's 'north' often aligns with the negative Y-axis, so we do a shift.
+        """
+        # Angle from the x-axis
         rad = np.arctan2(north[1], north[0])
+
+        # Convert from radians to degrees, shift by -90 deg to align with "north"
         bearing = (rad - 1.5708) / np.pi * 180.0
+
+        # Wrap negative angles into [0, 360)
         if bearing < 0:
-            bearing = bearing + 360.0
+            bearing += 360.0
 
         return bearing
 
     ########################################### COMPUTE ###########################################
-
     def compute(self):
         """
-        Compute the activations of place cells and handle the environment interactions.
+        Uses current boundary- and HD-activations to update place-cell activations
+        and store relevant data for analysis/debugging.
         """
-        # Compute the place cell network activations
+        # Update place cell activations based on sensor data
         self.pcn.get_place_cell_activations(
             distances=self.boundaries,
             hd_activations=self.hd_activations,
             collided=torch.any(self.collided),
         )
 
-        # Advance the timestep and update position
+        # Advance simulation one timestep
         self.step(self.timestep)
 
-        # Update place cell and sensor maps
+        # Store historical data (optional)
         if self.step_count < self.num_steps:
-            self.hmap_loc[self.step_count] = self.robot.getField(
-                "translation"
-            ).getSFVec3f()
-            # Already on GPU
+            # Save positions, cell activations, etc.
+            self.hmap_loc[self.step_count] = self.robot.getField("translation").getSFVec3f()
             self.hmap_pcn[self.step_count] = self.pcn.place_cell_activations.detach()
             self.hmap_bvc[self.step_count] = self.pcn.bvc_activations.detach()
             self.hmap_hdn[self.step_count] = self.hd_activations.detach()
-            self.hmap_g[self.step_count] = float(
-                self.pcn.bvc_activations.detach().cpu().sum()
-            )
+            self.hmap_g[self.step_count] = float(self.pcn.bvc_activations.detach().cpu().sum())
 
-        # Increment timestep
         self.step_count += 1
 
     ########################################### CHECK GOAL REACHED ###########################################
-
     def check_goal_reached(self):
         """
-        Check if the robot has reached the goal and perform necessary actions when the goal is reached.
+        Check if the robot has reached its goal or if time has expired.
+        If reached and in the correct mode, call auto_pilot() and save logs.
         """
         curr_pos = self.robot.getField("translation").getSFVec3f()
-        # DMTP Mode and exploit mode both stop when they both see the goal
-        if (
-            self.robot_mode == RobotMode.EXPLOIT or self.robot_mode == RobotMode.DMTP
-        ) and np.allclose(
-            self.goal_location, [curr_pos[0], curr_pos[2]], 0, self.goal_r["exploit"]
+
+        # Compare current position to goal
+        if (self.robot_mode == RobotMode.EXPLOIT or self.robot_mode == RobotMode.DMTP) and torch.allclose(
+            torch.tensor(self.goal_location, dtype=self.dtype, device=self.device),
+            torch.tensor([curr_pos[0], curr_pos[2]], dtype=self.dtype, device=self.device),
+            atol=self.goal_r["exploit"]
         ):
-            self.auto_pilot()  # Navigate to the goal slowly and call rcn.replay()
+            self.auto_pilot()
             print("Goal reached")
             print(f"Total distance traveled: {self.compute_path_length()}")
             print(f"Started at: {np.array([self.hmap_loc[0][0], self.hmap_loc[0][2]])}")
             print(f"Current position: {np.array([curr_pos[0], curr_pos[2]])}")
             print(f"Time taken: {self.getTime()}")
 
-            if self.robot_mode == RobotMode.DMTP:
-                include_hmaps = False
-            else:
-                include_hmaps = True
-
+            # Decide whether to include certain logs
+            include_hmaps = False if self.robot_mode in [RobotMode.DMTP, RobotMode.EXPLOIT] else True
             self.save(
-                include_rcn=(self.robot_mode != RobotMode.EXPLOIT),
-                include_pcn=(self.robot_mode != RobotMode.EXPLOIT),
                 include_hmaps=include_hmaps,
             )
+
+        # If time is up, save current data
         elif self.getTime() >= 60 * self.run_time_minutes:
             self.save()
 
     ########################################### AUTO PILOT ###########################################
 
     def auto_pilot(self):
+        """
+        A fallback or finalizing method that manually drives the robot to the goal
+        location when it is close or already exploiting. 
+        """
         print("Auto-piloting to the goal...")
         s_start = 0
         curr_pos = self.robot.getField("translation").getSFVec3f()
-        while not np.allclose(
-            self.goal_location, [curr_pos[0], curr_pos[2]], 0, self.goal_r["explore"]
+
+        # Keep moving until close enough to goal
+        while not torch.allclose(
+            torch.tensor(self.goal_location, dtype=self.dtype, device=self.device),
+            torch.tensor([curr_pos[0], curr_pos[2]], dtype=self.dtype, device=self.device),
+            atol=self.goal_r["explore"]
         ):
             curr_pos = self.robot.getField("translation").getSFVec3f()
             delta_x = curr_pos[0] - self.goal_location[0]
             delta_y = curr_pos[2] - self.goal_location[1]
 
+            # Compute desired heading to face the goal
             if delta_x >= 0:
-                theta = torch.atan2(
-                    torch.abs(torch.tensor(delta_y)), torch.abs(torch.tensor(delta_x))
-                ).item()
-                desired = np.pi * 2 - theta if delta_y >= 0 else np.pi + theta
+                theta = torch.atan2(torch.abs(torch.tensor(delta_y, dtype=self.dtype, device=self.device)),
+                                    torch.abs(torch.tensor(delta_x, dtype=self.dtype, device=self.device))).item()
+                if delta_y >= 0:
+                    desired = 2 * np.pi - theta
+                else:
+                    desired = np.pi + theta
             elif delta_y >= 0:
-                theta = torch.atan2(
-                    torch.abs(torch.tensor(delta_y)), torch.abs(torch.tensor(delta_x))
-                ).item()
-                desired = np.pi / 2 - theta
+                theta = torch.atan2(torch.abs(torch.tensor(delta_y, dtype=self.dtype, device=self.device)),
+                                    torch.abs(torch.tensor(delta_x, dtype=self.dtype, device=self.device))).item()
+                desired = (np.pi / 2) - theta
             else:
-                theta = torch.atan2(
-                    torch.abs(torch.tensor(delta_x)), torch.abs(torch.tensor(delta_y))
-                ).item()
+                theta = torch.atan2(torch.abs(torch.tensor(delta_x, dtype=self.dtype, device=self.device)),
+                                    torch.abs(torch.tensor(delta_y, dtype=self.dtype, device=self.device))).item()
                 desired = np.pi - theta
+
+            # Turn to desired heading
             self.turn(-(desired - np.deg2rad(self.current_heading_deg)))
 
+            # Move forward one step
             self.sense()
             self.compute()
             self.forward()
             s_start += 1
 
-        # Replay the place cell activations
+        # Replay or reinforce final position in RCN
         self.rcn.replay(pcn=self.pcn)
 
     ########################################### HELPER METHODS ###########################################
@@ -813,9 +773,9 @@ class Driver(Supervisor):
 
     def save(
         self,
-        include_pcn: bool = True,
-        include_rcn: bool = True,
-        include_hmaps: bool = True,
+        include_pcn: bool = False,
+        include_rcn: bool = False,
+        include_hmaps: bool = False,
     ):
         """
         Saves the state of the PCN (Place Cell Network), RCN (Reward Cell Network), and optionally
