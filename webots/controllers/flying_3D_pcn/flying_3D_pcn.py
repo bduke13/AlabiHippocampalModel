@@ -12,12 +12,12 @@ if __name__ == "__main__":
 
     from core.robot.robot_mode import RobotMode
 
-    run_time_hours = 4
+    run_time_hours = 2
 
     preferred_va = [-1.2, -0.6, 0.0, 0.6, 1.2]
     sigma_d = [0.5] * len(preferred_va)
-    sigma_a = [0.1] * len(preferred_va)
-    sigma_va = [0.1] * len(preferred_va)
+    sigma_a = [0.01] * len(preferred_va)
+    sigma_va = [0.01] * len(preferred_va)
     num_bvc_per_dir = 25
     visual_bvc = False
 
@@ -25,10 +25,8 @@ if __name__ == "__main__":
     # Create walls with angles for this trial
     # for index, model_type in enumerate(models):
 
-    file_path = f"3D_NAV/"
-
     bot.initialization(
-        mode=RobotMode.LEARN_OJAS,
+        mode=RobotMode.LEARN_HEBB,
         randomize_start_loc=True,
         run_time_hours=run_time_hours,
         preferred_va=preferred_va,
@@ -36,7 +34,6 @@ if __name__ == "__main__":
         sigma_va=sigma_va,
         sigma_a=sigma_a,
         num_bvc_per_dir=num_bvc_per_dir,
-        file_prefix=file_path,
         visual_bvc=visual_bvc,
     )
 

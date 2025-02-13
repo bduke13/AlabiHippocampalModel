@@ -16,8 +16,9 @@ sys.path.append(str(PROJECT_ROOT))  # Add project root to sys.path
 
 from core.robot.robot_mode import RobotMode
 from core.layers.boundary_vector_cell_layer_3D import BoundaryVectorCellLayer3D
-from core.layers.head_direction_layer import HeadDirectionLayer
+from core.layers.head_direction_layer_3D import HeadDirectionLayer3D
 from core.layers.place_cell_layer import PlaceCellLayer
+from core.layers.reward_cell_layer import RewardCellLayer
 
 np.set_printoptions(precision=2)
 PI = torch.tensor(np.pi)
@@ -45,10 +46,14 @@ class DriverFlying(Supervisor):
         self.file_prefix = file_prefix
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
+        if self.robot_mode == RobotMode.LEARN_OJAS:
+            self.clear()
+
         # Model parameters
         self.num_place_cells = 5000
         self.num_reward_cells = 1
-        self.n_hd = 8
+        self.n_hd_bvc = 8
+        self.n_hd_hdn = 20
         self.timestep = 32 * 6
         self.tau_w = 10  # time constant for the window function
 
@@ -103,7 +108,9 @@ class DriverFlying(Supervisor):
         self.hmap_bvc = np.zeros(
             (
                 self.num_steps,
-                len(self.preferred_vertical_angles) * self.n_hd * self.num_bvc_per_dir,
+                len(self.preferred_vertical_angles)
+                * self.n_hd_bvc
+                * self.num_bvc_per_dir,
             )
         )  # BVC cell activations
 
@@ -129,7 +136,7 @@ class DriverFlying(Supervisor):
         # Initialize layers
         self.load_pcn(
             num_place_cells=self.num_place_cells,
-            n_hd=self.n_hd,
+            n_hd=self.n_hd_hdn,
             timestep=self.timestep,
             enable_ojas=enable_ojas,
             enable_stdp=enable_stdp,
@@ -141,7 +148,7 @@ class DriverFlying(Supervisor):
             num_bvc_per_dir=self.num_bvc_per_dir,
         )
 
-        self.head_direction_layer = HeadDirectionLayer(num_cells=self.n_hd)
+        self.head_direction_layer = HeadDirectionLayer3D(device="cpu")
 
         # Initialize boundaries
         self.vertical_boundaries = torch.zeros((720, 360))
@@ -190,7 +197,7 @@ class DriverFlying(Supervisor):
             # Initialize BVC layer with per-layer sigma values
             bvc = BoundaryVectorCellLayer3D(
                 max_dist=5,
-                n_hd=8,
+                n_hd=self.n_hd_bvc,
                 preferred_vertical_angles=preferred_vertical_angles,
                 sigma_d_list=sigma_d_list,
                 sigma_ang_list=sigma_ang_list,
@@ -205,7 +212,7 @@ class DriverFlying(Supervisor):
                 bvc_layer=bvc,
                 num_pc=num_place_cells,
                 timestep=timestep,
-                n_hd=n_hd,
+                n_hd=self.n_hd_hdn,
                 w_in_init_ratio=0.50,
                 device=self.device,
             )
@@ -240,8 +247,13 @@ class DriverFlying(Supervisor):
             f"Starting robot in stage {self.robot_mode} for {self.num_steps} time steps"
         )
         while self.step_count <= self.num_steps:
+            if (
+                self.robot_mode == RobotMode.LEARN_OJAS
+                or self.robot_mode == RobotMode.LEARN_HEBB
+            ):
 
-            self.explore()
+                self.explore()
+            elif
 
         self.save()
 
@@ -364,9 +376,15 @@ class DriverFlying(Supervisor):
         # Ensure points are float32
         self.vertical_boundaries = self.vertical_boundaries.to(dtype=torch.float32)
 
+        # Convert velocity to tensor and normalize (if non-zero)
+        hd_vel = torch.tensor(self.velocity, dtype=torch.float32, device="cpu")
+
+        # Get head direction activations
+        self.head_directions = self.head_direction_layer.get_hd_activation(hd_vel)
+
         self.pcn.get_place_cell_activations(
             self.vertical_boundaries,
-            hd_activations=None,
+            hd_activations=self.head_directions,
             collided=torch.any(self.collided).item(),
         )
 
@@ -375,7 +393,6 @@ class DriverFlying(Supervisor):
 
         # Advance the timestep and update position
         self.step(self.timestep)
-        curr_pos = self.robot.getField("translation").getSFVec3f()
 
         # Update place cell and sensor maps
         if self.step_count < self.num_steps:
@@ -468,7 +485,8 @@ class DriverFlying(Supervisor):
             f.write(f"num_place_cells: {self.pcn.num_pc}\n")
             f.write(f"num_bvcs: {self.pcn.num_bvc}\n")
             f.write(f"num_bvc_per_dir: {self.num_bvc_per_dir}\n")
-            f.write(f"n_hd: {self.n_hd}\n")
+            f.write(f"n_hd_bvc: {self.n_hd_bvc}\n")
+            f.write(f"n_hd_hdn: {self.n_hd_hdn}\n")
             f.write(f"run_time_hours: {self.run_time_minutes / 60}\n")
             f.write(f"num_simulation_steps: {self.num_steps}\n")
 
@@ -495,3 +513,25 @@ class DriverFlying(Supervisor):
         print(f"Files Saved: {files_saved}")
         print("Saving Done!")
         self.done = True
+
+    def clear(self):
+        """
+        Clears the saved state files for the Place Cell Network (PCN), Reward Cell Network (RCN),
+        and the history maps by removing their corresponding pickle files.
+        """
+        files_to_remove = [
+            "pcn.pkl",
+            # "rcn.pkl",
+            "hmap_loc.pkl",
+            "hmap_pcn.pkl",
+            "hmap_bvc.pkl",
+            "hmap_hdn.pkl",
+        ]
+
+        for file in files_to_remove:
+            try:
+                os.remove(self.file_prefix + file)
+            except FileNotFoundError:
+                pass  # Ignore if the file does not exist
+
+        print("State files cleared.")

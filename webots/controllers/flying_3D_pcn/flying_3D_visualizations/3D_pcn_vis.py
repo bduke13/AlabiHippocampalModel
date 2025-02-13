@@ -77,7 +77,7 @@ if __name__ == "__main__":
     )
 
     # Example usage
-    data_path = "webots/controllers/flying_3D_pcn/3D_NAV/"
+    data_path = "webots/controllers/flying_3D_pcn/"
     hmap_loc, hmap_pcn = load_hmaps(
         prefix=data_path, hmap_names=["hmap_loc", "hmap_pcn"]
     )
@@ -88,5 +88,5 @@ if __name__ == "__main__":
         hmap_z=hmap_z,
         hmap_y=hmap_y,
         hmap_pcn=hmap_pcn,
-        cell_indices_to_plot=range(10, 50),
+        cell_indices_to_plot=range(1, 500),
     )
