@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from numpy.random import default_rng
+from typing import Optional
 
 # Set a fixed seed similar to tf.random.set_seed(5)
 torch.manual_seed(5)
@@ -25,7 +26,7 @@ class PlaceCellLayer:
         enable_ojas: bool = False,
         enable_stdp: bool = False,
         w_in_init_ratio: float = 0.25,
-        device: str = "cpu",
+        device: torch.device = torch.device("cpu"),
         dtype: torch.dtype = torch.float32,
     ):
         """Initialize the Place Cell Layer.
