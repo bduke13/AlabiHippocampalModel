@@ -20,6 +20,7 @@ main.py
 *.pkl
 *.wbproj
 *cell_names.txt
+*parameters.txt
 
 # Ignore images in any output directory
 *.jpg
