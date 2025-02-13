@@ -14,14 +14,18 @@ from core.robot.robot_mode import RobotMode
 
 bot = Driver()
 # 1. LEARN_OJAS
-# 2. DMTP
-# 3. EXPLOIT
-# 4. (optional) PLOTTING
+# 2. LEARN_HEBB
+# 3. DMTP
+# 4. EXPLOIT
+# (optional) PLOTTING
 
 bot.initialization(
-    mode=RobotMode.PLOTTING,
+    mode=RobotMode.DMTP,
+    run_time_hours=2,
     randomize_start_loc=True,
-    run_time_hours=1,
     start_loc=[4, -4],
+    goal_location=[-3, 3],
+    max_dist=15
 )
+
 bot.run()

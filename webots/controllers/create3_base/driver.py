@@ -72,11 +72,14 @@ class Driver(Supervisor):
     def initialization(
         self,
         mode=RobotMode.PLOTTING,
+        run_time_hours: int = 2,
         randomize_start_loc: bool = True,
-        run_time_hours: int = 1,
         start_loc: Optional[List[int]] = None,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
+        world_name: Optional[str] = None,
+        goal_location: Optional[List[float]] = None,
+        max_dist: float = 10,
     ):
         """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
@@ -96,18 +99,35 @@ class Driver(Supervisor):
         Returns:
             None
         """
+        # Set the robot mode and device
+        self.robot = self.getFromDef("agent")  # Placeholder for robot instance
         self.robot_mode = mode
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         self.dtype = torch.float32
 
+        # Set the world name and directories for saving data
+        if world_name is None:
+            world_path = self.getWorldPath()  # Get the full path to the world file
+            world_name = os.path.splitext(os.path.basename(world_path))[0]  # Extract just the world name
+        self.world_name = world_name
+
+        # Construct directory paths
+        self.hmap_dir = os.path.join("pkl", self.world_name, "hmaps")
+        self.network_dir = os.path.join("pkl", self.world_name, "networks")
+
+        # Ensure directories exist
+        os.makedirs(self.hmap_dir, exist_ok=True)
+        os.makedirs(self.network_dir, exist_ok=True)
+
         # Model parameters
-        self.num_place_cells = 200
+        self.num_place_cells = 500
         self.n_hd = 8
         self.timestep = 32 * 3
         self.tau_w = 5  # time constant for the window function
 
         # Robot parameters
         self.max_speed = 16
+        self.max_dist = max_dist # Defaults to 10. This should be the longest possible distance (m) that a lidar can detect in the specific world
         self.left_speed = self.max_speed
         self.right_speed = self.max_speed
         self.wheel_radius = 0.031
@@ -116,9 +136,31 @@ class Driver(Supervisor):
         self.step_count = 0
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
         self.goal_r = {"explore": 0.3, "exploit": 0.5}
+        
+        if goal_location is not None:
+            self.goal_location = goal_location
+        else:
+            self.goal_location = [-3, 3]
+            
+        if randomize_start_loc:
+            while True:
+                INITIAL = [random.uniform(-2.3, 2.3), 0, random.uniform(-2.3, 2.3)]
+                # Check if distance to goal is at least 1 meter
+                dist_to_goal = np.sqrt(
+                    (INITIAL[0] - self.goal_location[0]) ** 2
+                    + (INITIAL[2] - self.goal_location[1]) ** 2
+                )
+                if dist_to_goal >= 1.0:
+                    break
+            self.robot.getField("translation").setSFVec3f(INITIAL)
+            self.robot.resetPhysics()
+        else:
+            self.robot.getField("translation").setSFVec3f(
+                [start_loc[0], 0, start_loc[1]]
+            )
+            self.robot.resetPhysics()
 
         # Initialize hardware components and sensors
-        self.robot = self.getFromDef("agent")  # Placeholder for robot instance
         self.keyboard = self.getKeyboard()
         self.keyboard.enable(self.timestep)
         self.compass = self.getDevice("compass")
@@ -138,78 +180,63 @@ class Driver(Supervisor):
         self.right_position_sensor = self.getDevice("right wheel sensor")
         self.right_position_sensor.enable(self.timestep)
 
-        if self.robot_mode == RobotMode.LEARN_OJAS:
-            self.clear()
-
         # Initialize boundaries
         self.lidar_resolution = 720
         self.boundaries = torch.zeros((self.lidar_resolution, 1), device=self.device)
 
         # Initialize layers
+        if self.robot_mode == RobotMode.LEARN_OJAS: # Delete existing pkls if in LEARN_OJAS
+            self.clear()
+
         self.load_pcn(
             num_place_cells=self.num_place_cells,
             n_hd=self.n_hd,
             timestep=self.timestep,
             enable_ojas=enable_ojas,
             enable_stdp=enable_stdp,
+            device=self.device,
         )
         self.load_rcn(
             num_place_cells=self.num_place_cells,
-            num_replay=6,
+            num_replay=3,
+            learning_rate=0.1,
+            device=self.device
         )
         self.head_direction_layer = HeadDirectionLayer(
             num_cells=self.n_hd, device="cpu"
-        )
+        )   
 
-        # Initialize goal
-        self.goal_location = [-1, 1]
-        self.expected_reward = 0
-
-        if randomize_start_loc:
-            while True:
-                INITIAL = [random.uniform(-2.3, 2.3), 0, random.uniform(-2.3, 2.3)]
-                # Check if distance to goal is at least 1 meter
-                dist_to_goal = np.sqrt(
-                    (INITIAL[0] - self.goal_location[0]) ** 2
-                    + (INITIAL[2] - self.goal_location[1]) ** 2
-                )
-                if dist_to_goal >= 1.0:
-                    break
-            self.robot.getField("translation").setSFVec3f(INITIAL)
-            self.robot.resetPhysics()
-        else:
-            self.robot.getField("translation").setSFVec3f(
-                [start_loc[0], 0, start_loc[1]]
-            )
-            self.robot.resetPhysics()
-
-        # Generate hmaps ("history maps") for different items to record
-        self.hmap_loc = np.zeros(
+        # Initialize hmaps (history maps) to record activations and positions
+        # NOTE: 2D cartesian coordinates are saved in X and Z
+        self.hmap_loc = np.zeros( 
             (self.num_steps, 3)
-        )  # coordinates in the format [X, Z, Y]
-        self.hmap_g = np.zeros(self.num_steps)  # goal estimates
+        )
+        # Place cell network activation history  
         self.hmap_pcn = torch.zeros(
             (self.num_steps, self.pcn.num_pc),
             device=self.device,
             dtype=torch.float32,
-        )  # Place cell network activation history
+        )
+        # Boundary Vector Cell Network activation history  
         self.hmap_bvc = torch.zeros(
             (self.num_steps, self.pcn.bvc_layer.num_bvc),
             device=self.device,
             dtype=torch.float32,
-        )  # Boundary Vector Cell Network activation history
+        )
+        # Head direction network activation history  
         self.hmap_hdn = torch.zeros(
             (self.num_steps, self.n_hd),
             device="cpu",
             dtype=torch.float32,
-        )  # Head direction network activation history
+        )  
 
         self.directional_reward_estimates = torch.zeros(self.n_hd, device=self.device)
         self.step(self.timestep)
         self.step_count += 1
 
         self.sense()
-        self.compute()
+        self.compute_pcn_activations()
+        self.update_hmaps()
 
     def load_pcn(
         self,
@@ -234,21 +261,19 @@ class Driver(Supervisor):
         Returns:
             PlaceCellLayer: The loaded or newly initialized place cell network.
         """
-        if not device:
-            device = self.device
-
         try:
-            with open("pcn.pkl", "rb") as f:
+            network_path = os.path.join(self.network_dir, "pcn.pkl")
+            with open(network_path, "rb") as f:
                 self.pcn = pickle.load(f)
                 self.pcn.reset_activations()
-                print("Loaded existing Place Cell Network.")
+                print("Loaded existing PCN from", network_path)
         except:
             bvc = BoundaryVectorCellLayer(
                 n_res=self.lidar_resolution,
                 n_hd=n_hd,
                 sigma_theta=1,
                 sigma_r=0.5,
-                max_dist=10,
+                max_dist=self.max_dist, 
                 num_bvc_per_dir=50,
                 device=device,
             )
@@ -260,27 +285,21 @@ class Driver(Supervisor):
                 n_hd=n_hd,
                 device=device,
             )
-            print("Initialized new Place Cell Network.")
+            print("Initialized new PCN")
 
         if enable_ojas is not None:
             self.pcn.enable_ojas = enable_ojas
-        elif (
-            self.robot_mode == RobotMode.LEARN_OJAS
-            or self.robot_mode == RobotMode.LEARN_HEBB
-            or self.robot_mode == RobotMode.DMTP
-        ):
-            self.pcn.enable_ojas = True
+        else:
+            self.pcn.enable_ojas = self.robot_mode == RobotMode.LEARN_OJAS
 
         if enable_stdp is not None:
             self.pcn.enable_stdp = enable_stdp
-        elif (
-            self.robot_mode == RobotMode.LEARN_HEBB or self.robot_mode == RobotMode.DMTP
-        ):
-            self.pcn.enable_stdp = True
+        else:
+            self.pcn.enable_stdp = self.robot_mode in (RobotMode.LEARN_HEBB, RobotMode.DMTP, RobotMode.EXPLOIT)
 
         return self.pcn
 
-    def load_rcn(self, num_place_cells: int, num_replay: int):
+    def load_rcn(self, num_place_cells: int, num_replay: int, learning_rate: float, device: str):
         """Loads or initializes the reward cell network.
 
         Args:
@@ -291,17 +310,19 @@ class Driver(Supervisor):
             RewardCellLayer: The loaded or newly initialized reward cell network.
         """
         try:
-            with open("rcn.pkl", "rb") as f:
+            network_path = os.path.join(self.network_dir, "rcn.pkl")
+            with open(network_path, "rb") as f:
                 self.rcn = pickle.load(f)
-                print("Loaded existing Reward Cell Network.")
+                print("Loaded existing RCN from", network_path)
         except:
             self.rcn = RewardCellLayer(
                 num_place_cells=num_place_cells,
                 num_replay=num_replay,
-                learning_rate=0.1,
-                device=self.device,
+                learning_rate=learning_rate,
+                device=device,
             )
-            print("Initialized new Reward Cell Network.")
+            print("Initialized new RCN")
+
         return self.rcn
 
     ########################################### RUN LOOP ###########################################
@@ -316,11 +337,10 @@ class Driver(Supervisor):
         - RECORDING: Records sensor data
         """
 
-        print(f"Starting robot in stage {self.robot_mode}")
+        print(f"Starting robot in {self.robot_mode}")
         print(f"Goal at {self.goal_location}")
 
         while True:
-            # Handle the robot's state
             if self.robot_mode == RobotMode.MANUAL_CONTROL:
                 self.manual_control()
 
@@ -361,17 +381,14 @@ class Driver(Supervisor):
         for s in range(self.tau_w):
             self.sense()
 
-            # TODO Do we need this reward code?
-            # Update the reward cell activations
-            self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations)
-
-            # Determine the actual reward (you may need to define how to calculate this)
-            actual_reward = self.get_actual_reward()
-
-            # Perform TD update
-            self.rcn.td_update(
-                self.pcn.place_cell_activations, next_reward=actual_reward
-            )
+            if self.mode == RobotMode.DMTP:
+                actual_reward = self.get_actual_reward()
+                self.rcn.update_reward_cell_activations(
+                    self.pcn.place_cell_activations
+                )
+                self.rcn.td_update(
+                    self.pcn.place_cell_activations, next_reward=actual_reward
+                )            
 
             if torch.any(self.collided):
                 random_angle = np.random.uniform(
@@ -380,30 +397,24 @@ class Driver(Supervisor):
                 self.turn(random_angle)
                 break
 
-            if (
-                self.robot_mode == RobotMode.DMTP
-                or self.robot_mode == RobotMode.LEARN_HEBB
-                or self.robot_mode == RobotMode.EXPLOIT
-            ):
-                self.check_goal_reached()
-
-            self.compute()
-            self.forward()
             self.check_goal_reached()
+            self.compute_pcn_activations()
+            self.update_hmaps()
+            self.forward()
 
         self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
 
     ########################################### EXPLOIT ###########################################
     def exploit(self):
         """
-        Minimal exploit method to compute a circular mean of directional rewards
-        and turn accordingly, verifying alignment with the global heading system.
+        Follows the reward gradient to reach the goal location.
         """
         #-------------------------------------------------------------------
         # 1) Sense and compute: update heading, place/boundary cell activations
         #-------------------------------------------------------------------
-        self.sense()       # Updates self.current_heading_deg
-        self.compute()
+        self.sense()
+        self.compute_pcn_activations()
+        self.update_hmaps()
         self.check_goal_reached()
 
         #-------------------------------------------------------------------
@@ -417,7 +428,7 @@ class Driver(Supervisor):
             # Predicted place-cell activation for direction 'd'
             pcn_activations = self.pcn.preplay(d, num_steps=num_steps_preplay)
 
-            # Update reward cell activations (depending on your RCN implementation)
+            # Update reward cell activations (may not need this if we don't want to save anything in EXPLOIT)
             self.rcn.update_reward_cell_activations(pcn_activations, visit=False)
 
             # Example: take the maximum activation in reward cells as the "reward estimate"
@@ -463,32 +474,8 @@ class Driver(Supervisor):
 
         # (Optional) Re-sense and compute after movement
         self.sense()
-        self.compute()
-
-    def get_actual_reward(self):
-        """
-        Computes the actual reward based on current distance to the goal.
-        """
-        # Get current position from the robot node
-        curr_pos = self.robot.getField("translation").getSFVec3f()
-
-        # Distance from current position to goal location
-        distance_to_goal = torch.norm(
-            torch.tensor(
-                [
-                    curr_pos[0] - self.goal_location[0],
-                    curr_pos[2] - self.goal_location[1]
-                ],
-                dtype=self.dtype,
-                device=self.device
-            )
-        )
-
-        # Return 1.0 reward if within goal radius, else 0.0
-        if distance_to_goal <= self.goal_r["exploit"]:
-            return 1.0
-        else:
-            return 0.0
+        self.compute_pcn_activations()
+        self.update_hmaps()
 
     ########################################### SENSE ###########################################
     def sense(self):
@@ -540,7 +527,7 @@ class Driver(Supervisor):
         return bearing
 
     ########################################### COMPUTE ###########################################
-    def compute(self):
+    def compute_pcn_activations(self):
         """
         Uses current boundary- and HD-activations to update place-cell activations
         and store relevant data for analysis/debugging.
@@ -555,17 +542,6 @@ class Driver(Supervisor):
         # Advance simulation one timestep
         self.step(self.timestep)
 
-        # Store historical data (optional)
-        if self.step_count < self.num_steps:
-            # Save positions, cell activations, etc.
-            self.hmap_loc[self.step_count] = self.robot.getField("translation").getSFVec3f()
-            self.hmap_pcn[self.step_count] = self.pcn.place_cell_activations.detach()
-            self.hmap_bvc[self.step_count] = self.pcn.bvc_activations.detach()
-            self.hmap_hdn[self.step_count] = self.hd_activations.detach()
-            self.hmap_g[self.step_count] = float(self.pcn.bvc_activations.detach().cpu().sum())
-
-        self.step_count += 1
-
     ########################################### CHECK GOAL REACHED ###########################################
     def check_goal_reached(self):
         """
@@ -574,8 +550,26 @@ class Driver(Supervisor):
         """
         curr_pos = self.robot.getField("translation").getSFVec3f()
 
-        # Compare current position to goal
-        if (self.robot_mode == RobotMode.EXPLOIT or self.robot_mode == RobotMode.DMTP) and torch.allclose(
+        if self.robot_mode in (RobotMode.LEARN_OJAS, RobotMode.LEARN_HEBB, RobotMode.PLOTTING) \
+            and self.getTime() >= 60 * self.run_time_minutes:
+            self.stop()  
+            self.save(include_pcn=self.robot_mode != RobotMode.PLOTTING, 
+                      include_rcn=self.robot_mode != RobotMode.PLOTTING,
+                      include_hmaps=True)
+            
+        elif self.robot_mode == RobotMode.DMTP and torch.allclose(
+            torch.tensor(self.goal_location, dtype=self.dtype, device=self.device),
+            torch.tensor([curr_pos[0], curr_pos[2]], dtype=self.dtype, device=self.device),
+            atol=self.goal_r["explore"]
+        ):
+            self.auto_pilot()
+            self.rcn.update_reward_cell_activations(self.pcn.place_cell_activations, visit=True)
+            self.rcn.replay(pcn=self.pcn)
+
+            self.stop()
+            self.save(include_rcn=True, include_hmaps=False)
+
+        elif self.robot_mode == RobotMode.EXPLOIT and torch.allclose(
             torch.tensor(self.goal_location, dtype=self.dtype, device=self.device),
             torch.tensor([curr_pos[0], curr_pos[2]], dtype=self.dtype, device=self.device),
             atol=self.goal_r["exploit"]
@@ -583,19 +577,10 @@ class Driver(Supervisor):
             self.auto_pilot()
             print("Goal reached")
             print(f"Total distance traveled: {self.compute_path_length()}")
-            print(f"Started at: {np.array([self.hmap_loc[0][0], self.hmap_loc[0][2]])}")
-            print(f"Current position: {np.array([curr_pos[0], curr_pos[2]])}")
             print(f"Time taken: {self.getTime()}")
 
-            # Decide whether to include certain logs
-            include_hmaps = False if self.robot_mode in [RobotMode.DMTP, RobotMode.EXPLOIT] else True
-            self.save(
-                include_hmaps=include_hmaps,
-            )
-
-        # If time is up, save current data
-        elif self.getTime() >= 60 * self.run_time_minutes:
-            self.save()
+            self.stop()
+            self.save(include_rcn=True) # EXPLOIT doesn't save anything
 
     ########################################### AUTO PILOT ###########################################
 
@@ -640,12 +625,10 @@ class Driver(Supervisor):
 
             # Move forward one step
             self.sense()
-            self.compute()
+            self.compute_pcn_activations()
+            self.update_hmaps()
             self.forward()
             s_start += 1
-
-        # Replay or reinforce final position in RCN
-        self.rcn.replay(pcn=self.pcn)
 
     ########################################### HELPER METHODS ###########################################
 
@@ -770,6 +753,58 @@ class Driver(Supervisor):
             path_length += np.linalg.norm(next_position - current_position)
 
         return path_length
+    
+    def update_hmaps(self):
+        curr_pos = self.robot.getField("translation").getSFVec3f()
+
+        if self.step_count < self.num_steps:
+            # Record position (X, Y, Z format)
+            self.hmap_loc[self.step_count] = curr_pos
+
+            # Record place cell network activations
+            self.hmap_pcn[self.step_count] = self.pcn.place_cell_activations.detach()
+
+            # Record Boundary Vector Cell (BVC) activations
+            self.hmap_bvc[self.step_count] = self.pcn.bvc_activations.detach()
+
+            # Record Head Direction Network (HDN) activations
+            self.hmap_hdn[self.step_count] = self.hd_activations.detach()
+
+        self.step_count += 1
+
+    def get_actual_reward(self):
+        """
+        Computes the actual reward based on current distance to the goal.
+
+        Returns:
+            float: The actual reward value (1.0 if at goal, 0.0 otherwise)
+        """
+        # Get current position from the robot node
+        curr_pos = self.robot.getField("translation").getSFVec3f()
+
+        # Distance from current position to goal location
+        distance_to_goal = torch.norm(
+            torch.tensor(
+                [
+                    curr_pos[0] - self.goal_location[0],
+                    curr_pos[2] - self.goal_location[1]
+                ],
+                dtype=self.dtype,
+                device=self.device
+            )
+        )
+
+        # Determine the correct goal radius based on the current mode
+        if self.mode == RobotMode.EXPLOIT:
+            goal_radius = self.goal_r["exploit"]
+        else:  # Default to "explore" goal radius for all other modes
+            goal_radius = self.goal_r["explore"]
+
+        # Return 1.0 reward if within goal radius, else 0.0
+        if distance_to_goal <= goal_radius:
+            return 1.0 # Goal reached
+        else:
+            return 0.0
 
     def save(
         self,
@@ -780,51 +815,61 @@ class Driver(Supervisor):
         """
         Saves the state of the PCN (Place Cell Network), RCN (Reward Cell Network), and optionally
         the maps that store the agent's movement and activations.
-
-        Parameters:
-            include_maps (bool): If True, saves the history of the agent's path and activations.
         """
-
         files_saved = []
+        
+        # Ensure directories exist
+        os.makedirs(self.hmap_dir, exist_ok=True)
+        os.makedirs(self.network_dir, exist_ok=True)
+
         # Save the Place Cell Network (PCN)
         if include_pcn:
-            with open("pcn.pkl", "wb") as output:
+            pcn_path = os.path.join(self.network_dir, "pcn.pkl")
+            with open(pcn_path, "wb") as output:
                 pickle.dump(self.pcn, output)
-                files_saved.append("pcn.pkl")
+                files_saved.append(pcn_path)
 
         # Save the Reward Cell Network (RCN)
         if include_rcn:
-            with open("rcn.pkl", "wb") as output:
+            rcn_path = os.path.join(self.network_dir, "rcn.pkl")
+            with open(rcn_path, "wb") as output:
                 pickle.dump(self.rcn, output)
-                files_saved.append("rcn.pkl")
+                files_saved.append(rcn_path)
 
         # Save the history maps if specified
         if include_hmaps:
-            with open("hmap_loc.pkl", "wb") as output:
+            hmap_loc_path = os.path.join(self.hmap_dir, "hmap_loc.pkl")
+            with open(hmap_loc_path, "wb") as output:
                 pickle.dump(self.hmap_loc[: self.step_count], output)
-                files_saved.append("hmap_loc.pkl")
-            with open("hmap_pcn.pkl", "wb") as output:
+                files_saved.append(hmap_loc_path)
+
+            hmap_pcn_path = os.path.join(self.hmap_dir, "hmap_pcn.pkl")
+            with open(hmap_pcn_path, "wb") as output:
                 pcn_cpu = self.hmap_pcn[: self.step_count].cpu().numpy()
-                pickle.dump(pcn_cpu[: self.step_count], output)
-                files_saved.append("hmap_pcn.pkl")
-            with open("hmap_g.pkl", "wb") as output:
-                pickle.dump(self.hmap_g[: self.step_count], output)
-                files_saved.append("hmap_g.pkl")
-            with open("hmap_hdn.pkl", "wb") as output:
+                pickle.dump(pcn_cpu, output)
+                files_saved.append(hmap_pcn_path)
+
+            hmap_hdn_path = os.path.join(self.hmap_dir, "hmap_hdn.pkl")
+            with open(hmap_hdn_path, "wb") as output:
                 pickle.dump(self.hmap_hdn[: self.step_count], output)
-                files_saved.append("hmap_hdn.pkl")
-            with open("hmap_bvc.pkl", "wb") as output:
+                files_saved.append(hmap_hdn_path)
+
+            hmap_bvc_path = os.path.join(self.hmap_dir, "hmap_bvc.pkl")
+            with open(hmap_bvc_path, "wb") as output:
                 bvc_cpu = self.hmap_bvc[: self.step_count].cpu().numpy()
                 pickle.dump(bvc_cpu, output)
-                files_saved.append("hmap_bvc.pkl")
+                files_saved.append(hmap_bvc_path)
 
+        # Show a message box to confirm saving
         root = tk.Tk()
         root.withdraw()  # Hide the main window
         root.attributes("-topmost", True)  # Always keep the window on top
         root.update()
         messagebox.showinfo("Information", "Press OK to save data")
         root.destroy()  # Destroy the main window
+
         self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
+        
         print(f"Files Saved: {files_saved}")
         print("Saving Done!")
 
@@ -839,14 +884,13 @@ class Driver(Supervisor):
             "hmap_loc.pkl",
             "hmap_pcn.pkl",
             "hmap_bvc.pkl",
-            "hmap_g.pkl",
             "hmap_hdn.pkl",
         ]
 
         for file in files_to_remove:
             try:
                 os.remove(file)
+                print(f"Removed {file}")
             except FileNotFoundError:
+                print(f"File {file} not found.")
                 pass  # Ignore if the file does not exist
-
-        print("State files cleared.")

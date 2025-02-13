@@ -142,14 +142,16 @@ class PlaceCellLayer:
             hd_activations: 1D NumPy array of head direction cell activations.
             collided: Whether the agent has collided with an obstacle.
         """
-        # Convert distances to torch tensor on proper device
-        distances_torch = torch.tensor(distances, dtype=self.dtype, device=self.device)
-
-        # Convert head direction activations to torch, same device
+        if isinstance(distances, torch.Tensor):
+            distances_torch = distances.clone().detach().to(dtype=self.dtype, device=self.device)
+        else:
+            distances_torch = torch.tensor(distances, dtype=self.dtype, device=self.device)
+        
         if hd_activations is not None:
-            hd_activations_torch = torch.as_tensor(
-                hd_activations, dtype=self.dtype, device=self.device
-            )
+            if isinstance(hd_activations, torch.Tensor):
+                hd_activations_torch = hd_activations.clone().detach().to(dtype=self.dtype, device=self.device)
+            else:
+                hd_activations_torch = torch.as_tensor(hd_activations, dtype=self.dtype, device=self.device)
 
         # Compute BVC activations based on the input distances
         self.bvc_activations = self.bvc_layer.get_bvc_activation(

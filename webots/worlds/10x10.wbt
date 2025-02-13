@@ -30,6 +30,23 @@ RectangleArena {
 DirectionalLight {
   direction 0 -1 0
 }
+Pose {
+  translation -3 0 3
+  rotation 1 0 0 -1.5708
+  children [
+    Shape {
+      appearance Appearance {
+        material Material {
+          diffuseColor 1 0 0
+        }
+      }
+      geometry Cylinder {
+        height 0.001
+        radius 0.3
+      }
+    }
+  ]
+}
 DEF agent Create {
   hidden position_0_0 60451.27364363385
   hidden position_0_1 61147.711589129794

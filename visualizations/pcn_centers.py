@@ -2,12 +2,38 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+import pickle
 from typing import Optional, List
+
+# Hardcoded world name
+WORLD_NAME = "10x10"
 
 
 # Custom function to calculate weighted mean
 def weighted_mean(data, weights):
     return np.sum(data * weights) / np.sum(weights)
+
+
+# Function to load pickle files
+def load_pickle(file_path):
+    """Load a pickle file from the given path."""
+    with open(file_path, "rb") as f:
+        return pickle.load(f)
+
+
+# Function to load hmap data from the hardcoded world name
+def load_hmaps_from_world():
+    """Load hmap data based on the hardcoded world name."""
+    base_path = f"webots/controllers/create3_base/pkl/{WORLD_NAME}/hmaps"
+    hmap_loc = load_pickle(os.path.join(base_path, "hmap_loc.pkl"))
+    hmap_pcn = load_pickle(os.path.join(base_path, "hmap_pcn.pkl"))
+    return hmap_loc, hmap_pcn
+
+
+def convert_xzy_hmaps(hmap_loc):
+    """Convert hmap location array to separate x, y, z components."""
+    hmap_x, hmap_z, hmap_y = hmap_loc[:, 0], hmap_loc[:, 1], hmap_loc[:, 2]
+    return hmap_x, hmap_z, hmap_y
 
 
 # Function to plot place field centers with an optional background image
@@ -120,21 +146,15 @@ def get_place_field_centers(
 
 
 if __name__ == "__main__":
-    from vis_utils import load_hmaps, convert_xzy_hmaps
-
-    # Load hmap data
-    base_path = "webots/controllers/create3_base/"
-    # Load hmap data
-    hmap_loc, hmap_pcn = load_hmaps(
-        prefix=base_path, hmap_names=["hmap_loc", "hmap_pcn"]
-    )
+    # Load hmap data from hardcoded world name
+    hmap_loc, hmap_pcn = load_hmaps_from_world()
     hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
 
     # Optional specific cell indices (e.g., [0, 5, 10]) or None to plot all
     specific_cells = None  # Replace with a list of specific cell indices if needed
 
     # Plot with the environment image as background
-    image_path = "visualizations/environment_images/5x5_env_image.jpg"  # Set this to an empty string if no background is needed
+    image_path = "visualizations/environment_images/10x10_env_image.jpg"  # Update for hardcoded world name
 
     # Get and plot place field centers
     get_place_field_centers(

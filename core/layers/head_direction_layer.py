@@ -63,16 +63,15 @@ class HeadDirectionLayer:
         Returns:
             A 1D torch.Tensor of shape (num_cells,) with activation values.
         """
-        v_in = torch.tensor(data=v_in, dtype=self.dtype, device=self.device)
-        # Ensure v_in is shape (2,) – not strictly required, but typical
+        if isinstance(v_in, torch.Tensor):
+            v_in = v_in.clone().detach().to(dtype=self.dtype, device=self.device)
+        else:
+            v_in = torch.tensor(data=v_in, dtype=self.dtype, device=self.device)
+        
         if v_in.shape != (2,):
-            raise ValueError(
-                "v_in should be a 2-element torch.Tensor, e.g. [cosθ, sinθ]."
-            )
-
-        # Dot product => (num_cells,) = (num_cells,2) x (2,)
+            raise ValueError("v_in should be a 2-element torch.Tensor, e.g. [cosθ, sinθ].")
+        
         activation = torch.matmul(self.tuning_kernel, v_in)
-
         self.hd_activations = activation
         return activation
 
