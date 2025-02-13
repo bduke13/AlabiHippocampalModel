@@ -175,7 +175,7 @@ class HeadDirectionLayer3D:
                 [0, scaled[1]],
                 [0, scaled[2]],
                 color="green",
-                linewidth=2,
+                linewidth=4,
             )
 
         # Optionally plot the reference velocity in purple
