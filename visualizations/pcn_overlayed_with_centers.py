@@ -131,10 +131,7 @@ if __name__ == "__main__":
     )
 
     # Load hmap data
-    base_path = "webots/controllers/create3_base/"
-    hmap_loc, hmap_pcn = load_hmaps(
-        prefix=base_path, hmap_names=["hmap_loc", "hmap_pcn"]
-    )
+    hmap_loc, hmap_pcn = load_hmaps()
     hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
 
     gridsize = 80

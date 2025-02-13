@@ -4,6 +4,7 @@ import pickle
 from pathlib import Path
 from typing import List
 import sys
+import os
 from pathlib import Path
 
 # Get the absolute path of the project root
@@ -12,35 +13,60 @@ project_root = Path(__file__).resolve().parent.parent  # Adjust this if needed
 sys.path.append(str(project_root))
 
 
-def load_layer_pkl(
-    prefix: str = "webots/controllers/create3_base/", layer_name: str = ""
-):
-    """Loads the layer class object"""
+CONTROLLER_PATH_PREFIX = "webots/controllers/"
+CONTROLLER_NAME = "create3_base"
+WORLD_NAME = "iCreateBotCross"
 
-    with open(prefix + layer_name, "rb") as f:
+
+def load_layer_pkl(layer_name: str = ""):
+    """Loads the layer class object
+
+    Args:
+        layer_name: string of the desired layer such as "rcn" or "pcn"
+
+    Returns:
+        object: instantiated layer class of specified type
+
+    """
+    file_path = (
+        os.path.join(
+            CONTROLLER_PATH_PREFIX,
+            CONTROLLER_NAME,
+            "pkl",
+            WORLD_NAME,
+            "networks",
+            layer_name,
+        )
+        + ".pkl"
+    )
+
+    with open(file_path, "rb") as f:
         layer = pickle.load(f)
     return layer
 
 
 def load_hmaps(
-    prefix: str = "webots/controllers/create3_base/",
     hmap_names: List[str] = ["hmap_loc", "hmap_pcn"],
 ) -> List[np.ndarray]:
     """
     Load history map (hmap) data from pickle files.
 
     Args:
-        prefix (str): Directory prefix where the pickle files are located
-
+        hmap_names: Names of hmaps to load. e.g.: ["hmap_loc", "hmap_pcn"]
     Returns:
-        tuple: (hmap_x, hmap_y, hmap_pcn) arrays containing the heatmap data
+        hmaps: arrays containing the heatmap data
+        NOTE: if a single hmap name is provided the hmap will not be returned as a list but rather just the np.ndarray for simpler usage
     """
-    # make sure end directory is a folder
+    hmap_directory = os.path.join(
+        CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl", WORLD_NAME, "hmaps"
+    )
 
     # collect all hmaps
     hmaps = []
     for hmap in hmap_names:
-        with open(f"{prefix}{hmap}.pkl", "rb") as f:
+        hmap_file = f"{hmap}.pkl"
+        file_path = os.path.join(hmap_directory, hmap_file)
+        with open(file_path, "rb") as f:
             # load file
             temp = np.array(pickle.load(f))
             # remove first element from temp
@@ -54,7 +80,7 @@ def load_hmaps(
 
 
 def convert_xzy_hmaps(hmap_loc: np.ndarray) -> List[np.ndarray]:
-    """Utility method that splits hmap_x, hmap_z, and hmap_y from the hmap_loc file output by webots"""
+    """Utility method that splits hmap_x, hmap_z, and hmap_y from the hmap_loc file output by webots. We use {X,Z,Y} outputs as this is what is returned by webots from the"""
     return hmap_loc[:, 0], hmap_loc[:, 1], hmap_loc[:, 2]
 
 

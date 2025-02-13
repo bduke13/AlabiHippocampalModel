@@ -1,4 +1,5 @@
 # %%
+print("test")
 import matplotlib.pyplot as plt
 import torch
 import numpy as np
@@ -73,25 +74,25 @@ def plot_rcn_activation(
 
 
 if __name__ == "__main__":
-    from vis_utils import (
+    print("hi")
+    from visualizations.vis_utils import (
         load_hmaps,
         convert_xzy_hmaps,
         load_layer_pkl,
     )
 
-    base_path = "webots/controllers/create3_base/"
+    print("hello")
+
     # Load hmap data
-    hmap_loc, hmap_pcn = load_hmaps(
-        prefix=base_path, hmap_names=["hmap_loc", "hmap_pcn"]
-    )
+    hmap_loc, hmap_pcn = load_hmaps()
     hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
-    rcn = load_layer_pkl(prefix=base_path, layer_name="rcn.pkl")
+    rcn = load_layer_pkl(layer_name="rcn")
 
     # Set up the colormap and default settings
     cmap = cm.get_cmap("plasma")
     rcParams.update({"font.size": 12})
     goal_r = 0.3  # Define goal radius
-    goal_location = [-1.0, 1.0]  # Define goal location (can be updated)
+    goal_location = [-3.0, 3.0]  # Define goal location (can be updated)
 
     plot_rcn_activation(
         rcn=rcn,
