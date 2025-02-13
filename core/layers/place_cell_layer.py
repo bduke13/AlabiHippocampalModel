@@ -28,6 +28,8 @@ class PlaceCellLayer:
         w_in_init_ratio: float = 0.25,
         device: torch.device = torch.device("cpu"),
         dtype: torch.dtype = torch.float32,
+        gamma_pp: float = 0.5,
+        gamma_pb: float = 0.3,
     ):
         """Initialize the Place Cell Layer.
 
@@ -86,10 +88,10 @@ class PlaceCellLayer:
         )
 
         # Coefficient to modify effect of place cell recurrent inhibition (Γ_pp in Equation 3.2a)
-        self.gamma_pp = 0.5
+        self.gamma_pp = gamma_pp
 
         # Coefficient to modify effect of boundary vector cell afferent inhibition (Γ_pb in Equation 3.2a)
-        self.gamma_pb = 0.3
+        self.gamma_pb = gamma_pb
 
         # Time constant for the membrane potential dynamics of place cells (τ_p in Equation 3.2a)
         self.tau_p = 0.5
@@ -144,15 +146,25 @@ class PlaceCellLayer:
             collided: Whether the agent has collided with an obstacle.
         """
         if isinstance(distances, torch.Tensor):
-            distances_torch = distances.clone().detach().to(dtype=self.dtype, device=self.device)
+            distances_torch = (
+                distances.clone().detach().to(dtype=self.dtype, device=self.device)
+            )
         else:
-            distances_torch = torch.tensor(distances, dtype=self.dtype, device=self.device)
-        
+            distances_torch = torch.tensor(
+                distances, dtype=self.dtype, device=self.device
+            )
+
         if hd_activations is not None:
             if isinstance(hd_activations, torch.Tensor):
-                hd_activations_torch = hd_activations.clone().detach().to(dtype=self.dtype, device=self.device)
+                hd_activations_torch = (
+                    hd_activations.clone()
+                    .detach()
+                    .to(dtype=self.dtype, device=self.device)
+                )
             else:
-                hd_activations_torch = torch.as_tensor(hd_activations, dtype=self.dtype, device=self.device)
+                hd_activations_torch = torch.as_tensor(
+                    hd_activations, dtype=self.dtype, device=self.device
+                )
 
         # Compute BVC activations based on the input distances
         self.bvc_activations = self.bvc_layer.get_bvc_activation(
