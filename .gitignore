@@ -29,6 +29,8 @@ main.py
 *.keras
 *.html
 
+# Ignore jupyter notebook
+*.ipynb*
 
 #Data directory for Thesis
 *IJCNN*
