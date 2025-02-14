@@ -20,12 +20,12 @@ bot = Driver()
 # (optional) PLOTTING
 
 bot.initialization(
-    mode=RobotMode.DMTP,
+    mode=RobotMode.LEARN_OJAS,
     run_time_hours=2,
     randomize_start_loc=True,
     start_loc=[4, -4],
     goal_location=[-3, 3],
-    max_dist=15
+    max_dist=15,
 )
 
 bot.run()
