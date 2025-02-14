@@ -20,12 +20,13 @@ bot = Driver()
 # (optional) PLOTTING
 
 bot.initialization(
-    mode=RobotMode.DMTP,
-    run_time_hours=2,
-    randomize_start_loc=True,
-    start_loc=[4, -4],
-    goal_location=[-3, 3],
-    max_dist=15
+    mode=RobotMode.EXPLOIT,
+    run_time_hours=4,
+    randomize_start_loc=False,
+    start_loc=[8, -8],
+    goal_location=[-7, 7],
+    max_dist=30,
+    num_pc=2000
 )
 
 bot.run()
