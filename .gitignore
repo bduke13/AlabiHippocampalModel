@@ -38,3 +38,6 @@ main.py
 *archive*
 *analysis*
 *images*
+
+# Ignore wbproj
+*.wbproj
