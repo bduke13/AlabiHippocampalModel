@@ -21,13 +21,13 @@ class BoundaryVectorCellLayer3D:
         max_dist: float,
         n_hd: int,
         preferred_vertical_angles: list = [0],
-        sigma_d_list: list = [0.3],
-        sigma_ang_list: list = [0.025],
-        sigma_vert_list: list = [0.025],
+        sigma_rs: list = [0.3],
+        sigma_thetas: list = [0.025],
+        sigma_phis: list = [0.025],
         scaling_factors: list = [1.0],
         num_bvc_per_dir: int = 50,
-        num_rows: int = 90,
-        num_cols: int = 180,
+        input_rows: int = 90,
+        input_cols: int = 180,
         top_cutoff_percentage: float = 0.0,
         bottom_cutoff_percentage: float = 0.5,
         dtype: torch.dtype = torch.float32,
@@ -36,15 +36,15 @@ class BoundaryVectorCellLayer3D:
         """
         Args:
             max_dist: The maximum radial distance that the BVCs are tuned to.
-            n_hd: Number of horizontal directions (azimuth) to distribute BVCs across.
-            preferred_vertical_angles: A list of preferred vertical angles (in radians) for groups of BVCs.
-            sigma_d_list: A list of distance-tuning sigmas, one per group of BVCs.
-            sigma_ang_list: A list of horizontal-angle-tuning sigmas, one per group of BVCs.
-            sigma_vert_list: A list of vertical-angle-tuning sigmas, one per group of BVCs.
+            n_hd: Number of horizontal directions (azimuth) to evenly distribute axis of BVCs along.
+            preferred_vertical_angles: A list of preferred vertical angles (in radians) to distribute the BVCs along.
+            sigma_rs: A list of distance-tuning sigmas, one per group of BVCs where the standard deviation is the radius of the BVC.
+            sigma_thetas: A list of horizontal-angle-tuning sigmas, one per group of BVCs.
+            sigma_phis: A list of vertical-angle-tuning sigmas, one per group of BVCs.
             scaling_factors: Optional scaling factors for each group (unused in this basic version).
             num_bvc_per_dir: Number of distance tunings per horizontal direction.
-            num_rows: Number of vertical “rows” in the input 3D scan.
-            num_cols: Number of horizontal “columns” in the input 3D scan.
+            input_rows: Number of vertical “rows” in the input 3D scan.
+            input_cols: Number of horizontal “columns” in the input 3D scan.
             top_cutoff_percentage: Fraction of the top rows to ignore.
             bottom_cutoff_percentage: Fraction of the bottom rows to ignore.
             dtype: PyTorch tensor data type.
@@ -53,8 +53,8 @@ class BoundaryVectorCellLayer3D:
 
         self.device = device
         self.dtype = dtype
-        self.num_rows = num_rows
-        self.num_cols = num_cols
+        self.input_rows = input_rows
+        self.input_cols = input_cols
 
         # Prepare distance and horizontal angles
         d_i = np.linspace(0, max_dist, num=num_bvc_per_dir)  # e.g. 50 distances
@@ -70,9 +70,9 @@ class BoundaryVectorCellLayer3D:
         d_i_all = []
         phi_i_all = []  # horizontal angles
         phi_i_vert_all = []  # vertical angles
-        sigma_d_all = []
-        sigma_ang_all = []
-        sigma_vert_all = []
+        sigma_r_all = []
+        sigma_theta_all = []
+        sigma_phi_all = []
         scaling_factors_all = []
 
         # Populate parameter arrays for each vertical angle group
@@ -81,47 +81,47 @@ class BoundaryVectorCellLayer3D:
             d_i_all.extend(d_i)
             phi_i_all.extend(phi_horiz)
             phi_i_vert_all.extend([vert_angle] * num_neurons)
-            sigma_d_all.extend([sigma_d_list[idx]] * num_neurons)
-            sigma_ang_all.extend([sigma_ang_list[idx]] * num_neurons)
-            sigma_vert_all.extend([sigma_vert_list[idx]] * num_neurons)
+            sigma_r_all.extend([sigma_rs[idx]] * num_neurons)
+            sigma_theta_all.extend([sigma_thetas[idx]] * num_neurons)
+            sigma_phi_all.extend([sigma_phis[idx]] * num_neurons)
             scaling_factors_all.extend([scaling_factors[idx]] * num_neurons)
 
         # Convert everything to tensors
         self.d_i = torch.tensor(d_i_all, dtype=dtype, device=device)  # (M,)
-        self.phi_i = torch.tensor(phi_i_all, dtype=dtype, device=device)  # (M,)
-        self.phi_i_vert = torch.tensor(phi_i_vert_all, dtype=dtype, device=device)
-        self.sigma_d = torch.tensor(sigma_d_all, dtype=dtype, device=device)
-        self.sigma_ang = torch.tensor(sigma_ang_all, dtype=dtype, device=device)
-        self.sigma_vert = torch.tensor(sigma_vert_all, dtype=dtype, device=device)
+        self.theta_i = torch.tensor(phi_i_all, dtype=dtype, device=device)  # (M,)
+        self.psi_i = torch.tensor(phi_i_vert_all, dtype=dtype, device=device)
+        self.sigma_r = torch.tensor(sigma_r_all, dtype=dtype, device=device)
+        self.sigma_theta = torch.tensor(sigma_theta_all, dtype=dtype, device=device)
+        self.sigma_phi = torch.tensor(sigma_phi_all, dtype=dtype, device=device)
         self.scaling_factors = torch.tensor(
             scaling_factors_all, dtype=dtype, device=device
         )
 
         # Precompute denominators and constants
-        self.two_sigma_d_squared = 2.0 * (self.sigma_d**2)
-        self.two_sigma_ang_squared = 2.0 * (self.sigma_ang**2)
-        self.two_sigma_vert_squared = 2.0 * (self.sigma_vert**2)
-        self.sqrt_2pi_sigma_d = torch.sqrt(2.0 * np.pi * (self.sigma_d**2))
-        self.sqrt_2pi_sigma_ang = torch.sqrt(2.0 * np.pi * (self.sigma_ang**2))
-        self.sqrt_2pi_sigma_vert = torch.sqrt(2.0 * np.pi * (self.sigma_vert**2))
+        self.two_sigma_r_squared = 2.0 * (self.sigma_r**2)
+        self.two_sigma_theta_squared = 2.0 * (self.sigma_theta**2)
+        self.two_sigma_phi_squared = 2.0 * (self.sigma_phi**2)
+        self.sqrt_2pi_sigma_r = torch.sqrt(2.0 * np.pi * (self.sigma_r**2))
+        self.sqrt_2pi_sigma_theta = torch.sqrt(2.0 * np.pi * (self.sigma_theta**2))
+        self.sqrt_2pi_sigma_phi = torch.sqrt(2.0 * np.pi * (self.sigma_phi**2))
 
         # Prepare row/column cutoffs
-        self.top_idx = int(num_rows * top_cutoff_percentage * num_cols)
-        self.bottom_idx = int(num_rows * bottom_cutoff_percentage * num_cols)
+        self.top_idx = int(input_rows * top_cutoff_percentage * input_cols)
+        self.bottom_idx = int(input_rows * bottom_cutoff_percentage * input_cols)
 
         # Create a grid of vertical & horizontal angles
         # vertical angles (lat) go from +pi/2 down to -pi/2
         lat_angles = torch.linspace(
-            np.pi / 2.0, -np.pi / 2.0, steps=num_rows, dtype=dtype, device=device
+            np.pi / 2.0, -np.pi / 2.0, steps=input_rows, dtype=dtype, device=device
         )
         lon_angles = torch.linspace(
-            0.0, 2.0 * np.pi, steps=num_cols, dtype=dtype, device=device
+            0.0, 2.0 * np.pi, steps=input_cols, dtype=dtype, device=device
         )
 
         lon_mesh, lat_mesh = torch.meshgrid(lon_angles, lat_angles, indexing="xy")
         # Flatten lat/lon
-        lat_flat = lat_mesh.flatten()  # shape: (num_rows * num_cols,)
-        lon_flat = lon_mesh.flatten()  # shape: (num_rows * num_cols,)
+        lat_flat = lat_mesh.flatten()  # shape: (input_rows * input_cols,)
+        lon_flat = lon_mesh.flatten()  # shape: (input_rows * input_cols,)
 
         # Slice based on top/bottom cutoff
         lat_slice = lat_flat[self.top_idx : self.bottom_idx]  # shape: (N_points,)
@@ -130,31 +130,29 @@ class BoundaryVectorCellLayer3D:
         # For precomputation, we want shape (N_points, 1) - (1, M) for broadcasting
         lat_slice_2d = lat_slice.unsqueeze(1)  # (N_points, 1)
         lon_slice_2d = lon_slice.unsqueeze(1)  # (N_points, 1)
-        phi_i_2d = self.phi_i.unsqueeze(0)  # (1, M)
-        phi_i_vert_2d = self.phi_i_vert.unsqueeze(0)  # (1, M)
+        theta_i_2d = self.theta_i.unsqueeze(0)  # (1, M)
+        psi_i_2d = self.psi_i.unsqueeze(0)  # (1, M)
 
         # Horizontal angle difference with wrapping
-        horiz_diff = torch.atan2(
-            torch.sin(lon_slice_2d - phi_i_2d),
-            torch.cos(lon_slice_2d - phi_i_2d),
+        theta_diff = torch.atan2(
+            torch.sin(lon_slice_2d - theta_i_2d),
+            torch.cos(lon_slice_2d - theta_i_2d),
         )  # (N_points, M)
-        horiz_gauss = (
-            torch.exp(-((horiz_diff**2) / self.two_sigma_ang_squared))
-            / self.sqrt_2pi_sigma_ang
+        theta_gauss = (
+            torch.exp(-((theta_diff**2) / self.two_sigma_theta_squared))
+            / self.sqrt_2pi_sigma_theta
         )
 
         # Vertical angle difference (no wrapping needed for [-pi/2, +pi/2])
-        vert_diff = lat_slice_2d - phi_i_vert_2d
-        vert_gauss = (
-            torch.exp(-((vert_diff**2) / self.two_sigma_vert_squared))
-            / self.sqrt_2pi_sigma_vert
+        phi_diff = lat_slice_2d - psi_i_2d
+        phi_gauss = (
+            torch.exp(-((phi_diff**2) / self.two_sigma_phi_squared))
+            / self.sqrt_2pi_sigma_phi
         )
 
         # Combine horizontally and vertically into a single precomputed matrix
-        # point_gaussian_precomputed[p, m] = horizontal_gaussian * vertical_gaussian
-        self.point_gaussian_precomputed = (
-            horiz_gauss * vert_gauss
-        )  # shape (N_points, M)
+        # point_gaussian_precomputed[p, m] = theta_gaussian * phi_gaussian
+        self.point_gaussian_precomputed = theta_gauss * phi_gauss  # shape (N_points, M)
 
         # Store for later usage
         self.lat_flat = lat_flat
@@ -163,11 +161,11 @@ class BoundaryVectorCellLayer3D:
 
     def get_bvc_activation(self, distances: torch.Tensor) -> torch.Tensor:
         """
-        Given a 3D scan (distance array) of shape (num_rows, num_cols), compute
+        Given a 3D scan (distance array) of shape (input_rows, input_cols), compute
         the activation of each BVC neuron.
         """
         # Flatten scan data
-        dist_flat = distances.view(-1)  # shape: (num_rows * num_cols,)
+        dist_flat = distances.view(-1)  # shape: (input_rows * input_cols,)
         # Slice according to top and bottom cutoffs
         dist_slice = dist_flat[self.top_idx : self.bottom_idx]  # shape: (N_points,)
 
@@ -176,14 +174,14 @@ class BoundaryVectorCellLayer3D:
         d_i_2d = self.d_i.unsqueeze(0)  # (1, M)
 
         # Distance gaussian: shape (N_points, M)
-        delta_d = dist_slice_2d - d_i_2d
-        dist_gauss = (
-            torch.exp(-(delta_d**2) / self.two_sigma_d_squared) / self.sqrt_2pi_sigma_d
+        delta_r = dist_slice_2d - d_i_2d
+        r_gauss = (
+            torch.exp(-(delta_r**2) / self.two_sigma_r_squared) / self.sqrt_2pi_sigma_r
         )
 
         # Multiply by precomputed angle Gaussians
         # shape (N_points, M)
-        combined = dist_gauss * self.point_gaussian_precomputed
+        combined = r_gauss * self.point_gaussian_precomputed
 
         # Sum across all points to get the final activation for each neuron
         bvc_activations = torch.sum(combined, dim=0)  # shape: (M,)
@@ -293,13 +291,13 @@ class BoundaryVectorCellLayer3D:
 
         # 4) Plot BVC centers, sized by activation
         d_i_np = self.d_i.cpu().numpy()
-        phi_i_np = self.phi_i.cpu().numpy()
-        phi_i_vert_np = self.phi_i_vert.cpu().numpy()
+        theta_i_np = self.theta_i.cpu().numpy()
+        psi_i_np = self.psi_i.cpu().numpy()
 
         # Convert each BVC's spherical coords to Cartesian
-        x_bvc = d_i_np * np.cos(phi_i_vert_np) * np.cos(phi_i_np)
-        y_bvc = d_i_np * np.cos(phi_i_vert_np) * np.sin(phi_i_np)
-        z_bvc = d_i_np * np.sin(phi_i_vert_np)
+        x_bvc = d_i_np * np.cos(psi_i_np) * np.cos(theta_i_np)
+        y_bvc = d_i_np * np.cos(psi_i_np) * np.sin(theta_i_np)
+        z_bvc = d_i_np * np.sin(psi_i_np)
 
         # Size them by activation
         sizes = activations_norm * 100.0  # scale factor for marker size
@@ -351,14 +349,14 @@ class BoundaryVectorCellLayer3D:
         Write out each BVC's name and preferred parameters (horizontal angle, vertical angle, distance)
         to a file for inspection/debugging.
         """
-        phi_i_np = self.phi_i.cpu().numpy()
-        phi_i_vert_np = self.phi_i_vert.cpu().numpy()
+        theta_i_np = self.theta_i.cpu().numpy()
+        psi_i_np = self.psi_i.cpu().numpy()
         d_i_np = self.d_i.cpu().numpy()
 
         with open(output_file, "w") as f:
             for i in range(self.num_bvc):
-                horiz_angle_deg = (np.degrees(phi_i_np[i])) % 360
-                vert_angle_deg = np.degrees(phi_i_vert_np[i])
+                horiz_angle_deg = (np.degrees(theta_i_np[i])) % 360
+                vert_angle_deg = np.degrees(psi_i_np[i])
                 distance = d_i_np[i]
                 name = (
                     f"BVC_{i}_Horiz{horiz_angle_deg:.1f}_"
@@ -375,16 +373,16 @@ class BoundaryVectorCellLayer3D:
 if __name__ == "__main__":
     # Suppose we have a 90x180 3D scan (vertical_boundaries)
     # For demonstration, we'll construct synthetic data:
-    num_rows, num_cols = 90, 180
+    input_rows, input_cols = 90, 180
     radius_min, radius_max = 1.0, 10.0
     vertical_boundaries = np.random.uniform(
-        radius_min, radius_max, (num_rows, num_cols)
+        radius_min, radius_max, (input_rows, input_cols)
     )
 
     preferred_vertical_angles = [0, 0.3, 0.6]  # in radians
-    sigma_d_list = [0.2, 0.2, 0.2]
-    sigma_ang_list = [0.025, 0.05, 0.05]
-    sigma_vert_list = [0.025, 0.1, 0.1]
+    sigma_rs = [0.2, 0.2, 0.2]
+    sigma_thetas = [0.025, 0.05, 0.05]
+    sigma_phis = [0.025, 0.1, 0.1]
     scaling_factors = [1.0, 0.5, 0.1]
 
     # Create BVC layer
@@ -392,13 +390,13 @@ if __name__ == "__main__":
         max_dist=12.0,
         n_hd=8,
         preferred_vertical_angles=preferred_vertical_angles,
-        sigma_d_list=sigma_d_list,
-        sigma_ang_list=sigma_ang_list,
-        sigma_vert_list=sigma_vert_list,
+        sigma_rs=sigma_rs,
+        sigma_thetas=sigma_thetas,
+        sigma_phis=sigma_phis,
         scaling_factors=scaling_factors,
         num_bvc_per_dir=50,
-        num_rows=num_rows,
-        num_cols=num_cols,
+        input_rows=input_rows,
+        input_cols=input_cols,
         top_cutoff_percentage=0.0,
         bottom_cutoff_percentage=0.5,
         device="cpu",
