@@ -226,15 +226,14 @@ def generate_place_cells_report(
 # %%
 if __name__ == "__main__":
 
-    from vis_utils import load_hmaps
+    from vis_utils import (
+        load_hmaps,
+        convert_xzy_hmaps,
+    )
 
-    # Example usage
-    data_path = "webots/controllers/create3_base/"
+    # Load hmap data from hardcoded world name
     hmap_loc, hmap_pcn = load_hmaps(hmap_names=["hmap_loc", "hmap_pcn"])
-    hmap_x = hmap_loc[:, 0]
-    hmap_y = hmap_loc[:, 2]
+    hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
 
     # %%
-    generate_place_cells_report(
-        hmap_x, hmap_y, hmap_pcn, output_dir=data_path + "html_report_outputs/"
-    )
+    generate_place_cells_report(hmap_x, hmap_y, hmap_pcn)
