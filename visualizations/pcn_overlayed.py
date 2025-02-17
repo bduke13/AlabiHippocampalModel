@@ -8,6 +8,7 @@ from typing import Optional
 # Hardcoded world name
 WORLD_NAME = "10x10"
 
+
 def load_pickle(file_path):
     """Load a pickle file from the given path."""
     with open(file_path, "rb") as f:
@@ -111,7 +112,9 @@ def plot_overlayed_cells(
 
     # Normalize activations to [0, 1] for scaling colors
     max_activation = np.max(max_mean_activation_per_bin)
-    max_activation = max_activation if max_activation > 0 else 1  # Avoid division by zero
+    max_activation = (
+        max_activation if max_activation > 0 else 1
+    )  # Avoid division by zero
     normalized_activation = max_mean_activation_per_bin / max_activation
 
     # Generate random vibrant colors for each cell
@@ -154,8 +157,13 @@ def plot_overlayed_cells(
 
 
 if __name__ == "__main__":
+    from vis_utils import (
+        load_hmaps,
+        convert_xzy_hmaps,
+    )
+
     # Load hmap data from hardcoded world name
-    hmap_loc, hmap_pcn = load_hmaps_from_world()
+    hmap_loc, hmap_pcn = load_hmaps()
     hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
 
     # Example usage with all parameters
