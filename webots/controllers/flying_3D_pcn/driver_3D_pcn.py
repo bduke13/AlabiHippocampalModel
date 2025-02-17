@@ -146,7 +146,7 @@ class DriverFlying(Supervisor):
             device=self.device,
         )
 
-        self.head_direction_layer = HeadDirectionLayer3D(device="cpu")
+        self.head_direction_layer = HeadDirectionLayer3D(device=self.device)
 
         # Initialize boundaries
         self.vertical_boundaries = torch.zeros((720, 360))
@@ -348,12 +348,16 @@ class DriverFlying(Supervisor):
         # Get the range finder data and roll to align with heading
         vertical_data = self.vertical_range_finder.getRangeImage()
         if vertical_data is not None:
-            vertical_boundaries_tf = torch.tensor(
+            # Create tensor directly on target device
+            self.vertical_boundaries = torch.tensor(
                 vertical_data, dtype=torch.float32, device=self.device
-            )
-            vertical_boundaries_tf = vertical_boundaries_tf.reshape(90, 180)
+            ).reshape(90, 180)
+
+            # Roll operation stays on device
             self.vertical_boundaries = torch.roll(
-                vertical_boundaries_tf, shifts=int(self.current_heading_deg / 2), dims=1
+                self.vertical_boundaries,
+                shifts=int(self.current_heading_deg / 2),
+                dims=1,
             )
         else:
             self.vertical_boundaries = None
@@ -382,13 +386,15 @@ class DriverFlying(Supervisor):
         """
         Compute the activations of place cells and handle the environment interactions.
         """
-        # Ensure points are float32
-        self.vertical_boundaries = self.vertical_boundaries.to(dtype=torch.float32)
+        # Ensure data is on correct device with correct dtype
+        self.vertical_boundaries = self.vertical_boundaries.to(
+            device=self.device, dtype=torch.float32
+        )
 
-        # Convert velocity to tensor and normalize (if non-zero)
-        hd_vel = torch.tensor(self.velocity, dtype=torch.float32, device="cpu")
+        # Convert velocity to tensor on correct device
+        hd_vel = torch.tensor(self.velocity, dtype=torch.float32, device=self.device)
 
-        # Get head direction activations
+        # Get head direction activations (already on correct device)
         self.head_directions = self.head_direction_layer.get_hd_activation(hd_vel)
 
         self.pcn.get_place_cell_activations(

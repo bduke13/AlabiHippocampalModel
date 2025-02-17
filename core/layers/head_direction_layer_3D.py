@@ -67,6 +67,13 @@ class HeadDirectionLayer3D:
             dtype: torch dtype (e.g. torch.float32)
             device: device string (e.g. 'cpu' or 'cuda')
         """
+        """
+        Creates a 3D head direction layer with 20 face directions from an icosahedron.
+
+        Args:
+            dtype: torch dtype (e.g. torch.float32)
+            device: device string (e.g. 'cpu' or 'cuda')
+        """
         self.dtype = dtype
         self.device = device
 
@@ -106,6 +113,9 @@ class HeadDirectionLayer3D:
         """
         if reference_velocity.shape != (3,):
             raise ValueError("reference_velocity must be shape (3,).")
+
+        # Ensure input is on correct device
+        reference_velocity = reference_velocity.to(device=self.device, dtype=self.dtype)
 
         # Normalize the input velocity
         ref_norm = reference_velocity / reference_velocity.norm()
