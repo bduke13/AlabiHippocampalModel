@@ -46,8 +46,7 @@ class Driver(Supervisor):
         wheel_radius (float): Radius of robot wheels in meters.
         axle_length (float): Distance between wheels in meters.
         num_steps (int): Total number of simulation steps.
-        hmap_x (ndarray): History of x-coordinates.
-        hmap_y (ndarray): History of y-coordinates.
+        hmap_loc (ndarray): History of xzy-coordinates.
         hmap_pcn (ndarray): History of place cell activations.
         hmap_hdn (ndarray): History of head direction activations.
         hmap_g (ndarray): History of goal estimates.
