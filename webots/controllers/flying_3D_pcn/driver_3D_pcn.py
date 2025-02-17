@@ -89,18 +89,20 @@ class DriverFlying(Supervisor):
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
         self.goal_r = {"explore": 0.3, "exploit": 0.5}
 
-        self.hmap_loc = np.zeros(
-            (self.num_steps, 3)
-        )  # coordinates in the format [X, Z, Y]
-        self.hmap_pcn = np.zeros(
-            (self.num_steps, num_place_cells)
+        # Initialize hmaps (history maps) as torch tensors on specified device
+        self.hmap_loc = torch.zeros(
+            (self.num_steps, 3), device=self.device
+        )  # coordinates [X, Z, Y]
+        self.hmap_pcn = torch.zeros(
+            (self.num_steps, num_place_cells), device=self.device
         )  # place cell activations
-        self.hmap_bvc = np.zeros(
-            (
-                self.num_steps,
-                len(phi_vert_preferred) * n_hd_bvc * num_bvc_per_dir,
-            )
-        )  # BVC cell activations
+        self.hmap_bvc = torch.zeros(
+            (self.num_steps, len(phi_vert_preferred) * n_hd_bvc * num_bvc_per_dir),
+            device=self.device,
+        )  # BVC activations
+        self.hmap_hdn = torch.zeros(
+            (self.num_steps, n_hd_hdn), device=self.device
+        )  # head direction activations
 
         # Initialize hardware components and sensors
         self.robot = self.getFromDef("agent")  # Placeholder for robot instance
@@ -176,17 +178,17 @@ class DriverFlying(Supervisor):
         n_hd_hdn: int,
         max_dist: float,
         num_bvc_per_dir: int,
-        phi_vert_preferred: List[float],
-        sigma_rs: List[float],
-        sigma_thetas: List[float],
-        sigma_phis: List[float],
+        phi_vert_preferred: List[float],  # vertical angle preferences (ψ)
+        sigma_rs: List[float],  # radial distance spread (σ_r)
+        sigma_thetas: List[float],  # horizontal angle spread (σ_θ)
+        sigma_phis: List[float],  # vertical angle spread (σ_φ)
         scaling_factors: List[float],
         input_rows: int,
         input_cols: int,
         timestep: int,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
-        device: Optional[str] = None,
+        device: str = "cpu",
     ):
         try:
             with open("pcn.pkl", "rb") as f:
@@ -201,10 +203,10 @@ class DriverFlying(Supervisor):
             bvc = BoundaryVectorCellLayer3D(
                 max_dist=max_dist,
                 n_hd=n_hd_bvc,
-                phi_vert_preferred=phi_vert_preferred,
-                sigma_rs=sigma_rs,
-                sigma_thetas=sigma_thetas,
-                sigma_phis=sigma_phis,
+                phi_vert_preferred=phi_vert_preferred,  # vertical angle preferences (ψ)
+                sigma_rs=sigma_rs,  # radial distance spread (σ_r)
+                sigma_thetas=sigma_thetas,  # horizontal angle spread (σ_θ)
+                sigma_phis=sigma_phis,  # vertical angle spread (σ_φ)
                 scaling_factors=scaling_factors,
                 num_bvc_per_dir=num_bvc_per_dir,
                 input_rows=input_rows,
@@ -403,13 +405,16 @@ class DriverFlying(Supervisor):
 
         # Update place cell and sensor maps
         if self.step_count < self.num_steps:
-            self.hmap_loc[self.step_count] = self.robot.getField(
-                "translation"
-            ).getSFVec3f()
-            self.hmap_pcn[self.step_count] = (
-                self.pcn.place_cell_activations.cpu().numpy()
+            # Record position as tensor
+            self.hmap_loc[self.step_count] = torch.tensor(
+                self.robot.getField("translation").getSFVec3f(), device=self.device
             )
-            self.hmap_bvc[self.step_count] = self.pcn.bvc_activations.cpu().numpy()
+            # Record network activations (keeping on device)
+            self.hmap_pcn[self.step_count] = self.pcn.place_cell_activations.to(
+                self.device
+            )
+            self.hmap_bvc[self.step_count] = self.pcn.bvc_activations.to(self.device)
+            self.hmap_hdn[self.step_count] = self.head_directions.to(self.device)
 
         # Increment timestep
         self.step_count += 1
@@ -465,9 +470,9 @@ class DriverFlying(Supervisor):
 
     def save(
         self,
-        include_pcn: bool = False,
+        include_pcn: bool = True,
         include_rcn: bool = False,
-        include_hmaps: bool = False,
+        include_hmaps: bool = True,
     ):
         """
         Saves the state of the PCN (Place Cell Network), RCN (Reward Cell Network), and optionally
@@ -493,29 +498,21 @@ class DriverFlying(Supervisor):
                 pickle.dump(self.rcn, output)
                 files_saved.append(rcn_path)
 
-        # Save the history maps if specified
+        # Save history maps if specified
         if include_hmaps:
-            hmap_loc_path = os.path.join(self.hmap_dir, "hmap_loc.pkl")
-            with open(hmap_loc_path, "wb") as output:
-                pickle.dump(self.hmap_loc[: self.step_count], output)
-                files_saved.append(hmap_loc_path)
+            # Convert tensors to numpy arrays only during save
+            hmaps = {
+                "hmap_loc.pkl": self.hmap_loc[: self.step_count].cpu().numpy(),
+                "hmap_pcn.pkl": self.hmap_pcn[: self.step_count].cpu().numpy(),
+                "hmap_bvc.pkl": self.hmap_bvc[: self.step_count].cpu().numpy(),
+                "hmap_hdn.pkl": self.hmap_hdn[: self.step_count].cpu().numpy(),
+            }
 
-            hmap_pcn_path = os.path.join(self.hmap_dir, "hmap_pcn.pkl")
-            with open(hmap_pcn_path, "wb") as output:
-                pcn_cpu = self.hmap_pcn[: self.step_count].cpu().numpy()
-                pickle.dump(pcn_cpu, output)
-                files_saved.append(hmap_pcn_path)
-
-            hmap_hdn_path = os.path.join(self.hmap_dir, "hmap_hdn.pkl")
-            with open(hmap_hdn_path, "wb") as output:
-                pickle.dump(self.hmap_hdn[: self.step_count], output)
-                files_saved.append(hmap_hdn_path)
-
-            hmap_bvc_path = os.path.join(self.hmap_dir, "hmap_bvc.pkl")
-            with open(hmap_bvc_path, "wb") as output:
-                bvc_cpu = self.hmap_bvc[: self.step_count].cpu().numpy()
-                pickle.dump(bvc_cpu, output)
-                files_saved.append(hmap_bvc_path)
+            for filename, data in hmaps.items():
+                filepath = os.path.join(self.hmap_dir, filename)
+                with open(filepath, "wb") as output:
+                    pickle.dump(data, output)
+                    files_saved.append(filepath)
 
         # Show a message box to confirm saving
         root = tk.Tk()

@@ -78,9 +78,7 @@ if __name__ == "__main__":
 
     # Example usage
     data_path = "webots/controllers/flying_3D_pcn/"
-    hmap_loc, hmap_pcn = load_hmaps(
-        prefix=data_path, hmap_names=["hmap_loc", "hmap_pcn"]
-    )
+    hmap_loc, hmap_pcn = load_hmaps()
     hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
 
     plot_3d_trajectory_with_pcn(
