@@ -15,7 +15,7 @@ sys.path.append(str(project_root))
 
 CONTROLLER_PATH_PREFIX = "webots/controllers/"
 CONTROLLER_NAME = "create3_base"
-WORLD_NAME = "10x10"
+WORLD_NAME = "20x20"
 
 
 def load_layer_pkl(layer_name: str = ""):

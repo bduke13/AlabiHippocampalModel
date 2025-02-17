@@ -25,6 +25,7 @@ RectangleArena {
   rotation 1 0 0 -1.5708
   floorSize 20 20
   floorAppearance NULL
+  wallHeight 0.5
   wallAppearance BrushedAluminium {
     colorOverride 0 1 1
     IBLStrength 11
@@ -67,7 +68,7 @@ DEF agent Create {
           width 720
           height 1
           projection "cylindrical"
-          maxRange 10
+          maxRange 30
         }
         Shape {
           appearance PBRAppearance {

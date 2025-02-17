@@ -13,7 +13,6 @@ def plot_rcn_activation(
     hmap_x: np.ndarray,
     hmap_y: np.ndarray,
     scale_idx: int = 0,
-    context: int = 0,
 ):
     """
     Visualizes the reward cell activations across the environment.
@@ -24,7 +23,6 @@ def plot_rcn_activation(
       hmap_x: 1D numpy array for x coordinates
       hmap_y: 1D numpy array for y coordinates
       scale_idx: Index of the place cell scale to visualize
-      context: Index for selecting the reward cell weights
     """
 
     # Ensure correct tensor shapes
@@ -44,7 +42,7 @@ def plot_rcn_activation(
     # Compute reward function using dot product
     sum_activations = torch.sum(hmap_pcn_float32, dim=0)
     safe_denom = torch.where(sum_activations > 0, sum_activations, torch.ones_like(sum_activations))
-    reward_function = torch.tensordot(w_in_float32[context], hmap_pcn_float32, dims=1) / safe_denom
+    reward_function = torch.tensordot(w_in_float32, hmap_pcn_float32, dims=1) / safe_denom
     reward_function = torch.squeeze(reward_function)
 
     # Ensure dimensions match for plotting
@@ -79,7 +77,7 @@ def plot_rcn_activation(
 
     # Add a colorbar and title, then show the plot
     fig.colorbar(cntr)
-    plt.title(f"RCN Reward Map for Scale {scale_idx}, Context {context}")
+    plt.title(f"RCN Reward Map for Scale {scale_idx}")
     plt.show()
 
 
@@ -89,7 +87,7 @@ if __name__ == "__main__":
     rcParams.update({"font.size": 12})
 
     # Select which scale to visualize
-    scale_idx = 0  # Change this to visualize a different scale
+    scale_idx = 2  # Change this to visualize a different scale
 
     # Load hmap data and the rcn layer using utility functions
     hmap_loc, hmap_pcn = load_hmaps(["hmap_loc", f"hmap_pcn_scale_{scale_idx}"])
@@ -103,5 +101,4 @@ if __name__ == "__main__":
         hmap_x=hmap_x,
         hmap_y=hmap_y,
         scale_idx=scale_idx,
-        context=0,  # Change this to visualize a different context
     )

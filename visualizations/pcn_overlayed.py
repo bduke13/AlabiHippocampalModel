@@ -6,7 +6,7 @@ import pickle
 from typing import Optional
 
 # Hardcoded world name
-WORLD_NAME = "10x10"
+WORLD_NAME = "20x20"
 
 def load_pickle(file_path):
     """Load a pickle file from the given path."""

@@ -6,7 +6,7 @@ import pickle
 from typing import Optional, List
 
 # Hardcoded world name
-WORLD_NAME = "10x10"
+WORLD_NAME = "20x20"
 
 def load_pickle(file_path):
     """Load a pickle file from the given path."""
@@ -205,37 +205,19 @@ def plot_overlayed_cells(
 
 # Main execution
 if __name__ == "__main__":
-    num_scales = 1  # Adjust based on how many scales you have
+    num_scales = 3  # Adjust based on how many scales you have
     hmap_loc, hmap_pcn_scales = load_hmaps_from_world(num_scales)
     hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
-
-    # plot_overlayed_cells(
-    #     hmap_pcn_scales=hmap_pcn_scales,
-    #     hmap_x=hmap_x,
-    #     hmap_y=hmap_y,
-    #     gridsize=100,
-    #     show_plot=True,
-    #     save_path="most_active_cell.png",
-    #     scale_idx=0,  # Select the scale to analyze
-    #     plot_most_active=True,  # NEW: Only plot the most active cell
-    # )
-    # plot_overlayed_cells(
-    # hmap_pcn_scales=hmap_pcn_scales,
-    # hmap_x=hmap_x,
-    # hmap_y=hmap_y,
-    # gridsize=100,
-    # show_plot=True,
-    # save_path="specific_cell.png",
-    # scale_idx=0,  
-    # cell_idx=10,  # NEW: Plot only this place cell
-    # )
+    
     plot_overlayed_cells(
     hmap_pcn_scales=hmap_pcn_scales,
     hmap_x=hmap_x,
     hmap_y=hmap_y,
     gridsize=100,
+    num_cells_to_sample=10,
     show_plot=True,
     save_path="specific_cell.png",
-    scale_idx=0,  
+    scale_idx=0,
+    plot_most_active=False,  
     )
 

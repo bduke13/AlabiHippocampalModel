@@ -1,3 +1,4 @@
+# %%
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -20,8 +21,8 @@ class BoundaryVectorCellLayer:
         sigma_r: float,  # Standard deviation for distance tuning
         max_dist: float,  # Maximum response distance
         num_bvc_per_dir: int = 50,  # Number of BVCs per head direction
-        device: torch.device = torch.device("cpu"),
         dtype: torch.dtype = torch.float32,
+        device: str = "cpu",
     ) -> None:
         """Initialize the boundary vector cell (BVC) layer.
 
