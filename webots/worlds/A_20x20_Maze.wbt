@@ -1,0 +1,248 @@
+#VRML_SIM R2025a utf8
+
+## External prototypes
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/robots/irobot/create/protos/Create.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/Roughcast.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/apartment_structure/protos/Wall.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+
+WorldInfo {
+  info [
+    "iRobot Create Maze (20x20) environment - Complex and fully traversable"
+  ]
+  title "Create 20x20 Maze"
+  coordinateSystem "NUE"
+}
+
+Viewpoint {
+  orientation 1 0 0 4.71238898038469
+  position 0 30 0
+  near 0.1
+  follow "agent"
+  followType "None"
+}
+
+TexturedBackground { }
+
+#### Floor ####
+# The RectangleArena is rotated by -π/2 about the X-axis so that its 20×20 surface lies flat on the ground (XZ plane, y = 0).
+RectangleArena {
+  rotation 1 0 0 -1.5708
+  floorSize 20 20
+  wallThickness 0.01
+  wallHeight 0.01
+  floorAppearance NULL
+}
+
+#### Robot (Agent) ####
+DEF agent Create {
+  translation -8 0.044 -8
+  rotation -0.6607352787486408 0.5303053028717288 0.5312298722427797 1.9727887896457816
+  supervisor TRUE
+  controller "create3_base"
+  bodySlot [
+    Solid {
+      translation 0 0 0.08  # Sensor group: lidar is centered and mounted above the robot.
+      children [
+        Display {
+          width 100
+          height 100
+        }
+        Compass { }
+        DEF range-finder RangeFinder {
+          fieldOfView 6.28
+          width 720
+          height 1
+          projection "cylindrical"
+          maxRange 40
+        }
+        Camera {
+          translation -0.002 0.02 0
+          rotation 0 1 0 1.57
+          name "lefteye"
+          fieldOfView 3.14
+          width 720
+          height 360
+          projection "spherical"
+          recognition Recognition { }
+        }
+        Camera {
+          translation 0.002 0.02 0
+          rotation 0 1 0 -1.57
+          name "righteye"
+          fieldOfView 3.14
+          width 720
+          height 360
+          projection "spherical"
+          recognition Recognition { }
+        }
+        Shape {
+          appearance PBRAppearance { }
+          geometry Cylinder {
+            height 0.04
+            radius 0.05
+          }
+        }
+      ]
+    }
+  ]
+}
+
+DirectionalLight {
+  direction 0 -1 0
+  intensity 1.0
+}
+
+#### Outer Walls (Perfect Square) ####
+# The floor spans x/z = -10 to +10.
+# To form a perfect square enclosure:
+#  - North & South walls (short) use a length of 20.
+#  - East & West walls (long) use a length of 20.6.
+# All outer walls are raised by 1.2 m (half of 2.4 m height) so their bottoms are at y = 0.
+Wall {
+  name "OuterWall_North"
+  translation 0 1.2 10
+  size 20 2.4 0.3
+  appearance Roughcast { colorOverride 0.7 0.45 0.25 }
+}
+
+Wall {
+  name "OuterWall_South"
+  translation 0 1.2 -10
+  rotation 0 1 0 3.1416
+  size 20 2.4 0.3
+  appearance Roughcast { colorOverride 0.7 0.45 0.25 }
+}
+
+Wall {
+  name "OuterWall_East"
+  translation 10 1.2 0
+  rotation 0 1 0 1.5708
+  size 20.6 2.4 0.3
+  appearance Roughcast { colorOverride 0.7 0.45 0.25 }
+}
+
+Wall {
+  name "OuterWall_West"
+  translation -10 1.2 0
+  rotation 0 1 0 -1.5708
+  size 20.6 2.4 0.3
+  appearance Roughcast { colorOverride 0.7 0.45 0.25 }
+}
+
+#### Internal Maze Walls ####
+## Top Row (roughly z = 5 to 10) ##
+Wall {
+  name "MazeTop_HorizLeft"
+  translation -7 1.2 8
+  size 6 2.4 0.3
+  rotation 0 1 0 0
+  appearance Roughcast { colorOverride 0.8 0.6 0.25 }
+}
+
+Wall {
+  name "MazeTop_HorizRight"
+  translation 7 1.2 8
+  size 6 2.4 0.3
+  rotation 0 1 0 0
+  appearance Roughcast { colorOverride 0.8 0.6 0.25 }
+}
+
+Wall {
+  name "MazeTop_VertLeft"   # Moved closer: originally at (-2,1.2,6.5), now at (-1,1.2,6.5)
+  translation -1 1.2 6.5
+  size 3 2.4 0.3
+  rotation 0 1 0 1.5708
+  appearance Roughcast { colorOverride 0.8 0.6 0.25 }
+}
+
+Wall {
+  name "MazeTop_VertRight"  # Moved closer: originally at (2,1.2,6.5), now at (1,1.2,6.5)
+  translation 1 1.2 6.5
+  size 3 2.4 0.3
+  rotation 0 1 0 1.5708
+  appearance Roughcast { colorOverride 0.8 0.6 0.25 }
+}
+
+Wall {
+  name "MazeTop_Connector"  # New wall connecting the inner edges of MazeTop_VertLeft and MazeTop_VertRight.
+  translation 0 1.2 6.5
+  size 2 2.4 0.3
+  rotation 0 1 0 0
+  appearance Roughcast { colorOverride 0.8 0.6 0.25 }
+}
+
+## Middle Row (roughly z = -5 to +5) ##
+Wall {
+  name "MazeMid_HorizLeft"
+  translation -5 1.2 2
+  size 10 2.4 0.3
+  rotation 0 1 0 0
+  appearance Roughcast { colorOverride 0.8 0.6 0.25 }
+}
+
+Wall {
+  name "MazeMid_HorizRight"
+  translation 5 1.2 -2
+  size 10 2.4 0.3
+  rotation 0 1 0 0
+  appearance Roughcast { colorOverride 0.8 0.6 0.25 }
+}
+
+Wall {
+  name "MazeMid_VertLeft"
+  translation -3 1.2 -1.5
+  size 7 2.4 0.3
+  rotation 0 1 0 1.5708
+  appearance Roughcast { colorOverride 0.8 0.6 0.25 }
+}
+
+Wall {
+  name "MazeMid_VertRight"
+  translation 3 1.2 1.5
+  size 7 2.4 0.3
+  rotation 0 1 0 1.5708
+  appearance Roughcast { colorOverride 0.8 0.6 0.25 }
+}
+
+Wall {
+  name "MazeMid_SmallHorizLeft"
+  translation -2 1.2 0
+  size 2 2.4 0.3
+  rotation 0 1 0 0
+  appearance Roughcast { colorOverride 0.8 0.6 0.25 }
+}
+
+Wall {
+  name "MazeMid_SmallHorizRight"
+  translation 2 1.2 0
+  size 2 2.4 0.3
+  rotation 0 1 0 0
+  appearance Roughcast { colorOverride 0.8 0.6 0.25 }
+}
+
+## Bottom Row (roughly z = -10 to -5) ##
+Wall {
+  name "MazeBottom_HorizLeft"
+  translation -6 1.2 -7
+  size 8 2.4 0.3
+  rotation 0 1 0 0
+  appearance Roughcast { colorOverride 0.8 0.6 0.25 }
+}
+
+Wall {
+  name "MazeBottom_HorizRight"
+  translation 6 1.2 -7
+  size 8 2.4 0.3
+  rotation 0 1 0 0
+  appearance Roughcast { colorOverride 0.8 0.6 0.25 }
+}
+
+Wall {
+  name "MazeBottom_VertCenter"
+  translation 0 1.2 -8.5
+  size 3 2.4 0.3
+  rotation 0 1 0 1.5708
+  appearance Roughcast { colorOverride 0.8 0.6 0.25 }
+}

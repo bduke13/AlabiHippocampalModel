@@ -1,0 +1,138 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/robots/irobot/create/protos/Create.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/Parquetry.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/apartment_structure/protos/Wall.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+
+WorldInfo {
+  info [
+    "iRobot Create simulation",
+    "The vacuum cleaner robot goes randomly into the apartment while a supervisor tracks its position and alters the ground texture.",
+    "The robot can be stopped by the virtual walls emitting IR light."
+  ]
+  title "iRobot Create"
+  coordinateSystem "NUE"
+}
+
+Viewpoint {
+  orientation 0.6870353705862984 -0.6861336487797677 -0.2391715191562539 3.6159835242749345
+  position 0.1649201538671352 17.995738904695664 14.990603253541922
+  near 0.1
+  follow "Create"
+  followType "None"
+}
+
+TexturedBackground {
+}
+
+#### Floor ####
+# The RectangleArena proto by default lies in the XY plane.
+# We rotate it by -π/2 about the X-axis so that its 10×10 surface lies horizontally (in the XZ plane).
+# Its surface (the floor) is at y = 0.
+RectangleArena {
+  rotation 1 0 0 -1.5708
+  floorSize 10 10
+  floorAppearance Parquetry {
+    type "light strip"
+  }
+}
+
+#### Robot (Agent) ####
+# The robot is positioned using our "gold standard" parameters.
+# Its bodySlot now uses a translation of "0 0.08 0" so that the sensor assembly (including the lidar) is raised above the robot’s base and centered.
+DEF agent Create {
+  translation 1.40311433438468 0.044186481340165173 1.4159691458047037
+  rotation -0.6607352787486408 0.5303053028717288 0.5312298722427797 1.9727887896457816
+  controller "create3_base"
+  supervisor TRUE
+  bodySlot [
+    Solid {
+      translation 0 0 0.08
+      children [
+        Display {
+          width 100
+          height 100
+        }
+        Compass { }
+        DEF range-finder RangeFinder {
+          fieldOfView 6.28
+          width 720
+          height 1
+          projection "cylindrical"
+          maxRange 10
+        }
+        Camera {
+          translation -0.002 0.02 0
+          rotation 0 1 0 1.57
+          name "lefteye"
+          fieldOfView 3.14
+          width 720
+          height 360
+          projection "spherical"
+          recognition Recognition { }
+        }
+        Camera {
+          translation 0.002 0.02 0
+          rotation 0 1 0 -1.57
+          name "righteye"
+          fieldOfView 3.14
+          width 720
+          height 360
+          projection "spherical"
+          recognition Recognition { }
+        }
+        Shape {
+          appearance PBRAppearance { }
+          geometry Cylinder {
+            height 0.04
+            radius 0.05
+          }
+        }
+      ]
+    }
+  ]
+}
+
+#### Outer Walls ####
+# We assume the Wall proto places the wall so that its translation corresponds to its bottom–inner edge.
+# To have the walls’ bottoms flush with the floor (y = 0), we raise each wall by half its height (1.2 m).
+#
+# The 10×10 floor has edges at x/z = ±5.
+#
+# North wall: inner face flush with the north edge (z = +5).
+Wall {
+  translation 0 1.2 5
+  name "wall(north)"
+  size 10 2.4 0.3
+}
+
+# South wall: inner face flush with the south edge (z = -5).
+# Rotated 180° so that its inner face points inward.
+Wall {
+  translation 0 1.2 -5
+  rotation 0 1 0 3.1416
+  name "wall(south)"
+  size 10 2.4 0.3
+}
+
+# East wall: inner face flush with the east edge (x = +5).
+Wall {
+  translation 5 1.2 0
+  rotation 0 1 0 1.5708
+  name "wall(east)"
+  size 10.6 2.4 0.3
+}
+
+# West wall: inner face flush with the west edge (x = -5).
+Wall {
+  translation -5 1.2 0
+  rotation 0 1 0 -1.5708
+  name "wall(west)"
+  size 10.6 2.4 0.3
+}
+
+DirectionalLight {
+  direction 0 -1 0
+}

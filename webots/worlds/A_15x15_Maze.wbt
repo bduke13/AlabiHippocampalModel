@@ -1,0 +1,220 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/robots/irobot/create/protos/Create.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/Roughcast.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/apartment_structure/protos/Wall.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+
+WorldInfo {
+  info [
+    "iRobot Create Maze (15x15) environment"
+  ]
+  title "Create 15x15 Maze"
+  coordinateSystem "NUE"
+}
+
+Viewpoint {
+  orientation 1 0 0 4.71238898038469
+  position 0 25 0
+  near 0.1
+  follow "agent"
+  followType "None"
+}
+
+TexturedBackground {
+}
+
+#### Floor ####
+# Rotate the RectangleArena by -π/2 about the X-axis so its 15×15 surface lies flat in the XZ plane (with y = 0).
+RectangleArena {
+  rotation 1 0 0 -1.5708
+  floorSize 15 15
+  wallThickness 0.01
+  wallHeight 0.01
+  floorAppearance NULL
+}
+
+#### Robot (Agent) ####
+DEF agent Create {
+  translation -6.5 0.044 -6.5
+  rotation -0.6607352787486408 0.5303053028717288 0.5312298722427797 1.9727887896457816
+  supervisor TRUE
+  controller "create3_base"
+  bodySlot [
+    Solid {
+      translation 0 0 0.08    # Sensor group: lidar centered and mounted above the robot.
+      children [
+        Display {
+          width 100
+          height 100
+        }
+        Compass { }
+        DEF range-finder RangeFinder {
+          fieldOfView 6.28
+          width 720
+          height 1
+          projection "cylindrical"
+          maxRange 30
+        }
+        Camera {
+          translation -0.002 0.02 0
+          rotation 0 1 0 1.57
+          name "lefteye"
+          fieldOfView 3.14
+          width 720
+          height 360
+          projection "spherical"
+          recognition Recognition { }
+        }
+        Camera {
+          translation 0.002 0.02 0
+          rotation 0 1 0 -1.57
+          name "righteye"
+          fieldOfView 3.14
+          width 720
+          height 360
+          projection "spherical"
+          recognition Recognition { }
+        }
+        Shape {
+          appearance PBRAppearance { }
+          geometry Cylinder {
+            height 0.04
+            radius 0.05
+          }
+        }
+      ]
+    }
+  ]
+}
+
+DirectionalLight {
+  direction 0 -1 0
+  intensity 1.0
+}
+
+#### Outer Walls (Perfect Square) ####
+# The floor is 15×15, with edges at ±7.5. To ensure the outer boundaries form a perfect square:
+# - North & South walls (short walls) have a length equal to 15.
+# - East & West walls (long walls) have a length of 15.6 (15 + 0.6) so their outer edges align with those of the short walls.
+# All walls are raised by 1.2 (half of 2.4) so their bottoms sit at y = 0.
+Wall {
+  name "OuterWall_North"
+  translation 0 1.2 7.5
+  size 15 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.7 0.45 0.25
+  }
+}
+
+Wall {
+  name "OuterWall_South"
+  translation 0 1.2 -7.5
+  rotation 0 1 0 3.1416
+  size 15 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.7 0.45 0.25
+  }
+}
+
+Wall {
+  name "OuterWall_East"
+  translation 7.5 1.2 0
+  rotation 0 1 0 1.5708
+  size 15.6 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.7 0.45 0.25
+  }
+}
+
+Wall {
+  name "OuterWall_West"
+  translation -7.5 1.2 0
+  rotation 0 1 0 -1.5708
+  size 15.6 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.7 0.45 0.25
+  }
+}
+
+#### Internal Maze Walls ####
+Wall {
+  name "InnerWall1"
+  translation -4.5 1.2 -5.0
+  rotation 0 1 0 1.5708
+  size 2.0 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+Wall {
+  name "InnerWall2"
+  translation -3.0 1.2 -3.0
+  rotation 0 1 0 0
+  size 3.0 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+Wall {
+  name "InnerWall3"
+  translation -1.5 1.2 -3.0
+  rotation 0 1 0 1.5708
+  size 3.0 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+Wall {
+  name "InnerWall4"
+  translation 1.5 1.2 -1.0
+  rotation 0 1 0 0
+  size 5.0 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+Wall {
+  name "InnerWall5"
+  translation 0 1.2 1.5
+  rotation 0 1 0 1.5708
+  size 3.0 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+Wall {
+  name "InnerWall6"
+  translation -3.0 1.2 4.0
+  rotation 0 1 0 0
+  size 6.0 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+Wall {
+  name "InnerWall7"
+  translation 5.0 1.2 2.0
+  rotation 0 1 0 1.5708
+  size 4.0 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+
+Wall {
+  name "InnerWall8"
+  translation 2.0 1.2 5.0
+  rotation 0 1 0 0
+  size 3.0 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
