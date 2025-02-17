@@ -5,6 +5,7 @@ import random
 import os
 from typing import Optional, List
 from controller import Supervisor
+from tkinter import N, messagebox
 
 
 # Add root directory to python to be able to import
@@ -28,60 +29,53 @@ class DriverFlying(Supervisor):
 
     def initialization(
         self,
+        phi_vert_preferred: List[float],
+        sigma_rs: List[float],
+        sigma_thetas: List[float],
+        sigma_phis: List[float],
+        scaling_factors: List[float],
         mode=RobotMode.PLOTTING,
-        randomize_start_loc: bool = True,
         run_time_hours: int = 1,
-        preferred_va: Optional[List[float]] = None,
-        sigma_d: Optional[List[float]] = None,
-        sigma_va: Optional[List[float]] = None,
-        sigma_a: Optional[List[float]] = None,
-        num_bvc_per_dir: Optional[int] = None,
-        start_loc: Optional[List[int]] = None,
+        num_bvc_per_dir: int = 50,
+        num_place_cells: int = 500,
+        n_hd_bvc: int = 8,
+        n_hd_hdn: int = 20,
+        input_rows: int = 90,
+        input_cols: int = 180,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
         visual_bvc: bool = False,
         world_name: Optional[str] = None,
+        start_location: Optional[List[int]] = None,
+        randomize_start_location: bool = True,
         goal_location: Optional[List[float]] = None,
         max_dist: float = 10,
     ):
+
         self.robot_mode = mode
-        self.file_prefix = file_prefix
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        if self.robot_mode == RobotMode.LEARN_OJAS:
-            self.clear()
+        # Set the world name and directories for saving data
+        if world_name is None:
+            world_path = self.getWorldPath()  # Get the full path to the world file
+            world_name = os.path.splitext(os.path.basename(world_path))[
+                0
+            ]  # Extract just the world name
+        self.world_name = world_name
+        self.visual_bvc = visual_bvc
+
+        # Construct directory paths
+        self.hmap_dir = os.path.join("pkl", self.world_name, "hmaps")
+        self.network_dir = os.path.join("pkl", self.world_name, "networks")
+        # Ensure directories exist
+        os.makedirs(self.hmap_dir, exist_ok=True)
+        os.makedirs(self.network_dir, exist_ok=True)
 
         # Model parameters
-        self.num_place_cells = 5000
-        self.num_reward_cells = 1
-        self.n_hd_bvc = 8
-        self.n_hd_hdn = 20
         self.timestep = 32 * 6
         self.tau_w = 10  # time constant for the window function
 
-        # Parameters for 3D BVC
-        # Define preferred vertical angles and corresponding sigma values
-        self.preferred_vertical_angles = preferred_va
         self.visual_bvc = visual_bvc
-
-        self.sigma_d_list = (
-            sigma_d
-            if sigma_d is not None
-            else [0.5] * len(self.preferred_vertical_angles)
-        )
-        self.sigma_ang_list = (
-            sigma_a
-            if sigma_a is not None
-            else [0.02] * len(self.preferred_vertical_angles)
-        )
-        self.sigma_vert_list = (
-            sigma_va
-            if sigma_va is not None
-            else [0.02] * len(self.preferred_vertical_angles)
-        )
-        self.num_bvc_per_dir = num_bvc_per_dir if num_bvc_per_dir is not None else 50
-
-        self.scaling_factors = [1.0] * len(self.preferred_vertical_angles)
 
         # Robot parameters
         self.max_speed = 16
@@ -103,9 +97,7 @@ class DriverFlying(Supervisor):
         self.hmap_bvc = np.zeros(
             (
                 self.num_steps,
-                len(self.preferred_vertical_angles)
-                * self.n_hd_bvc
-                * self.num_bvc_per_dir,
+                len(self.phi_vert_preferred) * self.n_hd_bvc * self.num_bvc_per_dir,
             )
         )  # BVC cell activations
 
@@ -128,19 +120,27 @@ class DriverFlying(Supervisor):
         self.collided = torch.zeros(2, dtype=torch.int32)
         self.rotation_field = self.robot.getField("rotation")
 
-        # Initialize layers
+        # Clear/Initialize/Load layers
+        if self.robot_mode == RobotMode.LEARN_OJAS:
+            self.clear()
+
         self.load_pcn(
-            num_place_cells=self.num_place_cells,
-            n_hd=self.n_hd_hdn,
+            num_place_cells=num_place_cells,
+            n_hd_bvc=n_hd_bvc,
+            n_hd_hdn=n_hd_hdn,
+            max_dist=max_dist,
+            num_bvc_per_dir=num_bvc_per_dir,
+            phi_vert_preferred=phi_vert_preferred,
+            sigma_rs=sigma_rs,
+            sigma_thetas=sigma_thetas,
+            sigma_phis=sigma_phis,
+            scaling_factors=scaling_factors,
+            input_rows=input_rows,
+            input_cols=input_cols,
             timestep=self.timestep,
             enable_ojas=enable_ojas,
             enable_stdp=enable_stdp,
-            preferred_vertical_angles=self.preferred_vertical_angles,
-            sigma_d_list=self.sigma_d_list,
-            sigma_ang_list=self.sigma_ang_list,
-            sigma_vert_list=self.sigma_vert_list,
-            scaling_factors=self.scaling_factors,
-            num_bvc_per_dir=self.num_bvc_per_dir,
+            device=self.device,
         )
 
         self.head_direction_layer = HeadDirectionLayer3D(device="cpu")
@@ -154,7 +154,7 @@ class DriverFlying(Supervisor):
         # Initialize goal
         self.expected_reward = 0
 
-        if randomize_start_loc:
+        if randomize_start_location:
             INITIAL = [
                 random.uniform(-2.3, 2.3),
                 random.uniform(0.5, 2),
@@ -163,24 +163,28 @@ class DriverFlying(Supervisor):
             self.robot.getField("translation").setSFVec3f(INITIAL)
         else:
             self.robot.getField("translation").setSFVec3f(
-                [start_loc[0], 0.1, start_loc[1]]
+                [start_location[0], start_location[1], start_location[1]]
             )
 
         self.robot.resetPhysics()
 
     def load_pcn(
-        self,
         num_place_cells: int,
-        n_hd: int,
-        timestep: int,
-        preferred_vertical_angles: List[float],
-        sigma_d_list: List[float],
-        sigma_ang_list: List[float],
-        sigma_vert_list: List[float],
-        scaling_factors: List[float],
+        n_hd_bvc: int,
+        n_hd_hdn: int,
+        max_dist: float,
         num_bvc_per_dir: int,
+        phi_vert_preferred: List[float],
+        sigma_rs: List[float],
+        sigma_thetas: List[float],
+        sigma_phis: List[float],
+        scaling_factors: List[float],
+        input_rows: int,
+        input_cols: int,
+        timestep: int,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
+        device: Optional[str] = None,
     ):
         try:
             with open("pcn.pkl", "rb") as f:
@@ -191,23 +195,23 @@ class DriverFlying(Supervisor):
 
             # Initialize BVC layer with per-layer sigma values
             bvc = BoundaryVectorCellLayer3D(
-                max_dist=5,
-                n_hd=self.n_hd_bvc,
-                preferred_vertical_angles=preferred_vertical_angles,
-                sigma_d_list=sigma_d_list,
-                sigma_ang_list=sigma_ang_list,
-                sigma_vert_list=sigma_vert_list,
+                max_dist=max_dist,
+                n_hd=n_hd_bvc,
+                phi_vert_preferred=phi_vert_preferred,
+                sigma_rs=sigma_rs,
+                sigma_thetas=sigma_thetas,
+                sigma_phis=sigma_phis,
                 scaling_factors=scaling_factors,
                 num_bvc_per_dir=num_bvc_per_dir,
-                device=self.device,
                 bottom_cutoff_percentage=1.0,
+                device=self.device,
             )
 
             self.pcn = PlaceCellLayer(
                 bvc_layer=bvc,
                 num_pc=num_place_cells,
                 timestep=timestep,
-                n_hd=self.n_hd_hdn,
+                n_hd=n_hd_hdn,
                 w_in_init_ratio=0.50,
                 device=self.device,
             )

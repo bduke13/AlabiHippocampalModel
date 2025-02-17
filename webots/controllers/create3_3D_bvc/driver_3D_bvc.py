@@ -1,5 +1,4 @@
 import numpy as np
-from numpy.random import default_rng
 import pickle
 import os
 import tkinter as tk
@@ -24,10 +23,6 @@ from core.layers.place_cell_layer import PlaceCellLayer
 from core.layers.reward_cell_layer import RewardCellLayer
 from core.robot.robot_mode import RobotMode
 
-# --- PyTorch seeds / random ---
-# torch.manual_seed(5)
-# np.random.seed(5)
-# rng = default_rng(5)  # or keep it as is
 np.set_printoptions(precision=2)
 
 
@@ -46,8 +41,7 @@ class Driver(Supervisor):
         wheel_radius (float): Radius of robot wheels in meters.
         axle_length (float): Distance between wheels in meters.
         num_steps (int): Total number of simulation steps.
-        hmap_x (ndarray): History of x-coordinates.
-        hmap_y (ndarray): History of y-coordinates.
+        hmap_loc (ndarray): History of xzy coords.
         hmap_pcn (ndarray): History of place cell activations.
         hmap_hdn (ndarray): History of head direction activations.
         hmap_g (ndarray): History of goal estimates.
@@ -196,10 +190,8 @@ class Driver(Supervisor):
         # Initialize boundaries
         self.boundaries = None
 
-        # Initialize layers
-        if (
-            self.robot_mode == RobotMode.LEARN_OJAS
-        ):  # Delete existing pkls if in LEARN_OJAS
+        # Clear/Initialize/Load layers
+        if self.robot_mode == RobotMode.LEARN_OJAS:
             self.clear()
 
         self.load_pcn(
