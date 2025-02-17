@@ -39,8 +39,10 @@ class DriverFlying(Supervisor):
         start_loc: Optional[List[int]] = None,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
-        visual_bvc: bool = None,
-        file_prefix: str = "",
+        visual_bvc: bool = False,
+        world_name: Optional[str] = None,
+        goal_location: Optional[List[float]] = None,
+        max_dist: float = 10,
     ):
         self.robot_mode = mode
         self.file_prefix = file_prefix
@@ -70,7 +72,7 @@ class DriverFlying(Supervisor):
         self.sigma_ang_list = (
             sigma_a
             if sigma_a is not None
-            else [0.2] * len(self.preferred_vertical_angles)
+            else [0.02] * len(self.preferred_vertical_angles)
         )
         self.sigma_vert_list = (
             sigma_va
@@ -80,13 +82,6 @@ class DriverFlying(Supervisor):
         self.num_bvc_per_dir = num_bvc_per_dir if num_bvc_per_dir is not None else 50
 
         self.scaling_factors = [1.0] * len(self.preferred_vertical_angles)
-
-        if sigma_d:
-            self.sigma_d_list = sigma_d
-            print(f"overriding sigma_d_list to {self.sigma_d_list}")
-        if sigma_a:
-            self.sigma_ang_list = sigma_a
-            print(f"overriding sigma_ang_list to {self.sigma_ang_list}")
 
         # Robot parameters
         self.max_speed = 16
@@ -253,7 +248,9 @@ class DriverFlying(Supervisor):
             ):
 
                 self.explore()
-            elif
+            else:
+                print("Robot mode not implemented yet, quitting.")
+                break
 
         self.save()
 
@@ -458,80 +455,91 @@ class DriverFlying(Supervisor):
 
     def save(
         self,
-        include_pcn: bool = True,
-        include_hmaps: bool = True,
+        include_pcn: bool = False,
+        include_rcn: bool = False,
+        include_hmaps: bool = False,
     ):
         """
         Saves the state of the PCN (Place Cell Network), RCN (Reward Cell Network), and optionally
         the maps that store the agent's movement and activations.
-
-        Parameters:
-            include_maps (bool): If True, saves the history of the agent's path and activations.
         """
-        # Create directory if it doesn't exist
-        if self.file_prefix:
-            directory = os.path.dirname(self.file_prefix)
-            if directory and not os.path.exists(directory):
-                os.makedirs(directory)
-
         files_saved = []
 
-        # Save parameters to text file
-        params_file = f"{self.file_prefix}parameters.txt"
-        with open(params_file, "w") as f:
-            f.write("Model Parameters:\n")
-            f.write(f"sigma_d: {self.pcn.bvc_layer.sigma_d}\n")
-            f.write(f"sigma_ang: {self.pcn.bvc_layer.sigma_ang}\n")
-            f.write(f"num_place_cells: {self.pcn.num_pc}\n")
-            f.write(f"num_bvcs: {self.pcn.num_bvc}\n")
-            f.write(f"num_bvc_per_dir: {self.num_bvc_per_dir}\n")
-            f.write(f"n_hd_bvc: {self.n_hd_bvc}\n")
-            f.write(f"n_hd_hdn: {self.n_hd_hdn}\n")
-            f.write(f"run_time_hours: {self.run_time_minutes / 60}\n")
-            f.write(f"num_simulation_steps: {self.num_steps}\n")
-
-        files_saved.append("parameters.txt")
+        # Ensure directories exist
+        os.makedirs(self.hmap_dir, exist_ok=True)
+        os.makedirs(self.network_dir, exist_ok=True)
 
         # Save the Place Cell Network (PCN)
         if include_pcn:
-            with open(f"{self.file_prefix}pcn.pkl", "wb") as output:
+            pcn_path = os.path.join(self.network_dir, "pcn.pkl")
+            with open(pcn_path, "wb") as output:
                 pickle.dump(self.pcn, output)
-                files_saved.append("pcn.pkl")
+                files_saved.append(pcn_path)
+
+        # Save the Reward Cell Network (RCN)
+        if include_rcn:
+            rcn_path = os.path.join(self.network_dir, "rcn.pkl")
+            with open(rcn_path, "wb") as output:
+                pickle.dump(self.rcn, output)
+                files_saved.append(rcn_path)
 
         # Save the history maps if specified
         if include_hmaps:
-            with open(f"{self.file_prefix}hmap_loc.pkl", "wb") as output:
+            hmap_loc_path = os.path.join(self.hmap_dir, "hmap_loc.pkl")
+            with open(hmap_loc_path, "wb") as output:
                 pickle.dump(self.hmap_loc[: self.step_count], output)
-                files_saved.append("hmap_loc.pkl")
-            with open(f"{self.file_prefix}hmap_pcn.pkl", "wb") as output:
-                pickle.dump(self.hmap_pcn[: self.step_count], output)
-                files_saved.append("hmap_pcn.pkl")
-            with open(f"{self.file_prefix}hmap_bvc.pkl", "wb") as output:
-                pickle.dump(self.hmap_bvc[: self.step_count], output)
-                files_saved.append("hmap_bvc.pkl")
+                files_saved.append(hmap_loc_path)
+
+            hmap_pcn_path = os.path.join(self.hmap_dir, "hmap_pcn.pkl")
+            with open(hmap_pcn_path, "wb") as output:
+                pcn_cpu = self.hmap_pcn[: self.step_count].cpu().numpy()
+                pickle.dump(pcn_cpu, output)
+                files_saved.append(hmap_pcn_path)
+
+            hmap_hdn_path = os.path.join(self.hmap_dir, "hmap_hdn.pkl")
+            with open(hmap_hdn_path, "wb") as output:
+                pickle.dump(self.hmap_hdn[: self.step_count], output)
+                files_saved.append(hmap_hdn_path)
+
+            hmap_bvc_path = os.path.join(self.hmap_dir, "hmap_bvc.pkl")
+            with open(hmap_bvc_path, "wb") as output:
+                bvc_cpu = self.hmap_bvc[: self.step_count].cpu().numpy()
+                pickle.dump(bvc_cpu, output)
+                files_saved.append(hmap_bvc_path)
+
+        # Show a message box to confirm saving
+        root = tk.Tk()
+        root.withdraw()  # Hide the main window
+        root.attributes("-topmost", True)  # Always keep the window on top
+        root.update()
+        messagebox.showinfo("Information", "Press OK to save data")
+        root.destroy()  # Destroy the main window
+
+        self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
 
         print(f"Files Saved: {files_saved}")
         print("Saving Done!")
-        self.done = True
 
     def clear(self):
         """
-        Clears the saved state files for the Place Cell Network (PCN), Reward Cell Network (RCN),
-        and the history maps by removing their corresponding pickle files.
+        Clears all saved state files by removing all files in the hmap and network directories.
         """
-        files_to_remove = [
-            "pcn.pkl",
-            # "rcn.pkl",
-            "hmap_loc.pkl",
-            "hmap_pcn.pkl",
-            "hmap_bvc.pkl",
-            "hmap_hdn.pkl",
-        ]
+        # Clear network directory
+        if os.path.exists(self.network_dir):
+            for file in os.listdir(self.network_dir):
+                file_path = os.path.join(self.network_dir, file)
+                try:
+                    os.remove(file_path)
+                    print(f"Removed {file_path}")
+                except Exception as e:
+                    print(f"Error removing {file_path}: {e}")
 
-        for file in files_to_remove:
-            try:
-                os.remove(self.file_prefix + file)
-            except FileNotFoundError:
-                pass  # Ignore if the file does not exist
-
-        print("State files cleared.")
+        # Clear hmap directory
+        if os.path.exists(self.hmap_dir):
+            for file in os.listdir(self.hmap_dir):
+                file_path = os.path.join(self.hmap_dir, file)
+                try:
+                    os.remove(file_path)
+                    print(f"Removed {file_path}")
+                except Exception as e:
+                    print(f"Error removing {file_path}: {e}")
