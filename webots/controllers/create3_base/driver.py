@@ -270,6 +270,8 @@ class Driver(Supervisor):
                 self.pcn = pickle.load(f)
                 self.pcn.reset_activations()
                 print("Loaded existing PCN from", network_path)
+                self.pcn.device = device
+                self.pcn.bvc_layer.device = device
         except:
             bvc = BoundaryVectorCellLayer(
                 n_res=self.lidar_resolution,
@@ -323,6 +325,7 @@ class Driver(Supervisor):
             with open(network_path, "rb") as f:
                 self.rcn = pickle.load(f)
                 print("Loaded existing RCN from", network_path)
+                self.rcn.device = device
         except:
             self.rcn = RewardCellLayer(
                 num_place_cells=num_place_cells,
@@ -550,6 +553,7 @@ class Driver(Supervisor):
             hd_activations=self.hd_activations,
             collided=torch.any(self.collided),
         )
+        self.pcn.bvc_layer.plot_activation(self.boundaries.cpu())
 
         # Advance simulation one timestep
         self.step(self.timestep)
