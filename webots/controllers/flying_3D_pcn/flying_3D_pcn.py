@@ -13,7 +13,7 @@ from core.robot.robot_mode import RobotMode
 
 run_time_hours = 2
 
-preferred_va = [-1.2, -0.6, 0.0, 0.6, 1.2]
+phi_vert_preferred = [-1.2, -0.6, 0.0, 0.6, 1.2]
 sigma_rs = [0.5] * len(phi_vert_preferred)
 sigma_thetas = [0.01] * len(phi_vert_preferred)
 sigma_phis = [0.01] * len(phi_vert_preferred)
@@ -21,6 +21,10 @@ scaling_factors = [1] * len(phi_vert_preferred)
 visual_bvc = False
 n_hd_bvc = 8
 n_hd_hdn = 20
+
+num_place_cells = 5000
+num_bvc_per_dir = 50
+max_dist = 5
 
 start_location = [1, 1]
 goal_location = [-1, 1]
@@ -38,10 +42,12 @@ bot.initialization(
     sigma_thetas=sigma_thetas,
     sigma_phis=sigma_phis,
     scaling_factors=scaling_factors,
-    num_bvc_per_dir=num_bvc_per_dir,
     visual_bvc=visual_bvc,
     n_hd_bvc=n_hd_bvc,
     n_hd_hdn=n_hd_hdn,
+    max_dist=max_dist,
+    num_place_cells=num_place_cells,
+    num_bvc_per_dir=num_bvc_per_dir,
 )
 
 bot.run()

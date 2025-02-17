@@ -6,6 +6,7 @@ import os
 from typing import Optional, List
 from controller import Supervisor
 from tkinter import N, messagebox
+import tkinter as tk
 
 
 # Add root directory to python to be able to import
@@ -92,12 +93,12 @@ class DriverFlying(Supervisor):
             (self.num_steps, 3)
         )  # coordinates in the format [X, Z, Y]
         self.hmap_pcn = np.zeros(
-            (self.num_steps, self.num_place_cells)
+            (self.num_steps, num_place_cells)
         )  # place cell activations
         self.hmap_bvc = np.zeros(
             (
                 self.num_steps,
-                len(self.phi_vert_preferred) * self.n_hd_bvc * self.num_bvc_per_dir,
+                len(phi_vert_preferred) * n_hd_bvc * num_bvc_per_dir,
             )
         )  # BVC cell activations
 
@@ -169,6 +170,7 @@ class DriverFlying(Supervisor):
         self.robot.resetPhysics()
 
     def load_pcn(
+        self,
         num_place_cells: int,
         n_hd_bvc: int,
         n_hd_hdn: int,
@@ -191,6 +193,8 @@ class DriverFlying(Supervisor):
                 self.pcn = pickle.load(f)
                 self.pcn.reset_activations()
                 print("Loaded existing Place Cell Network.")
+                self.pcn.device = device
+                self.pcn.bvc_layer.device = device
         except:
 
             # Initialize BVC layer with per-layer sigma values
@@ -203,8 +207,10 @@ class DriverFlying(Supervisor):
                 sigma_phis=sigma_phis,
                 scaling_factors=scaling_factors,
                 num_bvc_per_dir=num_bvc_per_dir,
+                input_rows=input_rows,
+                input_cols=input_cols,
                 bottom_cutoff_percentage=1.0,
-                device=self.device,
+                device=device,
             )
 
             self.pcn = PlaceCellLayer(
@@ -213,7 +219,7 @@ class DriverFlying(Supervisor):
                 timestep=timestep,
                 n_hd=n_hd_hdn,
                 w_in_init_ratio=0.50,
-                device=self.device,
+                device=device,
             )
 
             print(
