@@ -1,0 +1,15 @@
+{
+  "mode": "LEARN_OJAS",
+  "movement_method": "RANDOM",
+  "bvc_params": {
+    "sigma_ang": 2.0,
+    "sigma_d": 0.7,
+    "max_dist": 12.0,
+    "num_bvc_per_dir": 60
+  },
+  "pc_params": {
+    "num_place_cells": 200,
+    "n_hd": 8
+  },
+  "extra_info": {}
+}
