@@ -872,29 +872,27 @@ class Driver(Supervisor):
                 pickle.dump(self.pcn, output)
                 files_saved.append(pcn_path)
 
-    def clear(self):
-        """
-        Clears all saved state files by removing all files in the hmap and network directories.
-        """
-        # Clear network directory
-        if os.path.exists(self.network_dir):
-            for file in os.listdir(self.network_dir):
-                file_path = os.path.join(self.network_dir, file)
-                try:
-                    os.remove(file_path)
-                    print(f"Removed {file_path}")
-                except Exception as e:
-                    print(f"Error removing {file_path}: {e}")
+        # Save the Reward Cell Network (RCN)
+        if include_rcn:
+            rcn_path = os.path.join(self.network_dir, "rcn.pkl")
+            with open(rcn_path, "wb") as output:
+                pickle.dump(self.rcn, output)
+                files_saved.append(rcn_path)
 
-        # Clear hmap directory
-        if os.path.exists(self.hmap_dir):
-            for file in os.listdir(self.hmap_dir):
-                file_path = os.path.join(self.hmap_dir, file)
-                try:
-                    os.remove(file_path)
-                    print(f"Removed {file_path}")
-                except Exception as e:
-                    print(f"Error removing {file_path}: {e}")
+        # Save the history maps if specified
+        if include_hmaps:
+            hmap_loc_path = os.path.join(self.hmap_dir, "hmap_loc.pkl")
+            with open(hmap_loc_path, "wb") as output:
+                pickle.dump(self.hmap_loc[: self.step_count], output)
+                files_saved.append(hmap_loc_path)
+
+            hmap_pcn_path = os.path.join(self.hmap_dir, "hmap_pcn.pkl")
+            with open(hmap_pcn_path, "wb") as output:
+                pcn_cpu = self.hmap_pcn[: self.step_count].cpu().numpy()
+                pickle.dump(pcn_cpu, output)
+                files_saved.append(hmap_pcn_path)
+
+            hmap_hdn_path = os.path.join(self.hmap_dir, "hmap_hdn.pkl")
             with open(hmap_hdn_path, "wb") as output:
                 pickle.dump(self.hmap_hdn[: self.step_count], output)
                 files_saved.append(hmap_hdn_path)
