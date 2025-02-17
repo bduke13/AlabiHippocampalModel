@@ -553,7 +553,6 @@ class Driver(Supervisor):
             hd_activations=self.hd_activations,
             collided=torch.any(self.collided),
         )
-        self.pcn.bvc_layer.plot_activation(self.boundaries.cpu())
 
         # Advance simulation one timestep
         self.step(self.timestep)
