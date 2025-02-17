@@ -20,7 +20,7 @@ class BoundaryVectorCellLayer3D:
         self,
         max_dist: float,
         n_hd: int,
-        preferred_vertical_angles: list = [0],
+        phi_vert_preferred: list = [0],
         sigma_rs: list = [0.3],
         sigma_thetas: list = [0.025],
         sigma_phis: list = [0.025],
@@ -37,7 +37,7 @@ class BoundaryVectorCellLayer3D:
         Args:
             max_dist: The maximum radial distance that the BVCs are tuned to.
             n_hd: Number of horizontal directions (azimuth) to evenly distribute axis of BVCs along.
-            preferred_vertical_angles: A list of preferred vertical angles (in radians) to distribute the BVCs along.
+            phi_vert_preferred: A list of preferred vertical angles (in radians) to distribute the BVCs along.
             sigma_rs: A list of distance-tuning sigmas, one per group of BVCs where the standard deviation is the radius of the BVC.
             sigma_thetas: A list of horizontal-angle-tuning sigmas, one per group of BVCs.
             sigma_phis: A list of vertical-angle-tuning sigmas, one per group of BVCs.
@@ -63,8 +63,8 @@ class BoundaryVectorCellLayer3D:
         d_i = np.tile(d_i, n_hd)  # shape: (n_hd * num_bvc_per_dir,)
 
         # We will create one set of BVCs for each preferred_vertical_angle
-        # so total BVC count = (n_hd * num_bvc_per_dir) * len(preferred_vertical_angles).
-        self.num_bvc = num_bvc_per_dir * n_hd * len(preferred_vertical_angles)
+        # so total BVC count = (n_hd * num_bvc_per_dir) * len(phi_vert_preferred).
+        self.num_bvc = num_bvc_per_dir * n_hd * len(phi_vert_preferred)
 
         # Prepare lists to hold repeated parameters for each group
         d_i_all = []
@@ -76,7 +76,7 @@ class BoundaryVectorCellLayer3D:
         scaling_factors_all = []
 
         # Populate parameter arrays for each vertical angle group
-        for idx, vert_angle in enumerate(preferred_vertical_angles):
+        for idx, vert_angle in enumerate(phi_vert_preferred):
             num_neurons = len(phi_horiz)
             d_i_all.extend(d_i)
             phi_i_all.extend(phi_horiz)
@@ -379,7 +379,7 @@ if __name__ == "__main__":
         radius_min, radius_max, (input_rows, input_cols)
     )
 
-    preferred_vertical_angles = [0, 0.3, 0.6]  # in radians
+    phi_vert_preferred = [0, 0.3, 0.6]  # in radians
     sigma_rs = [0.2, 0.2, 0.2]
     sigma_thetas = [0.025, 0.05, 0.05]
     sigma_phis = [0.025, 0.1, 0.1]
@@ -389,7 +389,7 @@ if __name__ == "__main__":
     bvc_layer_3d = BoundaryVectorCellLayer3D(
         max_dist=12.0,
         n_hd=8,
-        preferred_vertical_angles=preferred_vertical_angles,
+        phi_vert_preferred=phi_vert_preferred,
         sigma_rs=sigma_rs,
         sigma_thetas=sigma_thetas,
         sigma_phis=sigma_phis,
