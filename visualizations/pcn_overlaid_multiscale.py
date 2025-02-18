@@ -7,6 +7,7 @@ from typing import Optional, List
 
 # Hardcoded world name
 WORLD_NAME = "20x20"
+CONTROLLER_NAME = "multiscale_controller"
 
 def load_pickle(file_path):
     """Load a pickle file from the given path."""
@@ -15,7 +16,7 @@ def load_pickle(file_path):
 
 def load_hmaps_from_world(num_scales: int):
     """Load hmap data based on the hardcoded world name, supporting multiple scales."""
-    base_path = f"webots/controllers/create3_base/pkl/{WORLD_NAME}/hmaps"
+    base_path = f"webots/controllers/{CONTROLLER_NAME}/pkl/{WORLD_NAME}/hmaps"
     
     # Load location map
     hmap_loc = load_pickle(os.path.join(base_path, "hmap_loc.pkl"))
@@ -214,10 +215,9 @@ if __name__ == "__main__":
     hmap_x=hmap_x,
     hmap_y=hmap_y,
     gridsize=100,
-    num_cells_to_sample=10,
     show_plot=True,
-    save_path="specific_cell.png",
-    scale_idx=0,
+    num_cells_to_sample=5,
+    scale_idx=2,
     plot_most_active=False,  
     )
 

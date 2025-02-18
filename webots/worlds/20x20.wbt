@@ -14,7 +14,7 @@ WorldInfo {
 }
 Viewpoint {
   orientation -0.7071057814660382 0.7071077809056435 5.551115123136879e-17 3.1415966524690035
-  position -2.3951173869442046e-05 41.417647036630704 2.3954741839735198e-05
+  position 0.6754288305783366 40.82651170506043 -0.004693901566912073
   near 0.1
   follow "Create"
   followType "None"
@@ -51,7 +51,7 @@ Pose {
 DEF agent Create {
   translation 0 0.0441865 0
   rotation -0.6607352787486408 0.5303053028717288 0.5312298722427797 1.9727887896457816
-  controller "create3_base"
+  controller "multiscale_controller"
   supervisor TRUE
   bodySlot [
     Solid {

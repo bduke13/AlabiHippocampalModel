@@ -44,21 +44,21 @@ def get_world_name(bot):
 SCALES_DEFS = {
     "small": {
         "name": "small",
-        "num_pc": 1000,
-        "sigma_r": 1,
-        "sigma_theta": 0.01,
+        "num_pc": 2000,
+        "sigma_r": 0.5,
+        "sigma_theta": 1,
     },
     "medium": {
         "name": "medium",
-        "num_pc": 300,
-        "sigma_r": 2,
-        "sigma_theta": 0.05,
+        "num_pc": 1000,
+        "sigma_r": 1,
+        "sigma_theta": 2,
     },
     "large": {
         "name": "large",
-        "num_pc": 100,
+        "num_pc": 500,
         "sigma_r": 3,
-        "sigma_theta": 0.1,
+        "sigma_theta": 3,
     }
 }
 
@@ -129,12 +129,17 @@ def run_bot(mode, corners=None, save_data=False, **kwargs):
             scale_names = kwargs.get("scale_names", [])
             scales_list = compile_scales(scale_names)
 
+            # Determine start location
+            start_loc = kwargs.get("start_loc", corner)
+            if kwargs.get("randomize_start_loc", False):
+                start_loc = corner
+
             # We pass all relevant arguments to driver.initialization
             bot.initialization(
                 mode=mode,
                 run_time_hours=kwargs.get("run_time_hours", 2),
                 randomize_start_loc=kwargs.get("randomize_start_loc", True),
-                start_loc=corner,
+                start_loc=start_loc,
                 enable_ojas=kwargs.get("enable_ojas", None),
                 enable_stdp=kwargs.get("enable_stdp", None),
                 scales=scales_list,
@@ -168,21 +173,23 @@ if __name__ == "__main__":
         "LEARN_HEBB": RobotMode.LEARN_HEBB,
         "DMTP": RobotMode.DMTP,
         "EXPLOIT": RobotMode.EXPLOIT,
-        "EXPLOIT_SAVE": RobotMode.EXPLOIT,  
+        "EXPLOIT_SAVE": RobotMode.EXPLOIT,
+        "PLOTTING": RobotMode.PLOTTING  
     }
     
-    # "LEARN_HEBB", "DMTP", "EXPLOIT", "EXPLOIT_SAVE"
-    SELECTED_MODE = "LEARN_OJAS"
-    start_loc = [4, -4]
+    SELECTED_MODE = "EXPLOIT"
+    corners = [[8,-8], [-8,-8], [8,8]]
+    start_loc = corners[0]
     goal_location = [-7, 7]    
-    randomize_start_loc = True
+    randomize_start_loc = False
+    # ["small", "medium", "large"]
     scale_names = ["small", "medium", "large"]
     run_time_hours = 3
     max_dist = 30
 
     MODE_PARAMS = {
         "LEARN_OJAS": {
-            "corners": [[-8, 8]],
+            "corners": corners,
             "start_loc": start_loc,
             "goal_location": goal_location,
             "max_dist": max_dist,
@@ -195,7 +202,7 @@ if __name__ == "__main__":
             "save_data": False,     
         },
         "LEARN_HEBB": {
-            "corners": [[-8, 8], [8, 8]],
+            "corners": corners,
             "start_loc": start_loc,
             "goal_location": goal_location,
             "max_dist": max_dist,
@@ -208,7 +215,7 @@ if __name__ == "__main__":
             "save_data": False,
         },
         "DMTP": {
-            "corners": [[-2, -2], [2, 2]],
+            "corners": corners,
             "start_loc": start_loc,
             "goal_location": goal_location,
             "max_dist": max_dist,
@@ -221,7 +228,7 @@ if __name__ == "__main__":
             "save_data": False,
         },
         "EXPLOIT": {
-            "corners": [[-8, 8], [8, -8]],
+            "corners": corners,
             "start_loc": start_loc,
             "goal_location": goal_location,
             "max_dist": max_dist,
@@ -234,7 +241,7 @@ if __name__ == "__main__":
             "save_data": False,
         },
         "EXPLOIT_SAVE": {
-            "corners": [[8, -8]],
+            "corners": corners,
             "start_loc": start_loc,
             "goal_location": goal_location,
             "max_dist": max_dist,
@@ -245,6 +252,19 @@ if __name__ == "__main__":
             "run_time_hours": run_time_hours,
             "num_loops": 3, 
             "save_data": True,
+        },
+        "PLOTTING": {
+            "corners": corners,
+            "start_loc": start_loc,
+            "goal_location": goal_location,
+            "max_dist": max_dist,
+            "randomize_start_loc": randomize_start_loc,
+            "scale_names": scale_names,
+            "enable_ojas": False,
+            "enable_stdp": False,
+            "run_time_hours": run_time_hours,
+            "num_loops": 1,
+            "save_data": False,
         }
     }
     

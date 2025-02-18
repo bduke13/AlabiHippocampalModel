@@ -104,7 +104,7 @@ class BoundaryVectorCellLayer:
 
     def plot_activation(self, distances: np.ndarray) -> None:
         """Visualizes the BVC activations in a polar plot and overlays the boundary (LiDAR readings)."""
-        distances_tensor = torch.tensor(distances, dtype=self.dtype, device=self.device)
+        distances_tensor = distances.clone().detach().to(self.device)
         activations = self.get_bvc_activation(distances_tensor).detach().cpu().numpy()
 
         fig, ax = plt.subplots(figsize=(8, 8), subplot_kw={"projection": "polar"})
