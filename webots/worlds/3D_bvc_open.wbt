@@ -2,7 +2,6 @@
 
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/robots/irobot/create/protos/Create.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
-EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/Roughcast.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/apartment_structure/protos/Wall.proto"
 
@@ -16,8 +15,8 @@ WorldInfo {
   coordinateSystem "NUE"
 }
 Viewpoint {
-  orientation -0.21587662066476845 -0.215127248937628 -0.9524271895609068 1.6193408704874164
-  position -2.92554171592837 54.83748685661779 -25.483586118354445
+  orientation -0.7071057814660382 0.7071077809056435 5.551115123136879e-17 3.1415966524690035
+  position 4.0488804490869055e-16 58.35051674168152 1.9434626155617145e-14
   near 0.1
   follow "Create"
   followType "None"
@@ -78,54 +77,6 @@ DEF agent Create {
       ]
     }
   ]
-}
-Wall {
-  translation 0 1 -7.13582e-06
-  rotation 1 0 0 2.85387e-06
-  name "wall(3)"
-  size 7 5 0.1
-  appearance Roughcast {
-    colorOverride 0.8 0.45 0.25
-    textureTransform TextureTransform {
-      scale 1 2.4
-    }
-  }
-}
-Wall {
-  translation 0 -2.26631 2.26984
-  rotation -1 0 0 0.785395307179586
-  name "wall(1)"
-  size 7 5 0.3
-  appearance Roughcast {
-    colorOverride 0.8 0.45 0.25
-    textureTransform TextureTransform {
-      scale 1 2.4
-    }
-  }
-}
-Wall {
-  translation -3.36826e-07 0.91 8.97154e-07
-  rotation -4.399399999999564e-07 0.9999999999999009 -6.981579999999308e-08 1.5708
-  name "wall(4)"
-  size 7 5 0.1
-  appearance Roughcast {
-    colorOverride 0.8 0.45 0.25
-    textureTransform TextureTransform {
-      scale 1 2.4
-    }
-  }
-}
-Wall {
-  translation 2.1952 -2.54925 -7.2387e-06
-  rotation 0.35740612701840735 -0.8628563066501258 -0.3574071270187627 -1.7177753071795863
-  name "wall(2)"
-  size 7 5 0.3
-  appearance Roughcast {
-    colorOverride 0.8 0.45 0.25
-    textureTransform TextureTransform {
-      scale 1 2.4
-    }
-  }
 }
 Wall {
   translation 0 2.9 0
