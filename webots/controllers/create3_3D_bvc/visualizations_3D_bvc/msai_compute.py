@@ -29,9 +29,9 @@ def process_hmap(path):
         model_name, env_name = parse_path_for_model_and_env(path)
 
         # Load data
-        hmap_x, hmap_y, hmap_pcn = load_hmaps(
-            path, hmap_names=["hmap_x", "hmap_y", "hmap_pcn"]
-        )
+        hmap_loc, hmap_pcn = load_hmaps(hmap_names=["hmap_loc", "hmap_pcn"])
+        hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
+
         if hmap_pcn is None or not isinstance(hmap_pcn, np.ndarray):
             raise ValueError(f"hmap_pcn not loaded or invalid for {path}")
 
@@ -74,7 +74,8 @@ def process_hmap(path):
 if __name__ == "__main__":
 
     # Parameters
-    root_path = "IJCNN"
+    root_path = os.path.join(CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl", WORLD_NAME)
+    # root_path = "IJCNN"
     desired_path_ends = ["inside_shallow", "inside_medium", "inside_steep", "upright"]
 
     # Get and filter directories
@@ -121,6 +122,7 @@ if __name__ == "__main__":
 
     # Save results to CSV
     df = pd.DataFrame(data_rows)
+
     output_dir = "webots/controllers/create3_3D_bvc/visualizations_3D_bvc/outputs/"
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, "cosine_similarities.csv")
