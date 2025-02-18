@@ -50,6 +50,20 @@ class BoundaryVectorCellLayer3D:
             dtype: PyTorch tensor data type.
             device: PyTorch device (e.g., "cpu" or "cuda").
         """
+        # Validate that all parameter lists have the same length
+        param_lengths = {
+            "phi_vert_preferred": len(phi_vert_preferred),
+            "sigma_rs": len(sigma_rs),
+            "sigma_thetas": len(sigma_thetas),
+            "sigma_phis": len(sigma_phis),
+            "scaling_factors": len(scaling_factors),
+        }
+
+        if len(set(param_lengths.values())) != 1:
+            raise ValueError(
+                f"All parameter lists must have the same length as phi_vert_preferred. "
+                f"Got lengths: {param_lengths}"
+            )
 
         self.device = device
         self.dtype = dtype
