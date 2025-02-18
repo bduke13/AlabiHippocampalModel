@@ -74,14 +74,11 @@ def plot_rcn_activation(
 
 
 if __name__ == "__main__":
-    print("hi")
-    from visualizations.vis_utils import (
+    from vis_utils import (
         load_hmaps,
         convert_xzy_hmaps,
         load_layer_pkl,
     )
-
-    print("hello")
 
     # Load hmap data
     hmap_loc, hmap_pcn = load_hmaps()

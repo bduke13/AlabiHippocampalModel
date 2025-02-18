@@ -7,17 +7,13 @@ import sys
 import os
 from pathlib import Path
 
-from visualizations.pcn_overlayed import WORLD_NAME
-
 # Get the absolute path of the project root
 project_root = Path(__file__).resolve().parent.parent  # Adjust this if needed
 sys.path.append(str(project_root))
 
 CONTROLLER_PATH_PREFIX = "webots/controllers/"
-CONTROLLER_NAME = "create3_3D_bvc"
-WORLD_NAME = "3D_bvc_open"
-# CONTROLLER_NAME = "create3_base"
-# WORLD_NAME = "iCreateBotCross"
+CONTROLLER_NAME = "create3_base"
+WORLD_NAME = "iCreateBotCross"
 
 # Define output directories relative to project root
 OUTPUT_DIR = os.path.join(

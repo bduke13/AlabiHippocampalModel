@@ -141,8 +141,13 @@ def generate_html_report(cell_indices, output_dir):
 
 
 def generate_place_cells_report(
-    hmap_x, hmap_y, hmap_pcn, output_dir="visualizations/outputs/", open_browser=True
+    hmap_x, hmap_y, hmap_pcn, output_dir=None, open_browser=True
 ):
+    # Use project root from vis_utils if output_dir not specified
+    if output_dir is None:
+        output_dir = os.path.join(
+            str(project_root), "outputs", WORLD_NAME, "place_cells"
+        )
     # Create output directory and assets subdirectory
     assets_dir = os.path.join(output_dir, "html_assets")
     os.makedirs(assets_dir, exist_ok=True)
@@ -225,10 +230,10 @@ def generate_place_cells_report(
 
 # %%
 if __name__ == "__main__":
-
     from vis_utils import (
         load_hmaps,
         convert_xzy_hmaps,
+        OUTPUT_DIR,
     )
 
     # Load hmap data from hardcoded world name
@@ -236,4 +241,4 @@ if __name__ == "__main__":
     hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
 
     # %%
-    generate_place_cells_report(hmap_x, hmap_y, hmap_pcn)
+    generate_place_cells_report(hmap_x, hmap_y, hmap_pcn, output_dir=OUTPUT_DIR)
