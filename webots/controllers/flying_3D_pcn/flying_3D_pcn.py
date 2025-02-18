@@ -14,15 +14,15 @@ from core.robot.robot_mode import RobotMode
 run_time_hours = 2
 
 phi_vert_preferred = [-1.2, -0.6, 0.0, 0.6, 1.2]
-sigma_rs = [0.5] * len(phi_vert_preferred)
+sigma_rs = [0.3] * len(phi_vert_preferred)
 sigma_thetas = [0.01] * len(phi_vert_preferred)
 sigma_phis = [0.01] * len(phi_vert_preferred)
 scaling_factors = [1] * len(phi_vert_preferred)
-visual_bvc = False
+visual_bvc = True
 n_hd_bvc = 8
 n_hd_hdn = 20
 
-num_place_cells = 5000
+num_place_cells = 200
 num_bvc_per_dir = 50
 max_dist = 5
 
