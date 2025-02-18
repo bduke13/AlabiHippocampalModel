@@ -47,18 +47,28 @@ SCALES_DEFS = {
         "num_pc": 2000,
         "sigma_r": 0.5,
         "sigma_theta": 1,
+        "rcn_learning_rate": 0.1,
     },
     "medium": {
         "name": "medium",
         "num_pc": 1000,
         "sigma_r": 1,
         "sigma_theta": 2,
+        "rcn_learning_rate": 0.05,
     },
     "large": {
         "name": "large",
         "num_pc": 500,
         "sigma_r": 3,
         "sigma_theta": 3,
+        "rcn_learning_rate": 0.01,
+    },
+    "xlarge": {
+        "name": "xlarge",
+        "num_pc": 200,
+        "sigma_r": 4,
+        "sigma_theta": 4,
+        "rcn_learning_rate": 0.005,
     }
 }
 
@@ -129,12 +139,8 @@ def run_bot(mode, corners=None, save_data=False, **kwargs):
             scale_names = kwargs.get("scale_names", [])
             scales_list = compile_scales(scale_names)
 
-            # Determine start location
-            start_loc = kwargs.get("start_loc", corner)
-            if kwargs.get("randomize_start_loc", False):
-                start_loc = corner
+            rcn_learning_rates = [scale["rcn_learning_rate"] for scale in scales_list]
 
-            # We pass all relevant arguments to driver.initialization
             bot.initialization(
                 mode=mode,
                 run_time_hours=kwargs.get("run_time_hours", 2),
@@ -143,6 +149,7 @@ def run_bot(mode, corners=None, save_data=False, **kwargs):
                 enable_ojas=kwargs.get("enable_ojas", None),
                 enable_stdp=kwargs.get("enable_stdp", None),
                 scales=scales_list,
+                rcn_learning_rates=rcn_learning_rates,  # <-- NEW: Pass learning rates list
                 stats_collector=stats_collector_instance,
                 trial_id=trial_id,
                 world_name=world_name,
@@ -151,6 +158,7 @@ def run_bot(mode, corners=None, save_data=False, **kwargs):
             )
 
             bot.trial_id = trial_id
+            print(f"[INFO] Using scales: {scale_names}")
             bot.run()
 
             # If in exploit mode, reload the world between runs
@@ -179,12 +187,12 @@ if __name__ == "__main__":
     
     SELECTED_MODE = "EXPLOIT"
     corners = [[8,-8], [-8,-8], [8,8]]
-    start_loc = corners[0]
+    start_loc =  [7, -7] 
     goal_location = [-7, 7]    
     randomize_start_loc = False
     # ["small", "medium", "large"]
-    scale_names = ["small", "medium", "large"]
-    run_time_hours = 3
+    scale_names =["small", "medium", "large"]
+    run_time_hours = 4
     max_dist = 30
 
     MODE_PARAMS = {

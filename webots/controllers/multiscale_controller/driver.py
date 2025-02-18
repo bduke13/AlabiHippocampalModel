@@ -38,6 +38,7 @@ class Driver(Supervisor):
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
         scales: Optional[List[Dict[str, Any]]] = None,
+        rcn_learning_rates: Optional[List[float]] = None,
         stats_collector: Optional[stats_collector] = None,
         trial_id: Optional[str] = None,
         world_name: Optional[str] = None,
@@ -101,6 +102,9 @@ class Driver(Supervisor):
                 "sigma_theta": 1.0
             }]
         self.scales = scales
+        
+        # Store learning rates for later use in RCN initialization
+        self.rcn_learning_rates = rcn_learning_rates if rcn_learning_rates is not None else [0.1] * len(scales)
 
         # Random or fixed start
         if randomize_start_loc:
@@ -162,9 +166,15 @@ class Driver(Supervisor):
         # Head direction layer
         self.head_direction_layer = HeadDirectionLayer(num_cells=self.n_hd, device="cpu")
 
+        # Initialize alpha for blending rewards across scales
+        self.alpha = torch.tensor(0.5, dtype=self.dtype, device=self.device)
+
         # Prep for logging
         self.hmap_loc = np.zeros((self.num_steps, 3))
         self.hmap_hdn = torch.zeros((self.num_steps, self.n_hd), device="cpu", dtype=torch.float32)
+
+        # Store alpha values over time (1 value per step)
+        self.hmap_alpha = torch.zeros((self.num_steps), device="cpu", dtype=torch.float32)
 
         # For multi-scale place cell logs
         self.hmap_pcn_activities = []
@@ -182,13 +192,12 @@ class Driver(Supervisor):
         self.rotation_loop_count = 0
         self.steps_since_last_loop = 0
         self.last_heading_deg = None
+        self.done = False
         
         # Parameters for loop detection
         self.LOOP_THRESHOLD = 3  # Number of loops before forcing exploration
         self.MAX_STEPS_BETWEEN_LOOPS = 5  # Max steps between loops to count towards threshold
-
-        # Exploration-related
-        self.force_explore_count = 0  # Number of steps to force exploration when stuck
+        self.force_explore_count = 0 # Number of steps to force exploration (init to 0)
 
         # Optionally keep a single-scale reference
         self.pcn = self.pcns[0] if self.pcns else None
@@ -245,24 +254,24 @@ class Driver(Supervisor):
         for i, scale_def in enumerate(self.scales):
             fname = f"rcn_scale_{i}.pkl"
             path = os.path.join(self.network_dir, fname)
-            rcn = self._load_or_init_rcn_for_scale(path, scale_def)
+            rcn = self._load_or_init_rcn_for_scale(path, scale_def, self.rcn_learning_rates[i])
             self.rcns.append(rcn)
 
-    def _load_or_init_rcn_for_scale(self, path, scale_def):
+    def _load_or_init_rcn_for_scale(self, path, scale_def, learning_rate):
         try:
             with open(path, "rb") as f:
                 rcn = pickle.load(f)
             print(f"[DRIVER] Loaded existing RCN from {path}")
         except:
-            print(f"[DRIVER] Initializing new RCN for {path}")
-            learning_rate = 0.1 if scale_def.get("sigma_r", 0.5) < 1.0 else 0.05
+            print(f"[DRIVER] Initializing new RCN for {path} with learning rate {learning_rate}")
             rcn = RewardCellLayer(
                 num_place_cells=scale_def["num_pc"],
                 num_replay=3,
-                learning_rate=learning_rate,
+                learning_rate=learning_rate,  # <-- Use the passed learning rate
                 device=self.device,
             )
         return rcn
+
 
     ########################################### RUN LOOP ###########################################
 
@@ -362,10 +371,18 @@ class Driver(Supervisor):
             self.rotation_accumulator = 0.0
             self.rotation_loop_count = 0
             self.steps_since_last_loop = 0
+        
+        if not hasattr(self, 'last_heading_deg') or self.last_heading_deg is None:
+            self.last_heading_deg = self.current_heading_deg
 
+        # Calculate heading difference
         heading_diff = self.current_heading_deg - getattr(self, 'last_heading_deg', self.current_heading_deg)
-        heading_diff = ((heading_diff + 180) % 360) - 180
+        heading_diff = ((heading_diff + 180) % 360) - 180  # Normalize to [-180, 180]
+
+        # Update rotation accumulator
         self.rotation_accumulator += abs(heading_diff)
+
+        # Update last_heading_deg AFTER calculating the difference
         self.last_heading_deg = self.current_heading_deg
 
         if self.rotation_accumulator >= 360.0:
@@ -379,7 +396,7 @@ class Driver(Supervisor):
                 self.rotation_loop_count = 0
                 self.rotation_accumulator = 0.0
                 self.steps_since_last_loop = 0
-                print(f"Detected {self.LOOP_THRESHOLD} consecutive loops within {self.MAX_STEPS_BETWEEN_LOOPS} steps!")
+                print(f"Detected {self.LOOP_THRESHOLD} consecutive loops within {self.MAX_STEPS_BETWEEN_LOOPS} steps")
                 self.force_explore_count = 5
                 self.explore()
                 return
@@ -407,29 +424,52 @@ class Driver(Supervisor):
             print("No valid scales selected. Defaulting to first available scale.")
             pot_rew_scales.append(torch.zeros(self.n_hd, dtype=self.dtype, device=self.device))
 
+        # Initialize alpha if not already done
+        if not hasattr(self, 'alpha'):
+            self.alpha = torch.tensor(0.5, dtype=self.dtype, device=self.device)
+
         # Normalize and blend across scales
         pot_rew_scales = torch.stack(pot_rew_scales)
         pot_rew_scales /= (pot_rew_scales.max(dim=1, keepdim=True)[0] + 1e-6)  # Normalize
 
         # Compute scale weighting (gradient-based)
-        grads = torch.sum(torch.abs(torch.diff(pot_rew_scales, dim=1)), dim=1)
-        alpha = grads[0] / (grads.sum() + 1e-6)
-        alpha = torch.clamp(alpha - 0.05, 0.0, 1.0)  # Apply small-scale bias
+        # Compute gradients for each scale
+        grads = torch.sum(torch.abs(torch.diff(pot_rew_scales, dim=1)), dim=1)  # Shape: (num_scales,)
 
-        # Blend using alpha
-        if len(pot_rew_scales) == 1:
-            combined_pot_rew = pot_rew_scales[0]
-        else:
-            combined_pot_rew = alpha * pot_rew_scales[0] + (1 - alpha) * pot_rew_scales[1]
+        # Normalize the gradients to sum to 1, ensuring proper mixing
+        mixing_weights = grads / (grads.sum() + 1e-6)  # Shape: (num_scales,)
+
+        # Ensure numerical stability by clamping
+        mixing_weights = torch.clamp(mixing_weights, min=0.0, max=1.0)
+
+        # Enforce sum to 1 in case of numerical drift
+        mixing_weights /= mixing_weights.sum()
+
+        # Weighted sum over all scales based on dynamic mixing_weights
+        combined_pot_rew = torch.sum(mixing_weights[:, None] * pot_rew_scales, dim=0)        
+
+        # # If the largest scale has the highest weight, use max speed; otherwise, use lower speed
+        # if mixing_weights[-1] > mixing_weights[0]:  # Large-scale dominates
+        #     self.max_speed = 10
+        # else:  # Small-scale dominates
+        #     self.max_speed = 4
+
+        self.alpha = grads[0] / (grads.sum() + 1e-6)
+        self.alpha = torch.clamp(self.alpha - 0.05, 0.0, 1.0)  # Apply small-scale bias
+
+        # Save alpha for the current step
+        if self.step_count < self.num_steps:
+            self.hmap_alpha[self.step_count] = self.alpha.clone().detach().cpu()
 
         #-------------------------------------------------------------------
         # 4) Wall avoidance logic
         #-------------------------------------------------------------------
+        # Roll boundaries so index 0 corresponds to "front", etc.
         boundaries_rolled = torch.roll(self.boundaries, shifts=len(self.boundaries)//2)
 
         num_points_per_hd = len(boundaries_rolled) // self.n_hd
         distances_per_hd = []
-        cancelled_angles = []  # Store cancelled angles
+        cancelled_angles = []  # optional: store which angles get penalized
 
         for i in range(self.n_hd):
             start_idx = i * num_points_per_hd
@@ -437,14 +477,28 @@ class Driver(Supervisor):
             min_dist  = torch.min(boundaries_rolled[start_idx:end_idx])
             distances_per_hd.append(min_dist)
 
-            if min_dist < 1.0:  # Assume these angles are penalized
+            if min_dist < 1.0:
+                # This heading is "too close" to a wall
                 cancelled_angles.append(i * (360 / self.n_hd))
 
         distances_per_hd = torch.tensor(distances_per_hd, device=self.device, dtype=self.dtype)
-        penalty_mask = distances_per_hd < 1
-        penalties = torch.exp(-1 * (1.0 - distances_per_hd))
+
+        # Compute penalty mask and apply an exponential penalty
+        penalty_mask = distances_per_hd < 1.0
+        # Example: penalty gets stronger as distance gets smaller (dist < 1)
+        penalties = torch.exp(-1.0 * (1.0 - distances_per_hd))  # tweak scale if desired
+
         combined_pot_rew[penalty_mask] *= penalties[penalty_mask]
-        combined_pot_rew /= (combined_pot_rew.sum())  # Renormalize
+
+        # Renormalize after penalty
+        combined_sum = combined_pot_rew.sum()
+        if combined_sum > 1e-6:
+            combined_pot_rew /= combined_sum
+        else:
+            # If everything got zeroed out, fallback to explore or skip
+            print("All directions heavily penalized. Forcing exploration.")
+            self.explore()
+            return
 
         #-------------------------------------------------------------------
         # 5) Compute action heading
@@ -457,114 +511,82 @@ class Driver(Supervisor):
         if action_angle < 0:
             action_angle += 2 * np.pi
 
-        # Convert to degrees and store
         self.action_heading_deg = float(torch.rad2deg(action_angle).item())
-        self.cancelled_angles_deg = cancelled_angles
 
         #-------------------------------------------------------------------
-        # 6) Convert action angle to a turn relative to current global heading
+        # 6) Execute movement with `tau_w` steps
         #-------------------------------------------------------------------
         angle_to_turn_deg = self.action_heading_deg - self.current_heading_deg
         angle_to_turn_deg = (angle_to_turn_deg + 180) % 360 - 180
         angle_to_turn = torch.deg2rad(torch.tensor(angle_to_turn_deg, dtype=self.dtype, device=self.device))
 
-        #-------------------------------------------------------------------
-        # 7) Plot the heading information
-        #-------------------------------------------------------------------
-        # self.plot_current_heading()
-
-        #-------------------------------------------------------------------
-        # 8) Execute the turn and optionally move forward
-        #-------------------------------------------------------------------
         self.turn(angle_to_turn.item())
-        self.forward()
+
+        # Move forward for `tau_w` steps
+        for _ in range(self.tau_w):
+            self.sense()
+            self.compute_pcn_activations()
+            self.update_hmaps()
+            self.forward()
+            self.check_goal_reached()
+
+            # Update rotation accumulator
+            heading_diff = self.current_heading_deg - getattr(self, 'last_heading_deg', self.current_heading_deg)
+            heading_diff = ((heading_diff + 180) % 360) - 180
+            self.rotation_accumulator += abs(heading_diff)
+            self.last_heading_deg = self.current_heading_deg
+
+            # Collision handling
+            if torch.any(self.collided):
+                print("Collision detected. Turning back and retrying.")
+                self.turn(np.pi)  # Reverse direction
+                for _ in range(self.tau_w):
+                    self.sense()
+                    self.compute_pcn_activations()
+                    self.update_hmaps()
+                    self.forward()
+                    self.check_goal_reached()
+                    if torch.any(self.collided):
+                        print("Still stuck after retry. Forcing future exploration.")
+                        self.force_explore_count = 5
+                        self.explore()
+                        return
+                break
+
+            if self.done:
+                return
 
         # Optionally re-sense
         self.sense()
         self.compute_pcn_activations()
         self.update_hmaps()
 
+
     def plot_current_heading(self):
         import matplotlib.pyplot as plt
 
         fig, ax = plt.subplots(subplot_kw={'projection': 'polar'})
+        current_heading_rad = (3 * np.pi / 2) - np.deg2rad(self.current_heading_deg)
+        action_heading_rad = (3 * np.pi / 2) - np.deg2rad(self.action_heading_deg) if hasattr(self, 'action_heading_deg') else None
+        cancelled_rad_list = [(3 * np.pi / 2) - np.deg2rad(deg) for deg in getattr(self, 'cancelled_angles_deg', [])]
 
-        #
-        # 1) Fix heading calculations to be consistent with rotated frame
-        #
-        current_heading_rad = np.deg2rad(self.current_heading_deg)
-        adjusted_current_heading_rad = (3 * np.pi / 2) - current_heading_rad
-
-        if hasattr(self, 'action_heading_deg'):
-            action_heading_rad = np.deg2rad(self.action_heading_deg)
-            adjusted_action_heading_rad = (3 * np.pi / 2) - action_heading_rad
-        else:
-            adjusted_action_heading_rad = None
-
-        #
-        # 2) Compute cancelled angles in radians (using proper adjustment)
-        #
-        if hasattr(self, 'cancelled_angles_deg') and self.cancelled_angles_deg:
-            cancelled_rad_list = [(3 * np.pi / 2) - np.deg2rad(deg) for deg in self.cancelled_angles_deg]
-        else:
-            cancelled_rad_list = []
-
-        #
-        # 3) LiDAR Readings
-        #
         angles = np.linspace(0, 2 * np.pi, len(self.boundaries), endpoint=False)
-        adjusted_lidar_angles = (angles + np.pi) % (2 * np.pi)
-        distances = self.boundaries.cpu().numpy().flatten()
-        ax.plot(adjusted_lidar_angles, distances, 'b-', label="Corrected LiDAR Readings")
-
-        #
-        # 4) Plot Current Heading (Red Arrow)
-        #
-        ax.quiver(
-            adjusted_current_heading_rad, 0,
-            np.cos(adjusted_current_heading_rad), np.sin(adjusted_current_heading_rad),
-            scale=1, scale_units='inches', color='r', label="Current Heading"
-        )
-
-        #
-        # 5) Plot Action Heading (Green Arrow)
-        #
-        if adjusted_action_heading_rad is not None:
-            ax.quiver(
-                adjusted_action_heading_rad, 0,
-                np.cos(adjusted_action_heading_rad), np.sin(adjusted_action_heading_rad),
-                scale=1, scale_units='inches', color='g', label="Action Heading"
-            )
-
-        #
-        # 6) Plot Cancelled Angles (Black 'X' Markers)
-        #
+        ax.plot((angles + np.pi) % (2 * np.pi), self.boundaries.cpu().numpy().flatten(), 'b-', label="Corrected LiDAR Readings")
+        ax.quiver(current_heading_rad, 0, np.cos(current_heading_rad), np.sin(current_heading_rad), scale=1, scale_units='inches', color='r', label="Current Heading")
+        if action_heading_rad is not None:
+            ax.quiver(action_heading_rad, 0, np.cos(action_heading_rad), np.sin(action_heading_rad), scale=1, scale_units='inches', color='g', label="Action Heading")
         if cancelled_rad_list:
-            # Use a fixed radius (e.g., 5) or take distances from LiDAR data if preferred
-            cancelled_radius = 4.5  # Can be tuned or based on LiDAR distances
-            ax.scatter(cancelled_rad_list, [cancelled_radius] * len(cancelled_rad_list),
-                    c='k', marker='x', s=50, label='Cancelled Angles')
+            ax.scatter(cancelled_rad_list, [4.5] * len(cancelled_rad_list), c='k', marker='x', s=50, label='Cancelled Angles')
 
-        #
-        # 7) Polar Plot Settings (Keep Rotated Frame)
-        #
         ax.set_theta_direction(-1)
         ax.set_theta_offset(-np.pi / 2)
-
         ax.set_rmax(5)
         ax.set_rticks([1, 2, 3, 4, 5])
         ax.set_rlabel_position(-22.5)
         ax.grid(True)
-
-        #
-        # 8) Display Angle Labels
-        #
-        ax.text(adjusted_current_heading_rad, 5, f'Heading: {self.current_heading_deg}°',
-                horizontalalignment='center', verticalalignment='bottom', color='red')
-
-        if adjusted_action_heading_rad is not None:
-            ax.text(adjusted_action_heading_rad, 5, f'Action: {self.action_heading_deg}°',
-                    horizontalalignment='center', verticalalignment='bottom', color='green')
+        ax.text(current_heading_rad, 5, f'Heading: {self.current_heading_deg}°', horizontalalignment='center', verticalalignment='bottom', color='red')
+        if action_heading_rad is not None:
+            ax.text(action_heading_rad, 5, f'Action: {self.action_heading_deg}°', horizontalalignment='center', verticalalignment='bottom', color='green')
 
         plt.show()
 
@@ -578,9 +600,6 @@ class Driver(Supervisor):
 
         # Update global heading (0–360)
         self.current_heading_deg = int(self.get_bearing_in_degrees(self.compass.getValues()))
-
-        # For EXPLOIT
-        self.last_heading_deg = self.current_heading_deg
 
         # Shift boundary data based on global heading
         self.boundaries = torch.roll(
@@ -651,6 +670,7 @@ class Driver(Supervisor):
         If reached and in the correct mode, call auto_pilot() and save logs.
         """
         curr_pos = self.robot.getField("translation").getSFVec3f()
+        time_limit = 45 # minutes
 
         if self.robot_mode in (RobotMode.LEARN_OJAS, RobotMode.LEARN_HEBB, RobotMode.PLOTTING) \
                 and self.getTime() >= 60 * self.run_time_minutes:
@@ -679,12 +699,34 @@ class Driver(Supervisor):
             torch.tensor([curr_pos[0], curr_pos[2]], dtype=self.dtype, device=self.device),
             atol=self.goal_r["exploit"]
         ):
-            print("Goal reached")
-            print(f"Total distance traveled: {self.compute_path_length()}")
-            print(f"Time taken: {self.getTime()}")
-
-            self.stop()
-            self.save()  # EXPLOIT doesn't save anything
+            if self.stats_collector:
+                # Update and save stats once
+                self.stats_collector.update_stat("trial_id", self.trial_id)
+                self.stats_collector.update_stat("start_location", self.start_loc)
+                self.stats_collector.update_stat("goal_location", self.goal_location)
+                self.stats_collector.update_stat("total_distance_traveled", round(self.compute_path_length(), 2))
+                self.stats_collector.update_stat("total_time_secs", round(self.getTime(), 2))
+                self.stats_collector.update_stat("success", self.getTime() <= time_limit * 60)
+                self.stats_collector.save_stats(self.trial_id)
+                
+                # Print stats
+                print(f"Trial {self.trial_id} completed.")
+                print(f"Start location: {self.start_loc}")
+                print(f"Goal location: {self.goal_location}")
+                print(f"Total distance traveled: {round(self.compute_path_length(), 2)} meters.")
+                print(f"Total time taken: {round(self.getTime(), 2)} seconds.")
+                print(f"Success: {self.getTime() <= time_limit * 60}")
+                
+                self.stop()
+                self.done = True
+                self.save()
+                return
+            else:
+                self.stop()
+                self.save()
+                self.done = True
+                self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
+                return
 
     ########################################### AUTO PILOT ###########################################
 
@@ -860,15 +902,15 @@ class Driver(Supervisor):
     
     def update_hmaps(self):
         """
-        Use self.pcn_activations_list to store into self.hmap_pcn_activities dynamically.
+        Store agent position, head direction activations, place cell activations, and alpha values.
         """
         curr_pos = self.robot.getField("translation").getSFVec3f()
 
         if self.step_count < self.num_steps:
-            # 1) record agent location
+            # 1) Record agent location
             self.hmap_loc[self.step_count] = curr_pos
 
-            # 2) record HDN on CPU
+            # 2) Record HDN on CPU
             self.hmap_hdn[self.step_count] = self.hd_activations.clone().detach().cpu()
 
             # 3) Dynamically resize hmap_pcn_activities if needed
@@ -878,7 +920,7 @@ class Driver(Supervisor):
                     for act in self.pcn_activations_list
                 ]
 
-            # 4) For each scale, record place cell activations from self.pcn_activations_list
+            # 4) Record place cell activations for each scale
             for i, act in enumerate(self.pcn_activations_list):
                 if self.hmap_pcn_activities[i].shape[1] != act.shape[0]:
                     self.hmap_pcn_activities[i] = torch.zeros(
@@ -886,8 +928,11 @@ class Driver(Supervisor):
                     )
                 self.hmap_pcn_activities[i][self.step_count] = act.clone().detach().cpu()
 
-        self.step_count += 1
+            # 5) Ensure alpha value is recorded
+            if self.step_count < self.num_steps:
+                self.hmap_alpha[self.step_count] = self.alpha.clone().detach().cpu()
 
+        self.step_count += 1
 
     def get_actual_reward(self):
         """
