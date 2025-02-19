@@ -61,7 +61,7 @@ def plot_pcn_adjacencies(pcn, hmap_x, hmap_y, hmap_pcn, percentile=0.03):
     )
 
     # Define colors for head directions
-    cmap = plt.cm.get_cmap("hsv", n_hd)
+    cmap = ("hsv", n_hd)
     colors = [cmap(i) for i in range(n_hd)]
 
     # Create a directed graph
