@@ -79,6 +79,7 @@ class Driver(Supervisor):
         world_name: Optional[str] = None,
         goal_location: Optional[List[float]] = None,
         max_dist: float = 10,
+        show_bvc_activation: bool = False,
     ):
         """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
@@ -105,6 +106,7 @@ class Driver(Supervisor):
             torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
         self.dtype = torch.float32
+        self.show_bvc_activation = show_bvc_activation
 
         # Set the world name and directories for saving data
         if world_name is None:
@@ -276,7 +278,7 @@ class Driver(Supervisor):
             bvc = BoundaryVectorCellLayer(
                 n_res=self.lidar_resolution,
                 n_hd=n_hd,
-                sigma_theta=np.deg2rad(90),
+                sigma_theta=10,
                 sigma_r=0.5,
                 max_dist=self.max_dist,
                 num_bvc_per_dir=50,
@@ -553,6 +555,8 @@ class Driver(Supervisor):
             hd_activations=self.hd_activations,
             collided=torch.any(self.collided),
         )
+        if self.show_bvc_activation:
+            self.pcn.bvc_layer.plot_activation(self.boundaries.cpu())
 
         # Advance simulation one timestep
         self.step(self.timestep)
@@ -922,21 +926,28 @@ class Driver(Supervisor):
     def clear(self):
         """
         Clears the saved state files for the Place Cell Network (PCN), Reward Cell Network (RCN),
-        and the history maps by removing their corresponding pickle files.
+        and the history maps by removing their corresponding pickle files from the appropriate directories.
         """
-        files_to_remove = [
-            "pcn.pkl",
-            "rcn.pkl",
-            "hmap_loc.pkl",
-            "hmap_pcn.pkl",
-            "hmap_bvc.pkl",
-            "hmap_hdn.pkl",
+        # Network files in network_dir
+        network_files = [
+            os.path.join(self.network_dir, "pcn.pkl"),
+            os.path.join(self.network_dir, "rcn.pkl"),
         ]
 
-        for file in files_to_remove:
+        # History map files in hmap_dir
+        hmap_files = [
+            os.path.join(self.hmap_dir, "hmap_loc.pkl"),
+            os.path.join(self.hmap_dir, "hmap_pcn.pkl"),
+            os.path.join(self.hmap_dir, "hmap_bvc.pkl"),
+            os.path.join(self.hmap_dir, "hmap_hdn.pkl"),
+        ]
+
+        # Remove all files
+        for file_path in network_files + hmap_files:
             try:
-                os.remove(file)
-                print(f"Removed {file}")
+                os.remove(file_path)
+                print(f"Removed {file_path}")
             except FileNotFoundError:
-                print(f"File {file} not found.")
-                pass  # Ignore if the file does not exist
+                print(f"File {file_path} not found")
+            except Exception as e:
+                print(f"Error removing {file_path}: {str(e)}")

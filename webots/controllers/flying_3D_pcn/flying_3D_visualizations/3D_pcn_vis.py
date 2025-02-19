@@ -80,11 +80,12 @@ if __name__ == "__main__":
     data_path = "webots/controllers/flying_3D_pcn/"
     hmap_loc, hmap_pcn = load_hmaps()
     hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
+    print(hmap_loc.shape)
 
     plot_3d_trajectory_with_pcn(
         hmap_x=hmap_x,
         hmap_z=hmap_z,
         hmap_y=hmap_y,
         hmap_pcn=hmap_pcn,
-        cell_indices_to_plot=range(1, 500),
+        cell_indices_to_plot=None,
     )

@@ -220,7 +220,7 @@ class DriverFlying(Supervisor):
                 num_pc=num_place_cells,
                 timestep=timestep,
                 n_hd=n_hd_hdn,
-                w_in_init_ratio=0.50,
+                w_in_init_ratio=0.20,
                 device=device,
             )
 

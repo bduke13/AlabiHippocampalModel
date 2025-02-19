@@ -146,8 +146,13 @@ def get_place_field_centers(
 
 
 if __name__ == "__main__":
+    from vis_utils import (
+        load_hmaps,
+        convert_xzy_hmaps,
+    )
+
     # Load hmap data from hardcoded world name
-    hmap_loc, hmap_pcn = load_hmaps_from_world()
+    hmap_loc, hmap_pcn = load_hmaps()
     hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
 
     # Optional specific cell indices (e.g., [0, 5, 10]) or None to plot all
