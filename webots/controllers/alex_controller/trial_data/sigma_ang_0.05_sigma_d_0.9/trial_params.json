@@ -1,0 +1,22 @@
+{
+    "environment_label": "TestEnvironment",
+    "max_runtime_hours": 10,
+    "randomize_start_loc": false,
+    "start_loc": [
+        4,
+        -4
+    ],
+    "goal_location": [
+        -3,
+        3
+    ],
+    "mode": "RobotMode.LEARN_OJAS",
+    "movement_method": "default",
+    "sigma_ang": 0.05,
+    "sigma_d": 0.9,
+    "max_dist": 20,
+    "num_bvc_per_dir": 100,
+    "num_place_cells": 1000,
+    "n_hd": 8,
+    "trial_name": "sigma_ang_0.05_sigma_d_0.9"
+}

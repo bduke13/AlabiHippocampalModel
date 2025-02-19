@@ -276,7 +276,7 @@ class Driver(Supervisor):
             bvc = BoundaryVectorCellLayer(
                 n_res=self.lidar_resolution,
                 n_hd=n_hd,
-                sigma_theta=0.01,
+                sigma_theta=np.deg2rad(90),
                 sigma_r=0.5,
                 max_dist=self.max_dist,
                 num_bvc_per_dir=50,

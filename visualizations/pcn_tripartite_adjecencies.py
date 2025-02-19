@@ -112,7 +112,7 @@ def plot_pcn_adjacencies(pcn, hmap_x, hmap_y, hmap_pcn, percentile=0.03):
 
 
 if __name__ == "__main__":
-    from visualizations.vis_utils import load_hmaps, convert_xzy_hmaps, load_layer_pkl
+    from vis_utils import load_hmaps, convert_xzy_hmaps, load_layer_pkl
 
     hmap_loc, hmap_pcn = load_hmaps(hmap_names=["hmap_loc", "hmap_pcn"])
     hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc=hmap_loc)

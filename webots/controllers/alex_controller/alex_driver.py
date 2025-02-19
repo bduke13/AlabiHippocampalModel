@@ -594,8 +594,8 @@ class AlexDriver(Supervisor):
         goal_radius = self.goal_r["exploit"] if self.robot_mode == RobotMode.EXPLOIT else self.goal_r["explore"]
         return 1.0 if distance_to_goal <= goal_radius else 0.0
 
-    def save(self, show_popup: bool = True, include_pcn: bool = False,
-             include_rcn: bool = False, include_hmaps: bool = True):
+    def save(self, show_popup: bool = True, include_pcn: bool = True,
+             include_rcn: bool = True, include_hmaps: bool = True):
         """
         Saves the state of the PCN, RCN, and hmap data to standard locations.
         If show_popup is True, a popup prompts the user to confirm saving.

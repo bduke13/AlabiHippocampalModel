@@ -20,9 +20,9 @@ else:
     # Single-trial mode.
     trial_params = {
         # Environment parameters:
-        "environment_label": "iCreateBotCross",
-        "max_runtime_hours": .5,  # maximum run time in hours
-        "randomize_start_loc": True,
+        "environment_label": "10x10",
+        "max_runtime_hours": 3,  # maximum run time in hours
+        "randomize_start_loc": False,
         "start_loc": [4, -4],
         "goal_location": [-3, 3],
         # Model/layer parameters:
@@ -30,13 +30,13 @@ else:
         "movement_method": "default",  # placeholder
         "sigma_ang": 0.01,
         "sigma_d": 0.5,
-        "max_dist": 15,
+        "max_dist": 10,
         "num_bvc_per_dir": 50,
         "num_place_cells": 500,
         "n_hd": 8,
         # Runtime and data-saving parameters:
         "save_trial_data": True,
-        "trial_name": "none",  # if "none", a trial folder name will be auto-generated
+        "trial_name": "10x10_Test",  # if "none", a trial folder name will be auto-generated
         "run_multiple_trials": False  # always false in single-trial mode
     }
     bot = AlexDriver(**trial_params)
