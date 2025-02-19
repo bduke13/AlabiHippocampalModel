@@ -43,7 +43,7 @@ DirectionalLight {
 DEF agent Create {
   translation 1.40311433438468 0.044186481340165173 1.4159691458047037
   rotation -0.6607352787486408 0.5303053028717288 0.5312298722427797 1.9727887896457816
-  controller "create3_base"
+  controller "alex_controller"
   supervisor TRUE
   bodySlot [
     Solid {

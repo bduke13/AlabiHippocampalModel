@@ -1,0 +1,22 @@
+{
+    "environment_label": "Env_A",
+    "max_runtime_hours": 0.5,
+    "randomize_start_loc": true,
+    "start_loc": [
+        4,
+        -4
+    ],
+    "goal_location": [
+        -3,
+        3
+    ],
+    "mode": "RobotMode.LEARN_OJAS",
+    "movement_method": "default",
+    "sigma_ang": 0.01,
+    "sigma_d": 0.5,
+    "max_dist": 15,
+    "num_bvc_per_dir": 50,
+    "num_place_cells": 500,
+    "n_hd": 8,
+    "trial_name": "Env_A_trial"
+}

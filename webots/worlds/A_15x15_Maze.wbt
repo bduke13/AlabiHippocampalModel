@@ -40,7 +40,7 @@ DEF agent Create {
   translation -6.5 0.044 -6.5
   rotation -0.6607352787486408 0.5303053028717288 0.5312298722427797 1.9727887896457816
   supervisor TRUE
-  controller "create3_base"
+  controller "alex_controller"
   bodySlot [
     Solid {
       translation 0 0 0.08    # Sensor group: lidar centered and mounted above the robot.

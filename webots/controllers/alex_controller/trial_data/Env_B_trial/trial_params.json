@@ -1,0 +1,22 @@
+{
+    "environment_label": "Env_B",
+    "max_runtime_hours": 1.0,
+    "randomize_start_loc": true,
+    "start_loc": [
+        4,
+        -4
+    ],
+    "goal_location": [
+        -3,
+        3
+    ],
+    "mode": "RobotMode.LEARN_HEBB",
+    "movement_method": "default",
+    "sigma_ang": 0.02,
+    "sigma_d": 0.6,
+    "max_dist": 15,
+    "num_bvc_per_dir": 60,
+    "num_place_cells": 600,
+    "n_hd": 8,
+    "trial_name": "Env_B_trial"
+}
