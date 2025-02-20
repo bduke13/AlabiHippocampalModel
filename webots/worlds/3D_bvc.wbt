@@ -1,0 +1,140 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/robots/irobot/create/protos/Create.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/Roughcast.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/apartment_structure/protos/Wall.proto"
+
+WorldInfo {
+  info [
+    "iRobot Create simulation"
+    "The vacuum cleaner robot goes randomly into the apartment while a supervisor tracks its position and alterates the ground texture."
+    "The robot can be stopped by the virtual walls emitting IR light."
+  ]
+  title "iRobot Create"
+  coordinateSystem "NUE"
+}
+Viewpoint {
+  orientation -0.21587662066476845 -0.215127248937628 -0.9524271895609068 1.6193408704874164
+  position -2.92554171592837 54.83748685661779 -25.483586118354445
+  near 0.1
+  follow "Create"
+  followType "None"
+}
+TexturedBackground {
+}
+RectangleArena {
+  rotation 1 0 0 -1.5707953071795862
+  floorSize 10 10
+  floorAppearance NULL
+  wallThickness 0.03
+  wallHeight 3
+}
+DirectionalLight {
+  direction 0 -1 0
+}
+DEF agent Create {
+  hidden position_0_0 63893.690705328896
+  hidden position_0_1 64018.95140333098
+  hidden linearVelocity_0 -0.0007286406204040851 0.0039463899297552145 0.0017584717017134779
+  hidden angularVelocity_0 0.018523878997905408 -0.014818940172715397 0.019502518372235225
+  hidden rotation_5 0 1 0 6.262501926860703
+  hidden linearVelocity_5 -3.209236125422676e-05 -0.0002712214519804881 0.003416513918635039
+  hidden angularVelocity_5 0.03585511526146244 0.005765721861080569 0.0032216732804999666
+  hidden rotation_6 0 0.9999999999999999 0 5.859493785355403
+  hidden linearVelocity_6 -0.0011399418259753092 -0.0002630424646395993 -2.6149391457247483e-05
+  hidden angularVelocity_6 0.0006372946610309145 0.003976939572798748 0.03630390247096278
+  hidden translation_10 0.000182720161932437 0.00010803643799883744 -6.339636848158581e-06
+  hidden rotation_10 0.8442481936367437 -0.3789750845623219 -0.37897608476271477 1.739313998418682
+  hidden linearVelocity_10 -0.0022944133208910424 0.001313460248933149 0.00011585377689497257
+  hidden angularVelocity_10 0.018523879202029872 -0.014818977712669629 0.019502519524657966
+  hidden translation_11 0.00013838975829472133 -0.00015730248296508265 -6.9624874489623845e-06
+  hidden rotation_11 0.30254198834706414 -0.6739659700591419 -0.6739719701065057 2.5540289970632877
+  hidden linearVelocity_11 0.0007226473162106979 0.001350187700042279 8.700509301238473e-05
+  hidden angularVelocity_11 0.018523880620501545 -0.01481897770092304 0.019502518795707656
+  translation -0.6553074345904553 0.043706420392238446 -2.811231179540781
+  rotation 0.2710035833639696 0.6812963941332717 0.6799943243475562 -2.6183760630645887
+  controller "create3_3D_bvc"
+  supervisor TRUE
+  bodySlot [
+    Solid {
+      children [
+        Display {
+          width 100
+          height 100
+        }
+        Compass {
+        }
+        DEF vertical-range-finder RangeFinder {
+          translation 0 0 0.1
+          name "vertical-range-finder"
+          fieldOfView 6.28
+          width 180
+          height 90
+          projection "cylindrical"
+          maxRange 10
+        }
+      ]
+    }
+  ]
+}
+Wall {
+  translation 0 1 -7.13582e-06
+  rotation 1 0 0 2.85387e-06
+  name "wall(3)"
+  size 7 5 0.1
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 2.4
+    }
+  }
+}
+Wall {
+  translation 0 -2.26631 2.26984
+  rotation -1 0 0 0.785395307179586
+  name "wall(1)"
+  size 7 5 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 2.4
+    }
+  }
+}
+Wall {
+  translation -3.36826e-07 0.91 8.97154e-07
+  rotation -4.399399999999564e-07 0.9999999999999009 -6.981579999999308e-08 1.5708
+  name "wall(4)"
+  size 7 5 0.1
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 2.4
+    }
+  }
+}
+Wall {
+  translation 2.1952 -2.54925 -7.2387e-06
+  rotation 0.35740612701840735 -0.8628563066501258 -0.3574071270187627 -1.7177753071795863
+  name "wall(2)"
+  size 7 5 0.3
+  appearance Roughcast {
+    colorOverride 0.8 0.45 0.25
+    textureTransform TextureTransform {
+      scale 1 2.4
+    }
+  }
+}
+Wall {
+  translation 0 2.9 0
+  rotation 1 0 0 -1.5708
+  name "Main_Ceiling"
+  size 10 10 0.1
+  appearance PBRAppearance {
+    transparency 0.8
+    roughness 1
+    metalness 0
+  }
+}

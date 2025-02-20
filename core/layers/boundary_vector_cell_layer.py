@@ -57,9 +57,10 @@ class BoundaryVectorCellLayer:
         N_dist = len(tuned_dist)
 
         # Generate preferred angles (head directions)
+        # Using n_hd+1 steps and removing the last point to avoid duplicate at 2π
         preferred_angles = torch.linspace(
-            0, 2 * torch.pi, steps=n_hd, dtype=dtype, device=device
-        )
+            0, 2 * torch.pi, steps=n_hd + 1, dtype=dtype, device=device
+        )[:-1]
 
         # Tile distances and angles for matrix computation
         self.d_i = tuned_dist.repeat(n_hd).unsqueeze(0)  # (1, N_dist * n_hd)
