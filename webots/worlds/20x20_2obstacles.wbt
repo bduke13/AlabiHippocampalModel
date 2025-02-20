@@ -1,0 +1,100 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/robots/irobot/create/protos/Create.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/BrushedAluminium.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/apartment_structure/protos/Wall.proto"
+
+WorldInfo {
+  info [
+    "1 obstacle"
+  ]
+  title "world1"
+  coordinateSystem "NUE"
+}
+Viewpoint {
+  orientation -0.7071057814660382 0.7071077809056435 5.551115123136879e-17 3.1415966524690035
+  position 0.6754288305783366 40.82651170506043 -0.004693901566912073
+  near 0.1
+  follow "Create"
+  followType "None"
+}
+TexturedBackground {
+}
+RectangleArena {
+  rotation 1 0 0 -1.5708
+  floorSize 20 20
+  floorAppearance NULL
+  wallHeight 0.5
+  wallAppearance BrushedAluminium {
+    colorOverride 0 1 1
+    IBLStrength 11
+  }
+}
+Pose {
+  translation -7 0 7
+  rotation 1 0 0 -1.5708
+  children [
+    Shape {
+      appearance Appearance {
+        material Material {
+          diffuseColor 1 0 0
+        }
+      }
+      geometry Cylinder {
+        height 0.002
+        radius 0.8
+      }
+    }
+  ]
+}
+DEF agent Create {
+  translation 0 0.0441865 0
+  rotation -0.6607352787486408 0.5303053028717288 0.5312298722427797 1.9727887896457816
+  controller "multiscale_controller"
+  supervisor TRUE
+  bodySlot [
+    Solid {
+      translation 0 0 0.04
+      children [
+        Display {
+          width 100
+          height 100
+        }
+        Compass {
+        }
+        DEF range-finder RangeFinder {
+          fieldOfView 6.28
+          width 720
+          height 1
+          projection "cylindrical"
+          maxRange 30
+        }
+        Shape {
+          appearance PBRAppearance {
+          }
+          geometry Cylinder {
+            height 0.04
+            radius 0.05
+          }
+        }
+      ]
+    }
+  ]
+}
+Wall {
+  translation 4 0 0
+  rotation 0 1 0 2.3554
+  name "wall1"
+  size 7 1 0.4
+}
+Wall {
+  translation -4 0 0
+  rotation 0 1 0 2.3554
+  name "wall2"
+  size 7 1 0.4
+}
+DirectionalLight {
+  direction 0.75 -1 0
+}

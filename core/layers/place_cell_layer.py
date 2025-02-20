@@ -97,7 +97,7 @@ class PlaceCellLayer:
         self.tau_p = 0.5
 
         # Normalization factor for synaptic weight updates (α_pb in Equation 3.3)
-        self.alpha_pb = np.sqrt(0.5)
+        self.alpha_pb = np.sqrt(1.0)
 
         # Initial weights for the input connections from BVCs to place cells
         self.initial_w_in = torch.clone(self.w_in.data)

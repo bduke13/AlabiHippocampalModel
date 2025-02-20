@@ -49,27 +49,27 @@ SCALES_DEFS = {
         "sigma_theta": 1,
         "rcn_learning_rate": 0.1,
     },
-    "medium": {
-        "name": "medium",
-        "num_pc": 1000,
-        "sigma_r": 1,
-        "sigma_theta": 2,
-        "rcn_learning_rate": 0.05,
-    },
+    # "medium": {
+        # "name": "medium",
+        # "num_pc": 1000,
+        # "sigma_r": 3,
+        # "sigma_theta": 2,
+        # "rcn_learning_rate": 0.2,
+    # },
     "large": {
         "name": "large",
         "num_pc": 500,
-        "sigma_r": 3,
-        "sigma_theta": 3,
-        "rcn_learning_rate": 0.01,
+        "sigma_r": 1.5,
+        "sigma_theta": 1,
+        "rcn_learning_rate": 0.1,
     },
-    "xlarge": {
-        "name": "xlarge",
-        "num_pc": 200,
-        "sigma_r": 4,
-        "sigma_theta": 4,
-        "rcn_learning_rate": 0.005,
-    }
+    # "xlarge": {
+    #     "name": "xlarge",
+    #     "num_pc": 200,
+    #     "sigma_r": 4,
+    #     "sigma_theta": 4,
+    #     "rcn_learning_rate": 0.1,
+    # }
 }
 
 def compile_scales(scale_names):
@@ -185,15 +185,15 @@ if __name__ == "__main__":
         "PLOTTING": RobotMode.PLOTTING  
     }
     
-    SELECTED_MODE = "EXPLOIT"
+    SELECTED_MODE = "LEARN_OJAS"
     corners = [[8,-8], [-8,-8], [8,8]]
-    start_loc =  [7, -7] 
+    start_loc = [0,0]
     goal_location = [-7, 7]    
     randomize_start_loc = False
     # ["small", "medium", "large"]
-    scale_names =["small", "medium", "large"]
-    run_time_hours = 4
-    max_dist = 30
+    scale_names = ["small","large"]
+    run_time_hours = 2
+    max_dist = 15
 
     MODE_PARAMS = {
         "LEARN_OJAS": {

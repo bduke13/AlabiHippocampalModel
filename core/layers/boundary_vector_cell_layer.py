@@ -104,7 +104,7 @@ class BoundaryVectorCellLayer:
 
     def plot_activation(self, distances: np.ndarray) -> None:
         """Visualizes the BVC activations in a polar plot and overlays the boundary (LiDAR readings)."""
-        distances_tensor = distances.clone().detach().to(self.device)
+        distances_tensor = torch.tensor(distances, dtype=self.dtype, device=self.device).clone().detach()
         activations = self.get_bvc_activation(distances_tensor).detach().cpu().numpy()
 
         fig, ax = plt.subplots(figsize=(8, 8), subplot_kw={"projection": "polar"})
@@ -133,25 +133,35 @@ class BoundaryVectorCellLayer:
 # Example Usage
 if __name__ == "__main__":
     n_points = 720  # LiDAR resolution
-    max_r = 10
-    min_r = 5
-    n_star_peaks = 8
+    max_r = 20  # Half the side length of the square (since the square is 20x20)
+    min_r = 0  # Not used in this case
 
-    # Create star-shaped LiDAR distance pattern
-    distances = np.ones(n_points) * min_r
-    star_interval = n_points // (n_star_peaks * 2)
-    for i in range(0, n_star_peaks * 2, 2):
-        start_idx = i * star_interval
-        distances[start_idx : start_idx + star_interval] = max_r
+    # Create angles for the LiDAR
+    angles = np.linspace(0, 2 * np.pi, n_points, endpoint=False)
+
+    # Calculate distances to the edges of a 20x20 square
+    distances = np.zeros(n_points)
+    for i, angle in enumerate(angles):
+        # Calculate the distance to the nearest edge of the square
+        # The square is centered at the origin with side length 20
+        # The distance to the edge is min(10 / |cos(angle)|, 10 / |sin(angle)|)
+        # But we need to handle the cases where cos(angle) or sin(angle) is zero
+        cos_angle = np.cos(angle)
+        sin_angle = np.sin(angle)
+        if cos_angle == 0:
+            distances[i] = 10 / abs(sin_angle)
+        elif sin_angle == 0:
+            distances[i] = 10 / abs(cos_angle)
+        else:
+            distances[i] = min(10 / abs(cos_angle), 10 / abs(sin_angle))
 
     # Initialize BVC layer
     bvc_layer = BoundaryVectorCellLayer(
-        max_dist=12,
+        max_dist=20,  # Set max_dist to match the square size
         n_res=n_points,
         n_hd=8,
         sigma_theta=1,  # Angular tuning width
-        sigma_r=1,  # Distance tuning width
-        num_bvc_per_dir=50,
+        sigma_r=3,  # Distance tuning width
     )
 
     # Plot activation with boundary

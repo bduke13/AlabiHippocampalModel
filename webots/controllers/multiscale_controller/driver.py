@@ -74,7 +74,7 @@ class Driver(Supervisor):
         # Head direction layer size
         self.n_hd = 8
         self.timestep = 32 * 3
-        self.tau_w = 10 if mode == RobotMode.EXPLOIT else 10
+        self.tau_w = 10
 
         # Robot parameters
         self.max_speed = 16 if mode != RobotMode.EXPLOIT else 8
@@ -153,6 +153,8 @@ class Driver(Supervisor):
         self.right_position_sensor = self.getDevice("right wheel sensor")
         self.right_position_sensor.enable(self.timestep)
 
+        self.step_count = 0
+
         # Clear if in Oja's mode
         if self.robot_mode == RobotMode.LEARN_OJAS:
             self.clear()
@@ -166,15 +168,15 @@ class Driver(Supervisor):
         # Head direction layer
         self.head_direction_layer = HeadDirectionLayer(num_cells=self.n_hd, device="cpu")
 
-        # Initialize alpha for blending rewards across scales
-        self.alpha = torch.tensor(0.5, dtype=self.dtype, device=self.device)
+        # Initialize alpha as a tensor of zeros with the same length as the number of scales
+        self.alpha = torch.zeros(len(self.scales), dtype=self.dtype, device=self.device)
+
+        # Initialize hmap_alpha with the correct shape
+        self.hmap_alpha = torch.zeros((self.num_steps, len(self.scales)), device="cuda", dtype=torch.float32)
 
         # Prep for logging
         self.hmap_loc = np.zeros((self.num_steps, 3))
         self.hmap_hdn = torch.zeros((self.num_steps, self.n_hd), device="cpu", dtype=torch.float32)
-
-        # Store alpha values over time (1 value per step)
-        self.hmap_alpha = torch.zeros((self.num_steps), device="cpu", dtype=torch.float32)
 
         # For multi-scale place cell logs
         self.hmap_pcn_activities = []
@@ -185,7 +187,6 @@ class Driver(Supervisor):
             )
 
         self.directional_reward_estimates = torch.zeros(self.n_hd, device=self.device) 
-        self.step_count = 0
 
         # Rotation tracking for excessive loop detection
         self.rotation_accumulator = 0.0
@@ -267,7 +268,7 @@ class Driver(Supervisor):
             rcn = RewardCellLayer(
                 num_place_cells=scale_def["num_pc"],
                 num_replay=3,
-                learning_rate=learning_rate,  # <-- Use the passed learning rate
+                learning_rate=learning_rate,
                 device=self.device,
             )
         return rcn
@@ -328,7 +329,18 @@ class Driver(Supervisor):
                 actual_reward = self.get_actual_reward()
                 for pcn, rcn in zip(self.pcns, self.rcns):
                     rcn.update_reward_cell_activations(pcn.place_cell_activations)
-                    rcn.td_update(pcn.place_cell_activations, next_reward=actual_reward)
+                    # rcn.td_update(pcn.place_cell_activations, next_reward=actual_reward)
+                # Turn towards heading 225°
+                desired_heading_deg = 90
+                # Compute the minimal angular difference (normalized to [-180, 180])
+                angle_to_turn_deg = desired_heading_deg - self.current_heading_deg
+                angle_to_turn_deg = ((angle_to_turn_deg + 180) % 360) - 180
+                angle_to_turn = np.deg2rad(angle_to_turn_deg)
+                self.turn(angle_to_turn)
+                self.check_goal_reached()
+                self.update_hmaps()
+                self.forward()        
+                break 
 
             # 6) If collisions => turn away
             if torch.any(self.collided):
@@ -432,34 +444,19 @@ class Driver(Supervisor):
         pot_rew_scales = torch.stack(pot_rew_scales)
         pot_rew_scales /= (pot_rew_scales.max(dim=1, keepdim=True)[0] + 1e-6)  # Normalize
 
-        # Compute scale weighting (gradient-based)
         # Compute gradients for each scale
         grads = torch.sum(torch.abs(torch.diff(pot_rew_scales, dim=1)), dim=1)  # Shape: (num_scales,)
 
         # Normalize the gradients to sum to 1, ensuring proper mixing
         mixing_weights = grads / (grads.sum() + 1e-6)  # Shape: (num_scales,)
-
-        # Ensure numerical stability by clamping
         mixing_weights = torch.clamp(mixing_weights, min=0.0, max=1.0)
-
-        # Enforce sum to 1 in case of numerical drift
         mixing_weights /= mixing_weights.sum()
 
         # Weighted sum over all scales based on dynamic mixing_weights
-        combined_pot_rew = torch.sum(mixing_weights[:, None] * pot_rew_scales, dim=0)        
+        combined_pot_rew = torch.sum(mixing_weights[:, None] * pot_rew_scales, dim=0)
 
-        # # If the largest scale has the highest weight, use max speed; otherwise, use lower speed
-        # if mixing_weights[-1] > mixing_weights[0]:  # Large-scale dominates
-        #     self.max_speed = 10
-        # else:  # Small-scale dominates
-        #     self.max_speed = 4
-
-        self.alpha = grads[0] / (grads.sum() + 1e-6)
-        self.alpha = torch.clamp(self.alpha - 0.05, 0.0, 1.0)  # Apply small-scale bias
-
-        # Save alpha for the current step
-        if self.step_count < self.num_steps:
-            self.hmap_alpha[self.step_count] = self.alpha.clone().detach().cpu()
+        # Now compute alpha as a vector that shows each scale's contribution
+        self.alpha = grads / (grads.sum() + 1e-6)
 
         #-------------------------------------------------------------------
         # 4) Wall avoidance logic
@@ -685,14 +682,12 @@ class Driver(Supervisor):
             atol=self.goal_r["explore"]
         ):
             self.auto_pilot()
-
-            # Loop over all scales
+            self.stop()
             for pcn, rcn in zip(self.pcns, self.rcns):
+                print(f"Replay called on {rcn}")
                 rcn.update_reward_cell_activations(pcn.place_cell_activations, visit=True)
                 rcn.replay(pcn=pcn)
-
-            self.stop()
-            self.save(include_rcn=True, include_hmaps=False)
+            self.save(include_pcn=True, include_rcn=True)
 
         elif self.robot_mode == RobotMode.EXPLOIT and torch.allclose(
             torch.tensor(self.goal_location, dtype=self.dtype, device=self.device),
@@ -930,7 +925,7 @@ class Driver(Supervisor):
 
             # 5) Ensure alpha value is recorded
             if self.step_count < self.num_steps:
-                self.hmap_alpha[self.step_count] = self.alpha.clone().detach().cpu()
+                self.hmap_alpha[self.step_count, :] = self.alpha.clone().detach().cpu()
 
         self.step_count += 1
 

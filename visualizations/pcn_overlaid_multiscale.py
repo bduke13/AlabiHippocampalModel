@@ -6,7 +6,7 @@ import pickle
 from typing import Optional, List
 
 # Hardcoded world name
-WORLD_NAME = "20x20"
+WORLD_NAME = "10x10"
 CONTROLLER_NAME = "multiscale_controller"
 
 def load_pickle(file_path):
@@ -206,7 +206,7 @@ def plot_overlayed_cells(
 
 # Main execution
 if __name__ == "__main__":
-    num_scales = 3  # Adjust based on how many scales you have
+    num_scales = 2  # Adjust based on how many scales you have
     hmap_loc, hmap_pcn_scales = load_hmaps_from_world(num_scales)
     hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
     
@@ -216,8 +216,6 @@ if __name__ == "__main__":
     hmap_y=hmap_y,
     gridsize=100,
     show_plot=True,
-    num_cells_to_sample=5,
-    scale_idx=2,
-    plot_most_active=False,  
+    # num_cells_to_sample=10,
     )
 
