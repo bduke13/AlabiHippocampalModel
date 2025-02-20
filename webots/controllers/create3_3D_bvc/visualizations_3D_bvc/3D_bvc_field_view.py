@@ -18,18 +18,16 @@ def compute_3d_bvc_response(
     sigma_theta,
     sigma_phi,
 ):
-    """Compute BVC response for a boundary point at (x,y,z) relative to agent at origin."""
+    """Compute BVC response for a boundary point at (x,y,z) relative to the agent at origin."""
     # Convert Cartesian to Spherical coordinates
     r = torch.sqrt(point_x**2 + point_y**2 + point_z**2)
-    theta = torch.atan2(point_y, point_x)  # horizontal angle (azimuth)
-    phi = torch.asin(point_z / r)  # vertical angle (elevation)
+    theta = torch.atan2(point_y, point_x)  # horizontal angle
+    phi = torch.asin(point_z / r)  # vertical angle (assuming r>0)
 
-    # Wrap horizontal angle difference to [-π, π]
+    # Horizontal angle difference wrapped to [-pi, pi]
     theta_diff = torch.atan2(
         torch.sin(theta - bvc_horiz_angle), torch.cos(theta - bvc_horiz_angle)
     )
-
-    # Vertical angle difference (no wrapping needed as it's in [-π/2, π/2])
     phi_diff = phi - bvc_vert_angle
 
     # Distance component
@@ -48,43 +46,48 @@ def compute_3d_bvc_response(
 
 
 def main():
-    # Use CUDA if available
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
+    phi_vert_preferred = [0.0]
+    sigma_rs = [5] * len(phi_vert_preferred)
+    sigma_thetas = [1] * len(phi_vert_preferred)
+    sigma_phis = [2] * len(phi_vert_preferred)
+    scaling_factors = [1] * len(phi_vert_preferred)
 
-    # Initialize BVC layer with a single preferred vertical angle
+    # Initialize your BVC layer
     bvc_layer = BoundaryVectorCellLayer3D(
-        max_dist=12.0,
-        n_hd=8,
-        phi_vert_preferred=[0.0],  # 0.3 radians ≈ 17 degrees elevation
-        sigma_rs=[1.0],
-        sigma_thetas=[0.3],  # broader horizontal tuning
-        sigma_phis=[0.3],  # broader vertical tuning
-        scaling_factors=[1.0],
-        num_bvc_per_dir=50,
         device=device,
+        max_dist=10,
+        n_hd=8,
+        sigma_rs=sigma_rs,
+        sigma_thetas=sigma_thetas,
+        sigma_phis=sigma_phis,
+        scaling_factors=scaling_factors,
     )
 
-    # Select a random BVC to visualize
-    bvc_idx = np.random.randint(0, bvc_layer.num_bvc)
+    # Visualization options
+    cutoff_above_horizontal = True  # Toggle to show only points below horizontal plane
+
+    # Pick a BVC (only one in this example)
+    bvc_idx = 0
     selected_distance = bvc_layer.d_i[bvc_idx].item()
     selected_horiz_angle = bvc_layer.theta_i[bvc_idx].item()
     selected_vert_angle = bvc_layer.psi_i[bvc_idx].item()
 
     print(f"\nSelected BVC parameters:")
-    print(f"Distance: {selected_distance:.2f}m")
-    print(f"Horizontal angle: {np.rad2deg(selected_horiz_angle):.1f}°")
-    print(f"Vertical angle: {np.rad2deg(selected_vert_angle):.1f}°")
+    print(f"  Distance:         {selected_distance:.2f} m")
+    print(f"  Horizontal angle: {np.rad2deg(selected_horiz_angle):.1f}°")
+    print(f"  Vertical angle:   {np.rad2deg(selected_vert_angle):.1f}°")
 
-    # Create 3D grid of points
-    resolution = 300
+    # Create a smaller 3D grid of points
+    resolution = 60
     max_range = 15
     x = torch.linspace(-max_range, max_range, resolution, device=device)
     y = torch.linspace(-max_range, max_range, resolution, device=device)
     z = torch.linspace(-max_range, max_range, resolution, device=device)
     X, Y, Z = torch.meshgrid(x, y, z, indexing="ij")
 
-    # Compute BVC response for each point
+    # Compute BVC response over the grid
     response = compute_3d_bvc_response(
         selected_distance,
         selected_horiz_angle,
@@ -97,40 +100,49 @@ def main():
         bvc_layer.sigma_phi[bvc_idx],
     )
 
-    # Normalize response to [0, 1]
+    # Normalize to [0, 1]
     response = response / response.max()
 
-    # Create two subplots: full 3D view and cross-section
+    # Masks
+    threshold = 0.02
+    strong_response = response > threshold
+    front_mask = Y > 0  # optional if you want to cut out half
+
+    if cutoff_above_horizontal:
+        horizontal_mask = Z <= 0
+        points_to_plot = strong_response & horizontal_mask & front_mask
+    else:
+        points_to_plot = strong_response & front_mask
+    print(f"Points above threshold: {points_to_plot.sum().item()}")
+
+    # -- Optionally sub-sample to speed up scatter plot --
+    idxs = torch.nonzero(points_to_plot).squeeze()
+    # Shuffle indices randomly
+    rand_perm = torch.randperm(len(idxs), device=device)
+    # Keep at most 40k points
+    max_points = 40000
+    idxs = idxs[rand_perm[:max_points]]
+
+    # Extract coordinates
+    X_plot = X[idxs[:, 0], idxs[:, 1], idxs[:, 2]].cpu().numpy()
+    Y_plot = Y[idxs[:, 0], idxs[:, 1], idxs[:, 2]].cpu().numpy()
+    Z_plot = Z[idxs[:, 0], idxs[:, 1], idxs[:, 2]].cpu().numpy()
+    colors = response[idxs[:, 0], idxs[:, 1], idxs[:, 2]].cpu().numpy()
+
+    # Set up the figure
     fig = plt.figure(figsize=(15, 7))
 
-    # 1. Full 3D view (with cutout)
+    # 1) 3D Scatter
     ax1 = fig.add_subplot(121, projection="3d")
 
-    # Create mask for cutout (show only points where y > 0)
-    mask = Y > 0
+    sc = ax1.scatter(X_plot, Y_plot, Z_plot, c=colors, cmap="viridis", alpha=0.3, s=5)
+    ax1.set_box_aspect((1, 1, 1))
+    plt.colorbar(sc, ax=ax1, label="Normalized Response")
 
-    # Plot points where response > threshold and Z <= 0
-    threshold = 0.01
-    strong_response = response > threshold
-    horizontal_mask = Z <= 0  # Only keep points at or below horizontal plane
-    points_to_plot = strong_response & horizontal_mask
-
-    # Convert to numpy and apply mask
-    X_plot = X[points_to_plot].cpu().numpy()
-    Y_plot = Y[points_to_plot].cpu().numpy()
-    Z_plot = Z[points_to_plot].cpu().numpy()
-    colors = response[points_to_plot].cpu().numpy()
-
-    scatter = ax1.scatter(X_plot, Y_plot, Z_plot, c=colors, cmap="viridis", alpha=0.3)
-
-    # Set equal aspect ratio for better 3D visualization
-    ax1.set_box_aspect([1, 1, 1])
-    plt.colorbar(scatter, ax=ax1, label="Normalized Response")
-
-    # Plot the agent position
+    # Plot the agent origin
     ax1.scatter([0], [0], [0], color="red", s=100, marker="o", label="Agent")
 
-    # Plot the preferred location
+    # Preferred location
     x_pref = (
         selected_distance * np.cos(selected_vert_angle) * np.cos(selected_horiz_angle)
     )
@@ -138,52 +150,47 @@ def main():
         selected_distance * np.cos(selected_vert_angle) * np.sin(selected_horiz_angle)
     )
     z_pref = selected_distance * np.sin(selected_vert_angle)
-    ax1.scatter(
-        [x_pref],
-        [y_pref],
-        [z_pref],
-        color="red",
-        s=200,
-        marker="*",
-        label="Preferred Location",
-    )
 
-    # Draw line from origin to preferred location
+    ax1.scatter(
+        [x_pref], [y_pref], [z_pref], color="red", s=200, marker="*", label="Preferred"
+    )
     ax1.plot([0, x_pref], [0, y_pref], [0, z_pref], "r--", alpha=0.5)
 
+    title = "3D BVC Response Field"
+    if cutoff_above_horizontal:
+        title += " (Below Horizontal Plane)"
+    ax1.set_title(title)
     ax1.set_xlabel("X (m)")
     ax1.set_ylabel("Y (m)")
     ax1.set_zlabel("Z (m)")
-    ax1.set_title("3D BVC Response Field\n(Z ≤ 0)")
+    ax1.legend()
 
-    # 2. Horizontal cross-section at preferred vertical height
+    # 2) Horizontal cross-section at or near the preferred vertical angle
     ax2 = fig.add_subplot(122)
-
-    # Find closest Z plane to preferred height
+    # Find nearest z plane to the actual z_pref
     z_idx = torch.argmin(torch.abs(z - z_pref))
-    cross_section = response[:, :, z_idx].cpu().numpy()
+    cross_section = response[:, :, z_idx].cpu().numpy().T
 
-    # Plot cross-section
+    # Show cross-section
     im = ax2.imshow(
-        cross_section.T,
+        cross_section,
         origin="lower",
-        extent=[-max_range, max_range, -max_range, max_range],
+        extent=(-max_range, max_range, -max_range, max_range),
         cmap="viridis",
     )
     ax2.set_xlabel("X (m)")
     ax2.set_ylabel("Y (m)")
-    ax2.set_title(
-        f"Horizontal Cross-section at preferred elevation\nZ = {z_pref:.2f}m (elevation angle: {np.rad2deg(selected_vert_angle):.1f}°)"
-    )
-
-    # Add colorbar
     plt.colorbar(im, ax=ax2, label="Normalized Response")
 
-    # Plot agent and preferred location on cross-section
-    ax2.plot(0, 0, "ro", markersize=10, label="Agent")
-    ax2.plot(x_pref, y_pref, "r*", markersize=15, label="Preferred Location")
+    # Mark agent and preferred location on cross-section
+    ax2.plot(0, 0, "ro", markersize=8, label="Agent")
+    ax2.plot(x_pref, y_pref, "r*", markersize=12, label="Preferred")
     ax2.plot([0, x_pref], [0, y_pref], "r--", alpha=0.5)
 
+    ax2.set_title(
+        f"Cross-section at Z = {z[z_idx].item():.2f} m\n"
+        f"(Preferred Z ~ {z_pref:.2f} m)"
+    )
     ax2.grid(True)
     ax2.legend()
 
