@@ -105,6 +105,7 @@ class Driver(Supervisor):
         self.device = (
             torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
+        print(f"Driver running on device {self.device}")
         self.dtype = torch.float32
         self.show_bvc_activation = show_bvc_activation
 
