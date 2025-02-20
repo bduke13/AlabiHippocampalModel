@@ -22,7 +22,7 @@ class BoundaryVectorCellLayer:
         max_dist: float,  # Maximum response distance
         num_bvc_per_dir: int = 50,  # Number of BVCs per head direction
         dtype: torch.dtype = torch.float32,
-        device: str = "cpu",
+        device: torch.device = torch.device("cpu"),
     ) -> None:
         """Initialize the boundary vector cell (BVC) layer.
 

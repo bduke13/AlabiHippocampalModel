@@ -31,7 +31,7 @@ class BoundaryVectorCellLayer3D:
         top_cutoff_percentage: float = 0.0,
         bottom_cutoff_percentage: float = 0.5,
         dtype: torch.dtype = torch.float32,
-        device: str = "cpu",
+        device: torch.device = torch.device("cpu"),
     ) -> None:
         """
         Args:
@@ -380,46 +380,172 @@ class BoundaryVectorCellLayer3D:
 
         print(f"Cell names saved to {output_file}")
 
+    def compute_single_bvc_response(
+        self, bvc_idx: int, grid_resolution: int = 50, max_range: float = 10.0
+    ):
+        """
+        Compute the response of a single BVC over a 3D grid.
 
-# ---------------------------
-# Example usage / test
-# ---------------------------
+        Args:
+            bvc_idx: Index of the BVC to analyze.
+            grid_resolution: Number of points along each axis.
+            max_range: Maximum absolute coordinate value for the grid.
+
+        Returns:
+            Tuple (points, responses) where:
+              - points is an (N,3) array of [x, y, z] coordinates.
+              - responses is an (N,) array of the BVC's response at each point.
+        """
+        # Create a 3D grid of points
+        x = np.linspace(-max_range, max_range, grid_resolution)
+        y = np.linspace(-max_range, max_range, grid_resolution)
+        z = np.linspace(-max_range, max_range, grid_resolution)
+        X, Y, Z = np.meshgrid(x, y, z)
+        points = np.column_stack((X.ravel(), Y.ravel(), Z.ravel()))
+
+        # Convert to spherical coordinates: r, theta, phi.
+        r = np.sqrt(points[:, 0] ** 2 + points[:, 1] ** 2 + points[:, 2] ** 2)
+        theta = np.arctan2(points[:, 1], points[:, 0])
+        r_safe = np.where(r == 0, 1e-9, r)
+        phi = np.arcsin(points[:, 2] / r_safe)
+
+        # Retrieve BVC parameters
+        d_i = self.d_i[bvc_idx].item()
+        theta_i = self.theta_i[bvc_idx].item()
+        psi_i = self.psi_i[bvc_idx].item()
+        sigma_r = self.sigma_r[bvc_idx].item()
+        sigma_theta = self.sigma_theta[bvc_idx].item()
+        sigma_phi = self.sigma_phi[bvc_idx].item()
+
+        # Compute normalized Gaussian responses for each component:
+        # Distance response
+        r_gauss = np.exp(-((r - d_i) ** 2) / (2 * sigma_r**2))
+        r_gauss /= np.sqrt(2 * np.pi * sigma_r**2)
+
+        # Horizontal angle (theta) response with proper wrapping and normalization
+        theta_diff = np.arctan2(np.sin(theta - theta_i), np.cos(theta - theta_i))
+        theta_gauss = np.exp(-(theta_diff**2) / (2 * sigma_theta**2))
+        theta_gauss /= np.sqrt(2 * np.pi * sigma_theta**2)
+
+        # Vertical angle (phi) response with proper normalization
+        phi_diff = phi - psi_i
+        phi_gauss = np.exp(-(phi_diff**2) / (2 * sigma_phi**2))
+        phi_gauss /= np.sqrt(2 * np.pi * sigma_phi**2)
+
+        # Combined response and normalization:
+        responses = r_gauss * theta_gauss * phi_gauss
+
+        # Normalize to [0,1] range
+        responses = responses / responses.max()
+
+        return points, responses
+
+    def plot_single_bvc_response(
+        self,
+        bvc_idx: int,
+        grid_resolution: int = 50,
+        max_range: float = 10.0,
+        response_threshold: float = 0.1,
+        show_grid: bool = False,
+        point_size: int = 20,
+    ):
+        """
+        Visualize the 3D activation field of a single BVC.
+
+        Args:
+            bvc_idx: Index of the BVC to visualize.
+            grid_resolution: Number of grid points along each dimension.
+            max_range: Maximum coordinate value (in meters) for the grid.
+            response_threshold: Minimum response value to display (between 0 and 1).
+            show_grid: If True, shows all sampled points with low alpha.
+            point_size: Size of the scatter points.
+        """
+        points, responses = self.compute_single_bvc_response(
+            bvc_idx, grid_resolution, max_range
+        )
+
+        fig = plt.figure(figsize=(12, 8))
+        ax = fig.add_subplot(111, projection="3d")
+
+        # First plot the sampling grid if requested
+        if show_grid:
+            ax.scatter(
+                points[:, 0],
+                points[:, 1],
+                points[:, 2],
+                c="gray",
+                s=point_size / 4,
+                alpha=0.1,
+                label="Sampling Grid",
+            )
+
+        # Filter points based on threshold
+        mask = responses >= response_threshold
+        filtered_points = points[mask]
+        filtered_responses = responses[mask]
+
+        # Plot points with color indicating the BVC response
+        scatter = ax.scatter(
+            filtered_points[:, 0],
+            filtered_points[:, 1],
+            filtered_points[:, 2],
+            c=filtered_responses,
+            cmap="viridis",
+            s=point_size,
+            alpha=0.8,  # Fixed alpha for better visibility
+        )
+        plt.colorbar(scatter, label="Normalized Response")
+
+        # Compute the BVC's preferred location (in Cartesian coordinates)
+        d_i = self.d_i[bvc_idx].item()
+        theta_i = self.theta_i[bvc_idx].item()
+        psi_i = self.psi_i[bvc_idx].item()
+        x_bvc = d_i * np.cos(psi_i) * np.cos(theta_i)
+        y_bvc = d_i * np.cos(psi_i) * np.sin(theta_i)
+        z_bvc = d_i * np.sin(psi_i)
+
+        # Mark the BVC's preferred location and the origin.
+        ax.scatter(
+            [x_bvc], [y_bvc], [z_bvc], c="red", marker="*", s=200, label="BVC Preferred"
+        )
+        ax.scatter([0], [0], [0], c="black", marker="o", s=100, label="Origin")
+
+        ax.set_xlabel("X (m)")
+        ax.set_ylabel("Y (m)")
+        ax.set_zlabel("Z (m)")
+        ax.set_title(
+            f"BVC {bvc_idx} Response Field\n(d={d_i:.1f} m, θ={np.degrees(theta_i):.1f}°, φ={np.degrees(psi_i):.1f}°)"
+        )
+        ax.set_box_aspect([1, 1, 1])
+        ax.legend()
+        plt.show()
+
+        return fig
+
+
+# %%
+# Example usage:
 if __name__ == "__main__":
-    # Suppose we have a 90x180 3D scan (vertical_boundaries)
-    # For demonstration, we'll construct synthetic data:
-    input_rows, input_cols = 90, 180
-    radius_min, radius_max = 1.0, 10.0
-    vertical_boundaries = np.random.uniform(
-        radius_min, radius_max, (input_rows, input_cols)
-    )
+    # Create a BVC layer with sample parameters.
+    phi_vert_preferred = [0]  # single vertical preference for simplicity
+    sigma_rs = [0.5]
+    sigma_thetas = [0.01]
+    sigma_phis = [0.1]
+    scaling_factors = [1.0]
 
-    phi_vert_preferred = [0, 0.3, 0.6]  # in radians
-    sigma_rs = [0.2, 0.2, 0.2]
-    sigma_thetas = [0.025, 0.05, 0.05]
-    sigma_phis = [0.025, 0.1, 0.1]
-    scaling_factors = [1.0, 0.5, 0.1]
-
-    # Create BVC layer
-    bvc_layer_3d = BoundaryVectorCellLayer3D(
-        max_dist=12.0,
+    bvc_layer = BoundaryVectorCellLayer3D(
+        max_dist=10.0,
         n_hd=8,
         phi_vert_preferred=phi_vert_preferred,
         sigma_rs=sigma_rs,
         sigma_thetas=sigma_thetas,
         sigma_phis=sigma_phis,
         scaling_factors=scaling_factors,
-        num_bvc_per_dir=50,
-        input_rows=input_rows,
-        input_cols=input_cols,
-        top_cutoff_percentage=0.0,
-        bottom_cutoff_percentage=0.5,
+        num_bvc_per_dir=10,
+        input_rows=90,
+        input_cols=180,
         device="cpu",
     )
 
-    # Plot activation distribution
-    bvc_layer_3d.plot_activation_distribution(vertical_boundaries)
-
-    # Plot the 3D radial scan + BVC centers
-    bvc_layer_3d.plot_activation(
-        torch.tensor(vertical_boundaries, dtype=torch.float32), return_plot=False
-    )
+    # Visualize the 3D activation field for BVC at index 0.
+    bvc_layer.plot_single_bvc_response(bvc_idx=1, grid_resolution=400, max_range=20.0)

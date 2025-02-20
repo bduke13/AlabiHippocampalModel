@@ -126,6 +126,9 @@ class Driver(Supervisor):
 
         # Model parameters
         self.num_place_cells = 500
+        self.num_bvc_per_dir = 50
+        self.sigma_r = 0.5
+        self.sigma_theta = 5
         self.n_hd = 8
         self.timestep = 32 * 3
         self.tau_w = 5  # time constant for the window function
@@ -199,6 +202,9 @@ class Driver(Supervisor):
             num_place_cells=self.num_place_cells,
             n_hd=self.n_hd,
             timestep=self.timestep,
+            sigma_r=self.sigma_r,
+            sigma_theta=self.sigma_theta,
+            num_bvc_per_dir=self.num_bvc_per_dir,
             enable_ojas=enable_ojas,
             enable_stdp=enable_stdp,
             device=self.device,
@@ -210,7 +216,7 @@ class Driver(Supervisor):
             device=self.device,
         )
         self.head_direction_layer = HeadDirectionLayer(
-            num_cells=self.n_hd, device="cpu"
+            num_cells=self.n_hd, device=torch.device("cpu")
         )
 
         # Initialize hmaps (history maps) to record activations and positions
@@ -248,9 +254,12 @@ class Driver(Supervisor):
         num_place_cells: int,
         n_hd: int,
         timestep: int,
+        sigma_theta: float,
+        sigma_r: float,
+        num_bvc_per_dir: int,
+        device: torch.device,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
-        device: Optional[str] = None,
     ):
         """Loads an existing place cell network from disk or initializes a new one.
 
@@ -278,10 +287,10 @@ class Driver(Supervisor):
             bvc = BoundaryVectorCellLayer(
                 n_res=self.lidar_resolution,
                 n_hd=n_hd,
-                sigma_theta=10,
-                sigma_r=0.5,
+                sigma_theta=sigma_theta,
+                sigma_r=sigma_r,
                 max_dist=self.max_dist,
-                num_bvc_per_dir=50,
+                num_bvc_per_dir=num_bvc_per_dir,
                 device=device,
             )
 
@@ -311,7 +320,11 @@ class Driver(Supervisor):
         return self.pcn
 
     def load_rcn(
-        self, num_place_cells: int, num_replay: int, learning_rate: float, device: str
+        self,
+        num_place_cells: int,
+        num_replay: int,
+        learning_rate: float,
+        device: torch.device,
     ):
         """Loads or initializes the reward cell network.
 

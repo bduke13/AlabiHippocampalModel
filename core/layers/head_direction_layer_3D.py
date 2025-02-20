@@ -6,7 +6,9 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from scipy.spatial import ConvexHull
 
 
-def create_icosahedron_torch(radius=1.0, dtype=torch.float32, device="cpu"):
+def create_icosahedron_torch(
+    radius=1.0, dtype=torch.float32, device: torch.device = torch.device("cpu")
+):
     """
     Creates an icosahedron (12 vertices, 20 triangular faces) using numpy + scipy,
     then converts the result to torch tensors.

@@ -26,7 +26,7 @@ class PlaceCellLayer:
         enable_ojas: bool = False,
         enable_stdp: bool = False,
         w_in_init_ratio: float = 0.25,
-        device: str = "cpu",
+        device: torch.device = torch.device("cpu"),
         dtype: torch.dtype = torch.float32,
         gamma_pp: float = 0.5,
         gamma_pb: float = 0.3,
