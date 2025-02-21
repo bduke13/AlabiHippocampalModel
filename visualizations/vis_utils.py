@@ -13,7 +13,7 @@ sys.path.append(str(project_root))
 
 CONTROLLER_PATH_PREFIX = "webots/controllers/"
 CONTROLLER_NAME = "create3_base"
-WORLD_NAME = "A_iCreateBotEasy_10"
+WORLD_NAME = "iCreateBotCross"
 
 # Define output directories relative to project root
 OUTPUT_DIR = os.path.join(
@@ -84,15 +84,8 @@ def load_hmaps(
 
 
 def convert_xzy_hmaps(hmap_loc: np.ndarray) -> List[np.ndarray]:
-    """Splits the hmap_loc data into x, z, and y components.
-       Note: In the new model, the translation is [x, y, z], where y is vertical.
-       We want x and z for the horizontal plane.
-    """
-    x = hmap_loc[:, 0]
-    z = hmap_loc[:, 2]
-    y = hmap_loc[:, 1]
-    return x, z, y
-
+    """Utility method that splits hmap_x, hmap_z, and hmap_y from the hmap_loc file output by webots. We use {X,Z,Y} outputs as this is what is returned by webots from the"""
+    return hmap_loc[:, 0], hmap_loc[:, 1], hmap_loc[:, 2]
 
 
 def get_available_directories(root_path: str, max_dirs: int = 200) -> List[str]:
