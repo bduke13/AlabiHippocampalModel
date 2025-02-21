@@ -44,6 +44,7 @@ class Driver(Supervisor):
         world_name: Optional[str] = None,
         goal_location: Optional[List[float]] = None,
         max_dist: Optional[float] = None,
+        plot_bvc: Optional[bool] = False,
     ):
         """
         Initializes the Driver class, setting up the robot's sensors and neural networks.
@@ -202,6 +203,7 @@ class Driver(Supervisor):
 
         # Optionally keep a single-scale reference
         self.pcn = self.pcns[0] if self.pcns else None
+        self.plot_bvc = plot_bvc
 
         # Step once
         self.step(self.timestep)
@@ -330,17 +332,17 @@ class Driver(Supervisor):
                 for pcn, rcn in zip(self.pcns, self.rcns):
                     rcn.update_reward_cell_activations(pcn.place_cell_activations)
                     # rcn.td_update(pcn.place_cell_activations, next_reward=actual_reward)
-                # Turn towards heading 225°
-                desired_heading_deg = 90
-                # Compute the minimal angular difference (normalized to [-180, 180])
-                angle_to_turn_deg = desired_heading_deg - self.current_heading_deg
-                angle_to_turn_deg = ((angle_to_turn_deg + 180) % 360) - 180
-                angle_to_turn = np.deg2rad(angle_to_turn_deg)
-                self.turn(angle_to_turn)
-                self.check_goal_reached()
-                self.update_hmaps()
-                self.forward()        
-                break 
+                # # Turn towards heading 225°
+                # desired_heading_deg = 90
+                # # Compute the minimal angular difference (normalized to [-180, 180])
+                # angle_to_turn_deg = desired_heading_deg - self.current_heading_deg
+                # angle_to_turn_deg = ((angle_to_turn_deg + 180) % 360) - 180
+                # angle_to_turn = np.deg2rad(angle_to_turn_deg)
+                # self.turn(angle_to_turn)
+                # self.check_goal_reached()
+                # self.update_hmaps()
+                # self.forward()        
+                # break 
 
             # 6) If collisions => turn away
             if torch.any(self.collided):
@@ -648,11 +650,13 @@ class Driver(Supervisor):
         # For each scale's PCN, call get_place_cell_activations
         for pcn in self.pcns:
             pcn.get_place_cell_activations(
-                distances=self.boundaries, 
+                distances=self.boundaries,
+                angles=torch.linspace(0, 2 * np.pi, 720, device=self.device),
                 hd_activations=self.hd_activations,
                 collided=torch.any(self.collided),
             )
-            # pcn.bvc_layer.plot_activation(self.boundaries.cpu())
+            if self.plot_bvc:
+                pcn.bvc_layer.plot_activation(self.boundaries.cpu())
             # Append activations to pcn_activations_list
             act = pcn.place_cell_activations.clone().detach()
             self.pcn_activations_list.append(act)
