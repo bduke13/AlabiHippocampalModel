@@ -20,7 +20,7 @@ else:
     # Single-trial mode.
     trial_params = {
         # Environment parameters:
-        "environment_label": "10x10",
+        "environment_label": "20Maze",
         "max_runtime_hours": 3,  # maximum run time in hours
         "randomize_start_loc": False,
         "start_loc": [4, -4],
@@ -28,11 +28,11 @@ else:
         # Model/layer parameters:
         "mode": RobotMode.LEARN_OJAS,
         "movement_method": "default",  # placeholder
-        "sigma_ang": 0.01,
-        "sigma_d": 0.5,
+        "sigma_ang": 1,
+        "sigma_d": .5,
         "max_dist": 10,
         "num_bvc_per_dir": 50,
-        "num_place_cells": 500,
+        "num_place_cells": 300,
         "n_hd": 8,
         # Runtime and data-saving parameters:
         "save_trial_data": True,

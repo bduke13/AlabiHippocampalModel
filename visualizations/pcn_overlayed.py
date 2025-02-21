@@ -39,7 +39,7 @@ def plot_overlayed_cells(
     hmap_pcn: np.ndarray,
     hmap_x: np.ndarray,
     hmap_z: np.ndarray,   # renamed parameter to reflect horizontal z
-    gridsize: int = 100,
+    gridsize: int = 50,
     num_cells_to_sample: Optional[int] = None,
     show_plot: bool = True,
     save_path: Optional[str] = None,
@@ -168,9 +168,9 @@ if __name__ == "__main__":
     plot_overlayed_cells(
         hmap_pcn=hmap_pcn,
         hmap_x=hmap_x,
-        hmap_y=hmap_y,
-        gridsize=60,
-        num_cells_to_sample=None,  # Use all cells with non-zero activation
+        hmap_z=hmap_z,
+        gridsize=100,
+        num_cells_to_sample=10,  # Use all cells with non-zero activation
         show_plot=True,
         save_path=None,
     )
