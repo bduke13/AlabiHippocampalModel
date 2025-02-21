@@ -11,7 +11,7 @@ class HeadDirectionLayer:
         num_cells: int,
         theta_0: float = 0.0,
         dtype: torch.dtype = torch.float32,
-        device="cpu",
+        device: torch.device = torch.device("cpu"),
     ) -> None:
         """Initializes a layer of head direction cells using PyTorch.
 
@@ -67,10 +67,12 @@ class HeadDirectionLayer:
             v_in = v_in.clone().detach().to(dtype=self.dtype, device=self.device)
         else:
             v_in = torch.tensor(data=v_in, dtype=self.dtype, device=self.device)
-        
+
         if v_in.shape != (2,):
-            raise ValueError("v_in should be a 2-element torch.Tensor, e.g. [cosθ, sinθ].")
-        
+            raise ValueError(
+                "v_in should be a 2-element torch.Tensor, e.g. [cosθ, sinθ]."
+            )
+
         activation = torch.matmul(self.tuning_kernel, v_in)
         self.hd_activations = activation
         return activation
