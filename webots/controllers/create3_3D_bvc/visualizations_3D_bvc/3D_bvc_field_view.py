@@ -21,22 +21,22 @@ try:
     args = parse_args()
     show_2d_plots = args.show_2d_plots
 except SystemExit:  # Catch the SystemExit when running in notebook
-    show_2d_plots = False  # Default when running in notebook/interactive mode
+    show_2d_plots = True  # Default when running in notebook/interactive mode
 
 # Define grid ranges and density
-x_range = (-5, 5)
-y_range = (-5, 5)
-z_range = (-5, 5)
-density = 10  # Adjust this for resolution
+x_range = (0, 20)
+y_range = (0, 20)
+z_range = (0, 20)
+density = 5  # Adjust this for resolution
 
 # Define BVC parameters
-preferred_distance = 4.0  # d_i
+preferred_distance = 2.0  # d_i
 preferred_horiz_angle = np.pi / 4  # φ_i (in radians)
 preferred_vert_angle = np.pi / 6  # ψ_i (in radians)
 
-sigma_r = 1.0  # Tuning width for distance
-sigma_theta = 0.5  # Tuning width for horizontal direction
-sigma_phi = 0.5  # Tuning width for vertical direction
+sigma_r = 0.5  # Tuning width for distance
+sigma_theta = 0.02  # Tuning width for horizontal direction
+sigma_phi = 0.02  # Tuning width for vertical direction
 
 # Generate grid points
 x_values = np.linspace(*x_range, int((x_range[1] - x_range[0]) * density))
@@ -67,50 +67,6 @@ raw_activation = activation.copy()
 # Normalize activation between [0, 0.5]
 activation = activation / activation.max() * 0.5
 
-# Create and display histogram only if show_2d_plots is True
-if show_2d_plots:
-    # Create a histogram of the activation distribution
-    hist_fig = go.Figure(
-        data=[
-            go.Histogram(
-                x=raw_activation,
-                nbinsx=50,
-                marker_color="rgba(100, 0, 200, 0.7)",
-                opacity=0.8,
-                name="Activation Distribution",
-            )
-        ]
-    )
-
-    hist_fig.update_layout(
-        title="Distribution of BVC Activations",
-        xaxis_title="Activation Value",
-        yaxis_title="Frequency",
-        bargap=0.05,
-        template="plotly_white",
-    )
-
-    # Add a vertical line for the mean activation
-    hist_fig.add_vline(
-        x=np.mean(raw_activation),
-        line_dash="dash",
-        line_color="red",
-        annotation_text=f"Mean: {np.mean(raw_activation):.4f}",
-        annotation_position="top right",
-    )
-
-    # Add a vertical line for the median activation
-    hist_fig.add_vline(
-        x=np.median(raw_activation),
-        line_dash="dot",
-        line_color="green",
-        annotation_text=f"Median: {np.median(raw_activation):.4f}",
-        annotation_position="top left",
-    )
-
-    # Display the histogram
-    hist_fig.show()
-
 # Calculate the preferred location in Cartesian coordinates
 preferred_x = (
     preferred_distance * np.cos(preferred_horiz_angle) * np.cos(preferred_vert_angle)
@@ -120,7 +76,33 @@ preferred_y = (
 )
 preferred_z = preferred_distance * np.sin(preferred_vert_angle)
 
-# Create a 3D visualization with isosurfaces for better visibility
+# Compute the preferred axis vector (from origin to preferred location)
+v = np.array([preferred_x, preferred_y, preferred_z])
+v_norm = np.linalg.norm(v)
+v_unit = v / v_norm if v_norm != 0 else np.array([1, 0, 0])
+
+# Choose an arbitrary vector that is not parallel to v_unit
+arbitrary = (
+    np.array([0, 0, 1])
+    if abs(np.dot(v_unit, np.array([0, 0, 1]))) < 0.9
+    else np.array([1, 0, 0])
+)
+
+# Compute two orthonormal vectors (u1 and u2) perpendicular to v_unit
+u1 = np.cross(v_unit, arbitrary)
+u1 = u1 / np.linalg.norm(u1)
+u2 = np.cross(v_unit, u1)
+u2 = u2 / np.linalg.norm(u2)
+
+# --- Apply quadrant masking to "chunk out" one quarter of the distribution ---
+# For each grid point, compute its dot products with u1 and u2.
+# Points with positive dot products with both (i.e. in one quadrant) are removed.
+dot1 = X_flat * u1[0] + Y_flat * u1[1] + Z_flat * u1[2]
+dot2 = X_flat * u2[0] + Y_flat * u2[1] + Z_flat * u2[2]
+mask = (dot1 > 0) & (dot2 > 0)
+activation[mask] = 0
+# --- End masking ---
+
 # Reshape the activation values to match the 3D grid
 activation_3d = activation.reshape(X.shape)
 
@@ -128,14 +110,10 @@ activation_3d = activation.reshape(X.shape)
 fig = go.Figure()
 
 # Determine visualization approach based on activation distribution
-# Find the 90th percentile for high activation threshold
 high_threshold = np.percentile(activation, 90)
-# Find a lower threshold that captures the structure but excludes noise
 mid_threshold = np.percentile(activation, 70)
 
-# Add isosurface for better 3D visualization
-# Create multiple isosurfaces at different activation levels
-# Use more levels for better visualization of the 3D structure
+# Add isosurfaces for better 3D visualization (multiple levels)
 for level_idx, level in enumerate(np.linspace(mid_threshold, high_threshold, 4)):
     opacity = 0.2 + 0.1 * level_idx  # Increase opacity for higher activation levels
     fig.add_trace(
@@ -147,26 +125,26 @@ for level_idx, level in enumerate(np.linspace(mid_threshold, high_threshold, 4))
             isomin=level,
             isomax=level + 0.02,
             opacity=opacity,
-            surface_count=2,  # More detailed surfaces
+            surface_count=2,
             colorscale="Plasma",
-            showscale=level_idx == 0,  # Only show colorbar for the first isosurface
+            showscale=level_idx == 0,
             colorbar=dict(title="Activation") if level_idx == 0 else None,
             name=f"Activation Level {level:.3f}",
             caps=dict(x=dict(show=False), y=dict(show=False), z=dict(show=False)),
         )
     )
 
-# Add a volume rendering for better visualization of the full 3D structure
+# Add a volume rendering for smoother visualization of the full 3D structure
 fig.add_trace(
     go.Volume(
         x=X.flatten(),
         y=Y.flatten(),
         z=Z.flatten(),
         value=activation.flatten(),
-        isomin=mid_threshold * 0.8,  # Slightly lower threshold for volume
+        isomin=mid_threshold * 0.8,
         isomax=high_threshold,
-        opacity=0.1,  # Very transparent
-        surface_count=20,  # More surfaces for smoother rendering
+        opacity=0.1,
+        surface_count=20,
         colorscale="Plasma",
         showscale=False,
         name="Volume Rendering",
@@ -180,11 +158,7 @@ fig.add_trace(
         y=[0],
         z=[0],
         mode="markers",
-        marker=dict(
-            size=15,  # Increased size
-            color="red",
-            symbol="circle",
-        ),
+        marker=dict(size=15, color="red", symbol="circle"),
         name="Origin",
     )
 )
@@ -196,11 +170,7 @@ fig.add_trace(
         y=[preferred_y],
         z=[preferred_z],
         mode="markers",
-        marker=dict(
-            size=15,  # Increased size
-            color="green",
-            symbol="circle",
-        ),
+        marker=dict(size=15, color="green", symbol="circle"),
         name="Preferred Location",
     )
 )
@@ -212,28 +182,20 @@ fig.add_trace(
         y=[0, preferred_y],
         z=[0, preferred_z],
         mode="lines",
-        line=dict(
-            color="black",
-            width=6,  # Increased line width
-            dash="dash",
-        ),
+        line=dict(color="black", width=6, dash="dash"),
         name="Preferred Distance Vector",
     )
 )
 
-# Set layout and fix axis ranges with improved camera angle
+# Set layout and fix axis ranges with an improved camera angle
 fig.update_layout(
-    title="3D Boundary Vector Cell (BVC) Firing Field",
+    title="3D Boundary Vector Cell (BVC) Firing Field (with quadrant removed)",
     scene=dict(
         xaxis=dict(title="X", range=[x_range[0], x_range[1]]),
         yaxis=dict(title="Y", range=[y_range[0], y_range[1]]),
         zaxis=dict(title="Z", range=[z_range[0], z_range[1]]),
-        # Set a good initial camera angle to see the structure
-        camera=dict(
-            eye=dict(x=1.5, y=1.5, z=1.2),
-            center=dict(x=0, y=0, z=0),
-        ),
-        aspectmode="cube",  # Force equal aspect ratio
+        camera=dict(eye=dict(x=1.5, y=1.5, z=1.2), center=dict(x=0, y=0, z=0)),
+        aspectmode="cube",
     ),
     legend=dict(
         x=0.01,
@@ -246,15 +208,14 @@ fig.update_layout(
     ),
 )
 
-
-# Display the plot
+# Display the 3D plot
 fig.show()
 
 # Create and display 2D heatmap only if show_2d_plots is True
 if show_2d_plots:
-    # Create a 2D heatmap of activations at z=0 plane
-    z_mid_idx = len(z_values) // 2  # Get the middle index for z=0 (or closest to 0)
-    z_slice = Z[:, :, z_mid_idx]
+    z_mid_idx = (
+        len(z_values) // 2
+    )  # Use the middle index for the z=0 plane (or nearest)
     activation_2d = activation.reshape(X.shape)[:, :, z_mid_idx]
 
     heatmap_fig = go.Figure(
@@ -280,10 +241,8 @@ if show_2d_plots:
         )
     )
 
-    # Add a marker for the preferred location projection on z=0 plane
-    if abs(preferred_z) < max(
-        z_range
-    ):  # Only if the preferred location is within z range
+    # Add a marker for the preferred location projection on the z=0 plane
+    if abs(preferred_z) < max(z_range):
         heatmap_fig.add_trace(
             go.Scatter(
                 x=[preferred_x],
@@ -298,30 +257,23 @@ if show_2d_plots:
                 name="Preferred Location (z-projection)",
             )
         )
-
-        # Add a dashed line from origin to preferred location
         heatmap_fig.add_trace(
             go.Scatter(
                 x=[0, preferred_x],
                 y=[0, preferred_y],
                 mode="lines",
-                line=dict(
-                    color="black",
-                    width=2,
-                    dash="dash",
-                ),
+                line=dict(color="black", width=2, dash="dash"),
                 name="Preferred Vector (z-projection)",
             )
         )
 
     heatmap_fig.update_layout(
-        title="2D Heatmap of BVC Activations (z=0 plane)",
+        title="2D Heatmap of BVC Activations (z=0 plane, quadrant removed)",
         xaxis_title="X",
         yaxis_title="Y",
         template="plotly_white",
     )
 
-    # Display the heatmap
     heatmap_fig.show()
 
 # Add a main function to make the script runnable
