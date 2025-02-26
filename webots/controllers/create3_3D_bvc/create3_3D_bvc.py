@@ -21,11 +21,12 @@ sigma_rs = [1] * len(phi_vert_preferred)
 sigma_thetas = [0.02] * len(phi_vert_preferred)
 sigma_phis = [0.02] * len(phi_vert_preferred)
 scaling_factors = [1] * len(phi_vert_preferred)
-visual_bvc = False
 max_dist = 10
 
 start_location = [1, 1]
 goal_location = [-1, 1]
+
+show_bvc_activation_plot = False
 
 
 bot = Driver()
@@ -45,7 +46,7 @@ bot.initialization(
     sigma_phis=sigma_phis,
     scaling_factors=scaling_factors,
     num_bvc_per_dir=num_bvc_per_dir,
-    visual_bvc=visual_bvc,
     max_dist=max_dist,
+    show_bvc_activation_plot=show_bvc_activation_plot,
 )
 bot.run()

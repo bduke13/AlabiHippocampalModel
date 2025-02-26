@@ -79,12 +79,12 @@ class Driver(Supervisor):
         input_cols: int = 180,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
-        visual_bvc: bool = False,
         world_name: Optional[str] = None,
         start_location: Optional[List[int]] = None,
         randomize_start_location: bool = True,
         goal_location: Optional[List[float]] = None,
         max_dist: float = 10,
+        show_bvc_activation_plot: bool = False,
     ):
         """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
@@ -119,7 +119,7 @@ class Driver(Supervisor):
                 0
             ]  # Extract just the world name
         self.world_name = world_name
-        self.visual_bvc = visual_bvc
+        self.show_bvc_activation_plot = show_bvc_activation_plot
 
         # Construct directory paths
         self.hmap_dir = os.path.join("pkl", self.world_name, "hmaps")
@@ -584,7 +584,7 @@ class Driver(Supervisor):
             hd_activations=self.hd_activations,
             collided=torch.any(self.collided),
         )
-        if self.visual_bvc:
+        if self.show_bvc_activation_plot:
             self.pcn.bvc_layer.plot_activation(self.boundaries)
 
         # Advance simulation one timestep
