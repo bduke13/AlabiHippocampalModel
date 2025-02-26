@@ -508,6 +508,8 @@ class Driver(Supervisor):
         """
         Uses sensors to update range-image, heading, boundary data, collision flags, etc.
         """
+        # Advance simulation one timestep
+        self.step(self.timestep)
         # Get the latest boundary data from range finder
         boundaries = self.range_finder.getRangeImage()
 
@@ -536,9 +538,6 @@ class Driver(Supervisor):
         # Check for collisions via bumpers
         self.collided[0] = int(self.left_bumper.getValue())
         self.collided[1] = int(self.right_bumper.getValue())
-
-        # Advance simulation one timestep
-        self.step(self.timestep)
 
     def get_bearing_in_degrees(self, north: List[float]) -> float:
         """
