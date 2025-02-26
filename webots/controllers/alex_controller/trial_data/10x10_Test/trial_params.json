@@ -1,0 +1,22 @@
+{
+    "environment_label": "20Maze",
+    "max_runtime_hours": 6,
+    "randomize_start_loc": false,
+    "start_loc": [
+        4,
+        -4
+    ],
+    "goal_location": [
+        -3,
+        3
+    ],
+    "mode": "RobotMode.LEARN_OJAS",
+    "movement_method": "default",
+    "sigma_ang": 5,
+    "sigma_d": 0.7,
+    "max_dist": 10,
+    "num_bvc_per_dir": 200,
+    "num_place_cells": 500,
+    "n_hd": 8,
+    "trial_name": "10x10_Test"
+}

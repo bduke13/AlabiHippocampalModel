@@ -20,7 +20,8 @@ sys.path.append(str(PROJECT_ROOT))  # Add project root to sys.path
 
 from core.layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
 from core.layers.head_direction_layer import HeadDirectionLayer
-from core.layers.place_cell_layer import PlaceCellLayer
+from core.layers.place_cell_layer_with_grid import PlaceCellLayerWithGrid
+from core.layers.grid_cell_layer import OscillatoryInterferenceGridCellLayer
 from core.layers.reward_cell_layer import RewardCellLayer
 from core.robot.robot_mode import RobotMode
 
@@ -30,112 +31,75 @@ from core.robot.robot_mode import RobotMode
 # rng = default_rng(5)  # or keep it as is
 np.set_printoptions(precision=2)
 
-
-class Driver(Supervisor):
-    """Controls robot navigation and learning using neural networks for place and reward cells.
-
-    This class manages the robot's sensory inputs, motor outputs, and neural network layers
-    to enable autonomous navigation and learning in an environment. It coordinates between
-    place cells for spatial representation and reward cells for goal-directed behavior.
-
-    Attributes:
-        max_speed (float): Maximum wheel rotation speed in rad/s.
-        left_speed (float): Current left wheel speed in rad/s.
-        right_speed (float): Current right wheel speed in rad/s.
-        timestep (int): Duration of each simulation step in ms.
-        wheel_radius (float): Radius of robot wheels in meters.
-        axle_length (float): Distance between wheels in meters.
-        num_steps (int): Total number of simulation steps.
-        hmap_loc (ndarray): History of xzy-coordinates.
-        hmap_pcn (ndarray): History of place cell activations.
-        hmap_hdn (ndarray): History of head direction activations.
-        hmap_g (ndarray): History of goal estimates.
-        robot (Robot): Main robot controller instance.
-        keyboard (Keyboard): Keyboard input device.
-        compass (Compass): Compass sensor device.
-        range_finder (RangeFinder): LiDAR sensor device.
-        left_bumper (TouchSensor): Left collision sensor.
-        right_bumper (TouchSensor): Right collision sensor.
-        rotation_field (Field): Robot rotation field.
-        left_motor (Motor): Left wheel motor controller.
-        right_motor (Motor): Right wheel motor controller.
-        left_position_sensor (PositionSensor): Left wheel encoder.
-        right_position_sensor (PositionSensor): Right wheel encoder.
-        pcn (PlaceCellLayer): Place cell neural network.
-        rcn (RewardCellLayer): Reward cell neural network.
-        boundary_data (Tensor): Current LiDAR readings.
-        goal_location (List[float]): Target [x,y] coordinates.
-        expected_reward (float): Predicted reward at current state.
-    """
+class DriverGrid(Supervisor):
+    def __init__(self):
+        super(DriverGrid, self).__init__()
+        # Use self.getFromDef("agent") to get robot instance, consistent with driver.py
+        self.robot = self.getFromDef("agent")  # Removed robot: RobotInterface parameter
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.dtype = torch.float32
+        self.step_count = 0
 
     def initialization(
         self,
-        mode=RobotMode.PLOTTING,
+        mode: RobotMode,
         run_time_hours: int = 2,
         randomize_start_loc: bool = True,
-        start_loc: Optional[List[int]] = None,
+        start_loc: Optional[List[float]] = None,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
         world_name: Optional[str] = None,
         goal_location: Optional[List[float]] = None,
         max_dist: float = 10,
         show_bvc_activation: bool = False,
+        num_place_cells: int = 500,  # Added for compatibility and grid integration
+        num_modules: int = 4,  # Grid cell parameter
+        grid_spacings: List[float] = [0.3, 0.5, 0.7, 1.0],  # Grid cell parameter
+        num_cells_per_module: int = 10,  # Grid cell parameter
     ):
-        """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
+        """Initialize the robot, neural layers, and history maps with grid cell integration.
 
         Args:
-            mode (RobotMode): The operating mode for the robot.
-            randomize_start_loc (bool, optional): Whether to randomize the agent's spawn location.
-                Defaults to True.
-            run_time_hours (int, optional): Total run time for the simulation in hours.
-                Defaults to 1.
-            start_loc (Optional[List[int]], optional): Specific starting location coordinates [x,y].
-                Defaults to None.
-            enable_ojas (Optional[bool], optional): Flag to enable Oja's learning rule.
-                If None, determined by robot mode. Defaults to None.
-            enable_stdp (Optional[bool], optional): Flag to enable Spike-Timing-Dependent Plasticity.
-                If None, determined by robot mode. Defaults to None.
-
-        Returns:
-            None
+            mode (RobotMode): Operating mode for the robot.
+            run_time_hours (int): Total simulation run time in hours.
+            randomize_start_loc (bool): Whether to randomize the robot's starting location.
+            start_loc (Optional[List[float]]): Specific starting location [x, y].
+            enable_ojas (Optional[bool]): Enable Oja's learning rule.
+            enable_stdp (Optional[bool]): Enable Spike-Timing-Dependent Plasticity.
+            world_name (Optional[str]): Name of the simulation world.
+            goal_location (Optional[List[float]]): Target [x, y] coordinates.
+            max_dist (float): Maximum distance for boundary detection.
+            show_bvc_activation (bool): Whether to visualize BVC activations.
+            num_place_cells (int): Number of place cells.
+            num_modules (int): Number of grid cell modules.
+            grid_spacings (List[float]): Spatial scales for grid modules.
+            num_cells_per_module (int): Number of grid cells per module.
         """
-        # Set the robot mode and device
-        self.robot = self.getFromDef("agent")  # Placeholder for robot instance
         self.robot_mode = mode
-        self.device = (
-            torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-        )
-        self.dtype = torch.float32
         self.show_bvc_activation = show_bvc_activation
 
-        # Set the world name and directories for saving data
+        # Set world name and directories (unchanged from driver.py)
         if world_name is None:
-            world_path = self.getWorldPath()  # Get the full path to the world file
-            world_name = os.path.splitext(os.path.basename(world_path))[
-                0
-            ]  # Extract just the world name
+            world_path = self.getWorldPath()
+            world_name = os.path.splitext(os.path.basename(world_path))[0]
         self.world_name = world_name
-
-        # Construct directory paths
         self.hmap_dir = os.path.join("pkl", self.world_name, "hmaps")
         self.network_dir = os.path.join("pkl", self.world_name, "networks")
-
-        # Ensure directories exist
         os.makedirs(self.hmap_dir, exist_ok=True)
         os.makedirs(self.network_dir, exist_ok=True)
 
-        # Model parameters
-        self.num_place_cells = 500
+        # Model parameters (unchanged, except num_place_cells is now a parameter)
+        self.num_place_cells = num_place_cells
         self.num_bvc_per_dir = 50
         self.sigma_r = 0.5
         self.sigma_theta = 1
         self.n_hd = 8
         self.timestep = 32 * 3
-        self.tau_w = 5  # time constant for the window function
+        self.tau_w = 5
 
-        # Robot parameters
+        # Robot parameters (unchanged from driver.py)
         self.max_speed = 16
-        self.max_dist = max_dist  # Defaults to 10. This should be the longest possible distance (m) that a lidar can detect in the specific world
+        self.max_dist = max_dist
         self.left_speed = self.max_speed
         self.right_speed = self.max_speed
         self.wheel_radius = 0.031
@@ -150,10 +114,10 @@ class Driver(Supervisor):
         else:
             self.goal_location = [-3, 3]
 
+        # Set starting location (unchanged from driver.py, but use np.random)
         if randomize_start_loc:
             while True:
-                INITIAL = [random.uniform(-2.3, 2.3), 0, random.uniform(-2.3, 2.3)]
-                # Check if distance to goal is at least 1 meter
+                INITIAL = [np.random.uniform(-2.3, 2.3), 0, np.random.uniform(-2.3, 2.3)]
                 dist_to_goal = np.sqrt(
                     (INITIAL[0] - self.goal_location[0]) ** 2
                     + (INITIAL[2] - self.goal_location[1]) ** 2
@@ -163,12 +127,10 @@ class Driver(Supervisor):
             self.robot.getField("translation").setSFVec3f(INITIAL)
             self.robot.resetPhysics()
         else:
-            self.robot.getField("translation").setSFVec3f(
-                [start_loc[0], 0, start_loc[1]]
-            )
+            self.robot.getField("translation").setSFVec3f([start_loc[0], 0, start_loc[1]])
             self.robot.resetPhysics()
 
-        # Initialize hardware components and sensors
+        # Initialize sensors and motors (unchanged from driver.py)
         self.keyboard = self.getKeyboard()
         self.keyboard.enable(self.timestep)
         self.compass = self.getDevice("compass")
@@ -179,7 +141,7 @@ class Driver(Supervisor):
         self.left_bumper.enable(self.timestep)
         self.right_bumper = self.getDevice("bumper_right")
         self.right_bumper.enable(self.timestep)
-        self.collided = torch.zeros(2, dtype=torch.int32)
+        self.collided = torch.zeros(2, dtype=torch.int32, device=self.device)
         self.rotation_field = self.robot.getField("rotation")
         self.left_motor = self.getDevice("left wheel motor")
         self.right_motor = self.getDevice("right wheel motor")
@@ -188,120 +150,123 @@ class Driver(Supervisor):
         self.right_position_sensor = self.getDevice("right wheel sensor")
         self.right_position_sensor.enable(self.timestep)
 
-        # Initialize boundaries
+        # Initialize boundaries (unchanged from driver.py)
         self.lidar_resolution = 720
         self.boundaries = torch.zeros((self.lidar_resolution, 1), device=self.device)
 
         # Initialize layers
-        if (
-            self.robot_mode == RobotMode.LEARN_OJAS
-        ):  # Delete existing pkls if in LEARN_OJAS
+        if self.robot_mode == RobotMode.LEARN_OJAS:
             self.clear()
 
-        self.load_pcn(
-            num_place_cells=self.num_place_cells,
+        # Initialize head direction layer (unchanged, but ensure device consistency)
+        self.head_direction_layer = HeadDirectionLayer(
+            num_cells=self.n_hd, device=self.device
+        )
+
+        # Initialize BVC layer (unchanged from driver.py)
+        bvc = BoundaryVectorCellLayer(
+            n_res=self.lidar_resolution,
             n_hd=self.n_hd,
-            timestep=self.timestep,
-            sigma_r=self.sigma_r,
             sigma_theta=self.sigma_theta,
+            sigma_r=self.sigma_r,
+            max_dist=self.max_dist,
             num_bvc_per_dir=self.num_bvc_per_dir,
+            device=self.device,
+        )
+
+        # Initialize grid cell layer (new for grid integration)
+        self.gcn = OscillatoryInterferenceGridCellLayer(
+            num_modules=num_modules,
+            grid_spacings=grid_spacings,
+            num_cells_per_module=num_cells_per_module,
+            device=self.device,
+            dtype=self.dtype,
+        )
+
+        # Load or initialize place cell network with grid inputs (modified)
+        self.load_pcn(
+            bvc_layer=bvc,
+            num_place_cells=num_place_cells,
+            num_grid_cells=self.gcn.total_grid_cells,
+            timestep=self.timestep,
+            n_hd=self.n_hd,
             enable_ojas=enable_ojas,
             enable_stdp=enable_stdp,
             device=self.device,
         )
+
+        # Load or initialize reward cell network (unchanged from driver.py)
         self.load_rcn(
-            num_place_cells=self.num_place_cells,
+            num_place_cells=num_place_cells,
             num_replay=3,
             learning_rate=0.1,
             device=self.device,
         )
-        self.head_direction_layer = HeadDirectionLayer(
-            num_cells=self.n_hd, device=torch.device("cpu")
-        )
 
-        # Initialize hmaps (history maps) to record activations and positions
-        # NOTE: 2D cartesian coordinates are saved in X and Z
+        # Initialize history maps (added hmap_gcn for grid cells)
         self.hmap_loc = np.zeros((self.num_steps, 3))
-        # Place cell network activation history
         self.hmap_pcn = torch.zeros(
-            (self.num_steps, self.pcn.num_pc),
-            device=self.device,
-            dtype=torch.float32,
+            (self.num_steps, num_place_cells), device=self.device, dtype=self.dtype
         )
-        # Boundary Vector Cell Network activation history
         self.hmap_bvc = torch.zeros(
-            (self.num_steps, self.pcn.bvc_layer.num_bvc),
-            device=self.device,
-            dtype=torch.float32,
+            (self.num_steps, bvc.num_bvc), device=self.device, dtype=self.dtype
         )
-        # Head direction network activation history
         self.hmap_hdn = torch.zeros(
-            (self.num_steps, self.n_hd),
-            device="cpu",
-            dtype=torch.float32,
+            (self.num_steps, self.n_hd), device=self.device, dtype=self.dtype
+        )
+        self.hmap_gcn = torch.zeros(
+            (self.num_steps, self.gcn.total_grid_cells), device=self.device, dtype=self.dtype
         )
 
+        # Additional setup (unchanged from driver.py)
         self.directional_reward_estimates = torch.zeros(self.n_hd, device=self.device)
         self.step(self.timestep)
         self.step_count += 1
-
         self.sense()
         self.compute_pcn_activations()
         self.update_hmaps()
 
     def load_pcn(
         self,
+        bvc_layer: BoundaryVectorCellLayer,
         num_place_cells: int,
-        n_hd: int,
+        num_grid_cells: int,
         timestep: int,
-        sigma_theta: float,
-        sigma_r: float,
-        num_bvc_per_dir: int,
+        n_hd: int,
         device: torch.device,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
     ):
-        """Loads an existing place cell network from disk or initializes a new one.
+        """Load or initialize the place cell network with grid inputs.
 
         Args:
-            num_place_cells (int): Number of place cells in the network.
+            bvc_layer (BoundaryVectorCellLayer): BVC layer instance.
+            num_place_cells (int): Number of place cells.
+            num_grid_cells (int): Number of grid cells.
+            timestep (int): Simulation timestep in ms.
             n_hd (int): Number of head direction cells.
-            timestep (int): Time step duration in milliseconds.
-            enable_ojas (Optional[bool], optional): Flag to enable Oja's learning rule.
-                If None, determined by robot mode. Defaults to None.
-            enable_stdp (Optional[bool], optional): Flag to enable Spike-Timing-Dependent Plasticity.
-                If None, determined by robot mode. Defaults to None.
-
-        Returns:
-            PlaceCellLayer: The loaded or newly initialized place cell network.
+            device (torch.device): Computation device.
+            enable_ojas (Optional[bool]): Enable Oja's rule.
+            enable_stdp (Optional[bool]): Enable STDP.
         """
         try:
-            network_path = os.path.join(self.network_dir, "pcn.pkl")
+            network_path = os.path.join(self.network_dir, "pcn_with_grid.pkl")
             with open(network_path, "rb") as f:
                 self.pcn = pickle.load(f)
                 self.pcn.reset_activations()
-                print("Loaded existing PCN from", network_path)
+                print("Loaded existing PCN with grid from", network_path)
                 self.pcn.device = device
                 self.pcn.bvc_layer.device = device
         except:
-            bvc = BoundaryVectorCellLayer(
-                n_res=self.lidar_resolution,
-                n_hd=n_hd,
-                sigma_theta=sigma_theta,
-                sigma_r=sigma_r,
-                max_dist=self.max_dist,
-                num_bvc_per_dir=num_bvc_per_dir,
-                device=device,
-            )
-
-            self.pcn = PlaceCellLayer(
-                bvc_layer=bvc,
+            self.pcn = PlaceCellLayerWithGrid(
+                bvc_layer=bvc_layer,
                 num_pc=num_place_cells,
+                num_grid_cells=num_grid_cells,
                 timestep=timestep,
                 n_hd=n_hd,
                 device=device,
             )
-            print("Initialized new PCN")
+            print("Initialized new PCN with grid")
 
         if enable_ojas is not None:
             self.pcn.enable_ojas = enable_ojas
@@ -317,8 +282,7 @@ class Driver(Supervisor):
                 RobotMode.EXPLOIT,
             )
 
-        return self.pcn
-
+    # load_rcn method (unchanged from driver.py)
     def load_rcn(
         self,
         num_place_cells: int,
@@ -326,15 +290,6 @@ class Driver(Supervisor):
         learning_rate: float,
         device: torch.device,
     ):
-        """Loads or initializes the reward cell network.
-
-        Args:
-            num_place_cells (int): Number of place cells providing input.
-            num_replay (int): Number of replay iterations for memory consolidation.
-
-        Returns:
-            RewardCellLayer: The loaded or newly initialized reward cell network.
-        """
         try:
             network_path = os.path.join(self.network_dir, "rcn.pkl")
             with open(network_path, "rb") as f:
@@ -349,7 +304,6 @@ class Driver(Supervisor):
                 device=device,
             )
             print("Initialized new RCN")
-
         return self.rcn
 
     ########################################### RUN LOOP ###########################################
@@ -562,10 +516,19 @@ class Driver(Supervisor):
         Uses current boundary- and HD-activations to update place-cell activations
         and store relevant data for analysis/debugging.
         """
+
+        # Get current position [x, z] from robot (Webots uses [x, y, z], y is vertical)
+        curr_pos = self.robot.getField("translation").getSFVec3f()
+        position = torch.tensor([curr_pos[0], curr_pos[2]], dtype=self.dtype, device=self.device)
+        
+        # Compute grid cell activations
+        grid_activations = self.gcn.get_grid_cell_activations(position)
+
         # Update place cell activations based on sensor data
         self.pcn.get_place_cell_activations(
             distances=self.boundaries,
             hd_activations=self.hd_activations,
+            grid_activations=grid_activations,
             collided=torch.any(self.collided),
         )
         if self.show_bvc_activation:
@@ -833,6 +796,10 @@ class Driver(Supervisor):
             # Record Head Direction Network (HDN) activations
             self.hmap_hdn[self.step_count] = self.hd_activations.detach()
 
+            # Record grid cell activations
+            position = torch.tensor([curr_pos[0], curr_pos[2]], dtype=self.dtype, device=self.device)
+            self.hmap_gcn[self.step_count] = self.gcn.get_grid_cell_activations(position).detach()
+
         self.step_count += 1
 
     def get_actual_reward(self):
@@ -891,6 +858,11 @@ class Driver(Supervisor):
             with open(pcn_path, "wb") as output:
                 pickle.dump(self.pcn, output)
                 files_saved.append(pcn_path)
+            # Save Grid Cell Network (GCN)
+            gcn_path = os.path.join(self.network_dir, "gcn.pkl")
+            with open(gcn_path, "wb") as output:
+                pickle.dump(self.gcn, output)
+                files_saved.append(gcn_path)
 
         # Save the Reward Cell Network (RCN)
         if include_rcn:
@@ -922,6 +894,12 @@ class Driver(Supervisor):
                 bvc_cpu = self.hmap_bvc[: self.step_count].cpu().numpy()
                 pickle.dump(bvc_cpu, output)
                 files_saved.append(hmap_bvc_path)
+            # Save grid cell history map
+            hmap_gcn_path = os.path.join(self.hmap_dir, "hmap_gcn.pkl")
+            with open(hmap_gcn_path, "wb") as output:
+                gcn_cpu = self.hmap_gcn[: self.step_count].cpu().numpy()
+                pickle.dump(gcn_cpu, output)
+                files_saved.append(hmap_gcn_path)
 
         # Show a message box to confirm saving
         root = tk.Tk()
@@ -945,6 +923,7 @@ class Driver(Supervisor):
         network_files = [
             os.path.join(self.network_dir, "pcn.pkl"),
             os.path.join(self.network_dir, "rcn.pkl"),
+            os.path.join(self.network_dir, "gcn.pkl"),
         ]
 
         # History map files in hmap_dir
@@ -953,6 +932,7 @@ class Driver(Supervisor):
             os.path.join(self.hmap_dir, "hmap_pcn.pkl"),
             os.path.join(self.hmap_dir, "hmap_bvc.pkl"),
             os.path.join(self.hmap_dir, "hmap_hdn.pkl"),
+            os.path.join(self.hmap_dir, "hmap_gcn.pkl"),
         ]
 
         # Remove all files

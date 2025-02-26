@@ -171,7 +171,7 @@ if __name__ == "__main__":
         hmap_pcn=hmap_pcn,
         hmap_x=hmap_x,
         hmap_y=hmap_y,
-        gridsize=60,
+        gridsize=100,
         num_cells_to_sample=None,  # Use all cells with non-zero activation
         show_plot=True,
         save_path=None,
