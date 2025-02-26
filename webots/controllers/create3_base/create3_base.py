@@ -26,7 +26,7 @@ bot.initialization(
     start_loc=[4, -4],
     goal_location=[-3, 3],
     max_dist=10,
-    show_bvc_activation=True,
+    show_bvc_activation=False,
 )
 
 bot.run()
