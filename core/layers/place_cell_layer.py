@@ -132,8 +132,6 @@ class PlaceCellLayer:
         # Enables/disables updating weights in the tripartite synapses to track adjacencies between cells
         self.enable_stdp = enable_stdp
 
-        # self.weight_update = -1
-
     def get_place_cell_activations(
         self,
         distances: np.ndarray,
