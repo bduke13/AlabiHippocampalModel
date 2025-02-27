@@ -132,6 +132,8 @@ class PlaceCellLayer:
         # Enables/disables updating weights in the tripartite synapses to track adjacencies between cells
         self.enable_stdp = enable_stdp
 
+        # self.weight_update = -1
+
     def get_place_cell_activations(
         self,
         distances: np.ndarray,
@@ -173,23 +175,25 @@ class PlaceCellLayer:
 
         # Compute the input to place cells by taking the dot product of input weights and BVC activations
         # Afferent excitation term: ∑_j W_ij^{pb} v_j^b (Equation 3.2a)
-        afferent_excitation = torch.matmul(self.w_in, self.bvc_activations)
+        self.afferent_excitation = torch.matmul(self.w_in, self.bvc_activations)
 
         # Compute total BVC activity for afferent inhibition
         # Afferent inhibition term: Γ^{pb} ∑_j v_j^b (Equation 3.2a)
-        afferent_inhibition = self.gamma_pb * torch.sum(self.bvc_activations)
+        self.afferent_inhibition = self.gamma_pb * torch.sum(self.bvc_activations)
 
         # Compute total place cell activity for recurrent inhibition
         # Recurrent inhibition term: Γ^{pp} ∑_j v_j^p (Equation 3.2a)
-        recurrent_inhibition = self.gamma_pp * torch.sum(self.place_cell_activations)
+        self.recurrent_inhibition = self.gamma_pp * torch.sum(
+            self.place_cell_activations
+        )
 
         # Update the activation_update variable
         # Equation (3.2a): τ_p (ds_i^p/dt) = -s_i^p + afferent_excitation - afferent_inhibition - recurrent_inhibition
         self.activation_update += self.tau_p * (
             -self.activation_update
-            + afferent_excitation
-            - afferent_inhibition
-            - recurrent_inhibition
+            + self.afferent_excitation
+            - self.afferent_inhibition
+            - self.recurrent_inhibition
         )
 
         # Apply ReLU then tanh to compute new place cell activations
@@ -251,7 +255,7 @@ class PlaceCellLayer:
 
             # Equation (3.3)
             # weight_update[i, j] = tau * ( v_i^p [v_j^b - (1/alpha_pb) v_i^p * w_in[i,j]] )
-            weight_update = self.tau * (
+            self.weight_update = self.tau * (
                 pc_activations_col
                 * (
                     bvc_activations_row
@@ -261,7 +265,7 @@ class PlaceCellLayer:
 
             # In PyTorch, we can update the data directly or reassign
             with torch.no_grad():
-                self.w_in += weight_update
+                self.w_in += self.weight_update
 
     def reset_activations(self):
         """Reset place cell activations and related variables to zero."""
