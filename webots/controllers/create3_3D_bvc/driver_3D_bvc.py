@@ -140,7 +140,7 @@ class Driver(Supervisor):
         self.wheel_radius = 0.031
         self.axle_length = 0.271756
         self.run_time_minutes = run_time_hours * 60
-        self.step_count = 0
+
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
         self.goal_r = {"explore": 0.3, "exploit": 0.5}
 
@@ -243,7 +243,7 @@ class Driver(Supervisor):
 
         self.directional_reward_estimates = torch.zeros(n_hd, device=self.device)
         self.step(self.timestep)
-        self.step_count += 1
+        self.step_count = 1
 
         self.sense()
         self.compute_pcn_activations()
@@ -586,9 +586,6 @@ class Driver(Supervisor):
         )
         if self.show_bvc_activation_plot:
             self.pcn.bvc_layer.plot_activation(self.boundaries)
-
-        # Advance simulation one timestep
-        self.step(self.timestep)
 
     ########################################### CHECK GOAL REACHED ###########################################
     def check_goal_reached(self):

@@ -11,19 +11,20 @@ sys.path.append(str(PROJECT_ROOT))  # Add project root to sys.path
 
 from core.robot.robot_mode import RobotMode
 
-run_time_hours = 2
+run_time_hours = 10
 
-phi_vert_preferred = [-1.2, -0.6, 0.0, 0.6, 1.2]
-sigma_rs = [0.3] * len(phi_vert_preferred)
-sigma_thetas = [0.01] * len(phi_vert_preferred)
-sigma_phis = [0.01] * len(phi_vert_preferred)
+phi_vert_preferred = [-1.25, -0.7, 0.0, 0.7, 1.25]
+sigma_rs = [0.2] * len(phi_vert_preferred)
+sigma_thetas = [0.05] * len(phi_vert_preferred)
+sigma_phis = [0.05] * len(phi_vert_preferred)
 scaling_factors = [1] * len(phi_vert_preferred)
-visual_bvc = True
+visual_bvc = False
+visual_pcn = False
 n_hd_bvc = 8
 n_hd_hdn = 20
 
-num_place_cells = 200
-num_bvc_per_dir = 50
+num_place_cells = 1000
+num_bvc_per_dir = 30
 max_dist = 5
 
 start_location = [1, 1]
@@ -43,6 +44,7 @@ bot.initialization(
     sigma_phis=sigma_phis,
     scaling_factors=scaling_factors,
     visual_bvc=visual_bvc,
+    visual_pcn=visual_pcn,
     n_hd_bvc=n_hd_bvc,
     n_hd_hdn=n_hd_hdn,
     max_dist=max_dist,

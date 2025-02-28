@@ -29,6 +29,7 @@ from core.robot.robot_mode import RobotMode
 # np.random.seed(5)
 # rng = default_rng(5)  # or keep it as is
 np.set_printoptions(precision=2)
+torch.set_printoptions(precision=16)
 
 
 class Driver(Supervisor):
@@ -142,7 +143,7 @@ class Driver(Supervisor):
         self.wheel_radius = 0.031
         self.axle_length = 0.271756
         self.run_time_minutes = run_time_hours * 60
-        self.step_count = 0
+
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
         self.goal_r = {"explore": 0.3, "exploit": 0.5}
 
@@ -243,8 +244,11 @@ class Driver(Supervisor):
         )
 
         self.directional_reward_estimates = torch.zeros(self.n_hd, device=self.device)
+
+        # progresses the simulation physics by the timestep property within this class
         self.step(self.timestep)
-        self.step_count += 1
+        # step_count measures how many times the hmaps were updated
+        self.step_count = 1
 
         self.sense()
         self.compute_pcn_activations()
@@ -572,7 +576,7 @@ class Driver(Supervisor):
             self.pcn.bvc_layer.plot_activation(self.boundaries.cpu())
 
         # Advance simulation one timestep
-        self.step(self.timestep)
+        # self.step(self.timestep)
 
     ########################################### CHECK GOAL REACHED ###########################################
     def check_goal_reached(self):
