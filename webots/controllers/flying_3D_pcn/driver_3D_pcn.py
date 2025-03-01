@@ -7,6 +7,7 @@ from typing import Optional, List
 from controller import Supervisor
 from tkinter import N, messagebox
 import tkinter as tk
+import matplotlib.pyplot as plt
 
 
 # Add root directory to python to be able to import
@@ -46,6 +47,7 @@ class DriverFlying(Supervisor):
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
         visual_bvc: bool = False,
+        visual_pcn: bool = False,
         world_name: Optional[str] = None,
         start_location: Optional[List[int]] = None,
         randomize_start_location: bool = True,
@@ -64,6 +66,7 @@ class DriverFlying(Supervisor):
             ]  # Extract just the world name
         self.world_name = world_name
         self.visual_bvc = visual_bvc
+        self.visual_pcn = visual_pcn
 
         # Construct directory paths
         self.hmap_dir = os.path.join("pkl", self.world_name, "hmaps")
@@ -85,7 +88,7 @@ class DriverFlying(Supervisor):
         self.wheel_radius = 0.031
         self.axle_length = 0.271756
         self.run_time_minutes = run_time_hours * 60
-        self.step_count = 0
+
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
         self.goal_r = {"explore": 0.3, "exploit": 0.5}
 
@@ -152,7 +155,7 @@ class DriverFlying(Supervisor):
         self.vertical_boundaries = torch.zeros((720, 360))
 
         self.step(self.timestep)
-        self.step_count += 1
+        self.step_count = 1
 
         # Initialize goal
         self.expected_reward = 0
@@ -190,15 +193,20 @@ class DriverFlying(Supervisor):
         enable_stdp: Optional[bool] = None,
         device: str = "cpu",
     ):
+
+        # Fall back to the original loading method
         try:
-            with open("pcn.pkl", "rb") as f:
+            # First try to load from the network directory for non-Ojas runs
+            saved_pcn_path = os.path.join(self.network_dir, "pcn.pkl")
+            print(os.path.exists(saved_pcn_path))
+            with open(saved_pcn_path, "rb") as f:
                 self.pcn = pickle.load(f)
                 self.pcn.reset_activations()
-                print("Loaded existing Place Cell Network.")
+                print(f"Loaded existing Place Cell Network from {saved_pcn_path}")
                 self.pcn.device = device
                 self.pcn.bvc_layer.device = device
         except:
-
+            print(f"File not found. Instantiating new PCN layer")
             # Initialize BVC layer with per-layer sigma values
             bvc = BoundaryVectorCellLayer3D(
                 max_dist=max_dist,
@@ -220,7 +228,7 @@ class DriverFlying(Supervisor):
                 num_pc=num_place_cells,
                 timestep=timestep,
                 n_hd=n_hd_hdn,
-                w_in_init_ratio=0.20,
+                w_in_init_ratio=0.50,
                 device=device,
             )
 
@@ -231,20 +239,19 @@ class DriverFlying(Supervisor):
 
         if enable_ojas is not None:
             self.pcn.enable_ojas = enable_ojas
-        elif (
-            self.robot_mode == RobotMode.LEARN_OJAS
-            or self.robot_mode == RobotMode.LEARN_HEBB
-            or self.robot_mode == RobotMode.DMTP
-        ):
+        elif self.robot_mode == RobotMode.LEARN_OJAS:
             self.pcn.enable_ojas = True
 
         if enable_stdp is not None:
             self.pcn.enable_stdp = enable_stdp
-        elif (
-            self.robot_mode == RobotMode.LEARN_HEBB or self.robot_mode == RobotMode.DMTP
-        ):
+        elif self.robot_mode == RobotMode.LEARN_HEBB:
             self.pcn.enable_stdp = True
 
+        print(f"enable ojas {self.pcn.enable_ojas}")
+        print(f"enable stdp {self.pcn.enable_stdp}")
+        print(f"num place cells {self.pcn.num_pc}")
+        print(f"num bvc {self.pcn.num_bvc}")
+        print(f"w_in shape {self.pcn.w_in.shape}")
         return self.pcn
 
     ########################################### RUN LOOP ###########################################
@@ -257,6 +264,7 @@ class DriverFlying(Supervisor):
             if (
                 self.robot_mode == RobotMode.LEARN_OJAS
                 or self.robot_mode == RobotMode.LEARN_HEBB
+                or self.robot_mode == RobotMode.PLOTTING
             ):
 
                 self.explore()
@@ -315,7 +323,7 @@ class DriverFlying(Supervisor):
             # Using smaller std dev for vertical (y) component
             noise = [
                 np.random.normal(0, 0.05),  # x component
-                np.random.normal(0, 0.02),  # y component (less variation)
+                np.random.normal(0, 0.05),  # y component (less variation)
                 np.random.normal(0, 0.05),  # z component
             ]
 
@@ -334,6 +342,57 @@ class DriverFlying(Supervisor):
             ]
 
         # Move the robot if no collisions detected
+        self.robot.getField("translation").setSFVec3f(next_pos)
+
+    def explore_equal(self) -> None:
+        """
+        Moves the agent in a nearly uniformly random 3D direction,
+        with equal treatment of x, y, and z components.
+        """
+        self.sense()  # Preprocess sensor data
+        self.compute()  # Compute activations if needed
+
+        # Generate a uniformly random direction in 3D
+        # Using np.random.randn generates samples from a normal distribution for each axis
+        random_direction = np.random.randn(3)
+        # Normalize to get a unit vector
+        norm = np.linalg.norm(random_direction)
+        if norm == 0:
+            random_direction = np.array([1.0, 0.0, 0.0])
+        else:
+            random_direction = random_direction / norm
+
+        # Set the velocity based on the chosen direction and constant speed
+        self.velocity = (random_direction * self.speed).tolist()
+
+        # Compute the next position from current position and velocity
+        current_pos = self.robot.getField("translation").getSFVec3f()
+        next_pos = [current_pos[i] + self.velocity[i] for i in range(3)]
+
+        # Optionally, include a collision check using range data
+        range_data = self.vertical_range_finder.getRangeImage()
+        if range_data is not None:
+            min_distance = min(range_data)
+            if (
+                min_distance < 0.2
+            ):  # Collision is imminent, adjust position/velocity accordingly
+                self.reposition_away_from_obstacle(current_pos)
+                self.reflect_velocity()
+                return
+
+        # If you want to relax vertical constraints, either remove or adjust them.
+        bounds = 2.3
+        # Example: using same bounds for x, y, and z, or customizing as needed
+        if (
+            abs(next_pos[0]) > bounds
+            or abs(next_pos[1]) > bounds
+            or abs(next_pos[2]) > bounds
+        ):
+            self.reposition_away_from_obstacle(current_pos)
+            self.reflect_velocity()
+            return
+
+        # Move the robot to the next position
         self.robot.getField("translation").setSFVec3f(next_pos)
 
     ########################################### SENSE ###########################################
@@ -402,6 +461,59 @@ class DriverFlying(Supervisor):
             hd_activations=self.head_directions,
             collided=torch.any(self.collided).item(),
         )
+
+        if False:
+
+            # Get 1D tensor and move to CPU for visualization
+            data = self.pcn.bvc_activations.cpu().detach().numpy().flatten()
+            print(data)
+
+            # Compute dynamic reshaping (closest square)
+            side_length = int(np.ceil(np.sqrt(len(data))))
+            reshaped_w_in = np.zeros((side_length, side_length))  # Create a square
+            reshaped_w_in.flat[: len(data)] = data  # Fill with values
+
+            # Plot heatmap
+            plt.figure(figsize=(8, 8))
+            plt.imshow(
+                reshaped_w_in, aspect="auto", cmap="viridis", interpolation="nearest"
+            )
+            plt.colorbar(label="Weight Value")
+            plt.xlabel("Columns")
+            plt.ylabel("Rows")
+            plt.title("heatmap")
+            plt.show()
+            # print(self.pcn.weight_update)
+            # print(self.pcn.bvc_activations)
+            # print(self.pcn.activation_update)
+
+        if False:
+            print("bvc sum")
+            print(torch.sum(self.pcn.bvc_activations))
+            print("afferent excitation")
+            print(self.pcn.afferent_excitation.cpu()[:6])
+
+            print("afferent inhibition")
+            print(self.pcn.afferent_inhibition.cpu())
+            print("recurrent inhibition")
+            print(self.pcn.recurrent_inhibition.cpu())
+
+            print("activation update")
+            print(self.pcn.activation_update.cpu()[:6])
+
+            print("pcn activations")
+            print(self.pcn.place_cell_activations[:6])
+
+        if self.visual_pcn:
+            activations = self.pcn.place_cell_activations.cpu().detach().numpy()
+            print(activations)
+
+            plt.figure(figsize=(10, 4))
+            plt.bar(range(len(activations)), activations)
+            plt.xlabel("Place Cell Index")
+            plt.ylabel("Activation")
+            plt.title("Current Place Cell Activations")
+            plt.show()
 
         if self.visual_bvc:
             self.pcn.bvc_layer.plot_activation(self.vertical_boundaries)

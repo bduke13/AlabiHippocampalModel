@@ -175,14 +175,6 @@ def plot_pcn_adjacencies_top_percent_3d(
 
 
 if __name__ == "__main__":
-    """
-    Example usage:
-    1. Modify the `prefix` to point to your data directory
-       (e.g., "webots/controllers/flying_3D_pcn/").
-    2. Ensure you have a `pcn.pkl` and hmaps "hmap_loc.npy"/"hmap_pcn.npy"
-       or whatever is used in your custom loading code.
-    3. Run this script.
-    """
     from visualizations.vis_utils import (
         load_hmaps,
         convert_xzy_hmaps,
@@ -191,13 +183,11 @@ if __name__ == "__main__":
 
     prefix = "webots/controllers/flying_3D_pcn/"
     # 1. Load data
-    hmap_loc, hmap_pcn_data = load_hmaps(
-        prefix=prefix, hmap_names=["hmap_loc", "hmap_pcn"]
-    )
+    hmap_loc, hmap_pcn_data = load_hmaps(hmap_names=["hmap_loc", "hmap_pcn"])
     hmap_x_data, hmap_z_data, hmap_y_data = convert_xzy_hmaps(hmap_loc)
 
     # 2. Load PCN (place cell network) object with adjacency
-    pcn_data = load_layer_pkl(prefix=prefix, layer_name="pcn.pkl")
+    pcn_data = load_layer_pkl(layer_name="pcn")
 
     # 3. Plot adjacency:
     #   top_percent=10 means top 10% of adjacency weights
@@ -208,6 +198,6 @@ if __name__ == "__main__":
         hmap_y=hmap_y_data,
         hmap_z=hmap_z_data,
         hmap_pcn=hmap_pcn_data,
-        top_percent=2.0,
-        cell_percent=8.0,
+        top_percent=0.5,
+        cell_percent=50.0,
     )

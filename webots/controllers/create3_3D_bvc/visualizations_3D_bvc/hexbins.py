@@ -776,8 +776,14 @@ def plot_similarity_sums(
 if __name__ == "__main__":
     from controllers.bek_controller.visualizations.analysis_utils import *
 
-    data_path = "controllers/bek_controller/IJCNN/3D_3L_250/upright/"
-    hmap_x, hmap_y, hmap_pcn = load_hmaps(data_path)
+    from vis_utils import (
+        load_hmaps,
+        convert_xzy_hmaps,
+    )
+
+    # Load hmap data from hardcoded world name
+    hmap_loc, hmap_pcn = load_hmaps(hmap_names=["hmap_loc", "hmap_pcn"])
+    hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
 
     # %%
     metrics = get_model_hexbin_metrics(hmap_x, hmap_y, hmap_pcn, verbose=False)

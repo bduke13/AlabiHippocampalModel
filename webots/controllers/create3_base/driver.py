@@ -29,6 +29,7 @@ from core.robot.robot_mode import RobotMode
 # np.random.seed(5)
 # rng = default_rng(5)  # or keep it as is
 np.set_printoptions(precision=2)
+torch.set_printoptions(precision=16)
 
 
 class Driver(Supervisor):
@@ -105,6 +106,7 @@ class Driver(Supervisor):
         self.device = (
             torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
+        print(f"Driver running on device {self.device}")
         self.dtype = torch.float32
         self.show_bvc_activation = show_bvc_activation
 
@@ -126,6 +128,9 @@ class Driver(Supervisor):
 
         # Model parameters
         self.num_place_cells = 500
+        self.num_bvc_per_dir = 50
+        self.sigma_r = 0.5
+        self.sigma_theta = 5
         self.n_hd = 8
         self.timestep = 32 * 3
         self.tau_w = 5  # time constant for the window function
@@ -138,7 +143,7 @@ class Driver(Supervisor):
         self.wheel_radius = 0.031
         self.axle_length = 0.271756
         self.run_time_minutes = run_time_hours * 60
-        self.step_count = 0
+
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
         self.goal_r = {"explore": 0.3, "exploit": 0.5}
 
@@ -199,6 +204,9 @@ class Driver(Supervisor):
             num_place_cells=self.num_place_cells,
             n_hd=self.n_hd,
             timestep=self.timestep,
+            sigma_r=self.sigma_r,
+            sigma_theta=self.sigma_theta,
+            num_bvc_per_dir=self.num_bvc_per_dir,
             enable_ojas=enable_ojas,
             enable_stdp=enable_stdp,
             device=self.device,
@@ -210,7 +218,7 @@ class Driver(Supervisor):
             device=self.device,
         )
         self.head_direction_layer = HeadDirectionLayer(
-            num_cells=self.n_hd, device="cpu"
+            num_cells=self.n_hd, device=torch.device("cpu")
         )
 
         # Initialize hmaps (history maps) to record activations and positions
@@ -236,8 +244,11 @@ class Driver(Supervisor):
         )
 
         self.directional_reward_estimates = torch.zeros(self.n_hd, device=self.device)
+
+        # progresses the simulation physics by the timestep property within this class
         self.step(self.timestep)
-        self.step_count += 1
+        # step_count measures how many times the hmaps were updated
+        self.step_count = 1
 
         self.sense()
         self.compute_pcn_activations()
@@ -248,9 +259,12 @@ class Driver(Supervisor):
         num_place_cells: int,
         n_hd: int,
         timestep: int,
+        sigma_theta: float,
+        sigma_r: float,
+        num_bvc_per_dir: int,
+        device: torch.device,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
-        device: Optional[str] = None,
     ):
         """Loads an existing place cell network from disk or initializes a new one.
 
@@ -278,10 +292,10 @@ class Driver(Supervisor):
             bvc = BoundaryVectorCellLayer(
                 n_res=self.lidar_resolution,
                 n_hd=n_hd,
-                sigma_theta=10,
-                sigma_r=0.5,
+                sigma_theta=sigma_theta,
+                sigma_r=sigma_r,
                 max_dist=self.max_dist,
-                num_bvc_per_dir=50,
+                num_bvc_per_dir=num_bvc_per_dir,
                 device=device,
             )
 
@@ -311,7 +325,11 @@ class Driver(Supervisor):
         return self.pcn
 
     def load_rcn(
-        self, num_place_cells: int, num_replay: int, learning_rate: float, device: str
+        self,
+        num_place_cells: int,
+        num_replay: int,
+        learning_rate: float,
+        device: torch.device,
     ):
         """Loads or initializes the reward cell network.
 
@@ -494,6 +512,8 @@ class Driver(Supervisor):
         """
         Uses sensors to update range-image, heading, boundary data, collision flags, etc.
         """
+        # Advance simulation one timestep
+        self.step(self.timestep)
         # Get the latest boundary data from range finder
         boundaries = self.range_finder.getRangeImage()
 
@@ -522,9 +542,6 @@ class Driver(Supervisor):
         # Check for collisions via bumpers
         self.collided[0] = int(self.left_bumper.getValue())
         self.collided[1] = int(self.right_bumper.getValue())
-
-        # Advance simulation one timestep
-        self.step(self.timestep)
 
     def get_bearing_in_degrees(self, north: List[float]) -> float:
         """
@@ -559,7 +576,7 @@ class Driver(Supervisor):
             self.pcn.bvc_layer.plot_activation(self.boundaries.cpu())
 
         # Advance simulation one timestep
-        self.step(self.timestep)
+        # self.step(self.timestep)
 
     ########################################### CHECK GOAL REACHED ###########################################
     def check_goal_reached(self):

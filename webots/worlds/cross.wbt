@@ -16,8 +16,8 @@ WorldInfo {
   coordinateSystem "NUE"
 }
 Viewpoint {
-  orientation 0.6870353705862984 -0.6861336487797677 -0.2391715191562539 3.6159835242749345
-  position 0.1649201538671352 17.995738904695664 14.990603253541922
+  orientation 0.6822499668698196 -0.6784387264132183 -0.2724993159788486 3.69104719639114
+  position 1.0656652875982748 36.10764831684393 32.8829326735463
   near 0.1
   follow "Create"
   followType "None"
@@ -28,6 +28,7 @@ RectangleArena {
   rotation 1 0 0 -1.5707953071795862
   floorSize 10 10
   floorAppearance NULL
+  wallHeight 2.6
 }
 DirectionalLight {
   direction 0 -1 0
@@ -85,31 +86,9 @@ DEF agent Create {
   ]
 }
 Wall {
-  translation 0 0 -3.39
-  size 10.3 2.4 0.3
-  appearance Roughcast {
-    colorOverride 0.8 0.45 0.25
-    textureTransform TextureTransform {
-      scale 1 2.4
-    }
-  }
-}
-Wall {
-  translation -3.21 0 -6.57502e-06
-  rotation 0 1 0 1.5708
-  name "wall(2)"
-  size 9.7 2.4 0.3
-  appearance Roughcast {
-    colorOverride 0.8 0.45 0.25
-    textureTransform TextureTransform {
-      scale 1 2.4
-    }
-  }
-}
-Wall {
-  translation 0 0 3.16
+  translation 0 1.1 0
   name "wall(3)"
-  size 10.3 2.4 0.3
+  size 7 2.4 0.3
   appearance Roughcast {
     colorOverride 0.8 0.45 0.25
     textureTransform TextureTransform {
@@ -118,10 +97,10 @@ Wall {
   }
 }
 Wall {
-  translation 2.87 0 7.82384e-06
+  translation 0 1.1 0
   rotation 0 1 0 1.5708
   name "wall(4)"
-  size 9.7 2.4 0.3
+  size 7 2.4 0.3
   appearance Roughcast {
     colorOverride 0.8 0.45 0.25
     textureTransform TextureTransform {

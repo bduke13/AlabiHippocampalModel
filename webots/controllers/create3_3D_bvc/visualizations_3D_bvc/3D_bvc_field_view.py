@@ -1,195 +1,284 @@
 # %%
-import torch
 import numpy as np
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import argparse
 
-from core.layers.boundary_vector_cell_layer_3D import BoundaryVectorCellLayer3D
+
+# Parse command line arguments
+def parse_args():
+    parser = argparse.ArgumentParser(description="Visualize 3D BVC field")
+    parser.add_argument(
+        "--show_2d_plots",
+        action="store_true",
+        help="Show 2D histogram and heatmap plots",
+    )
+    return parser.parse_args()
 
 
-def compute_3d_bvc_response(
-    bvc_distance,
-    bvc_horiz_angle,
-    bvc_vert_angle,
-    point_x,
-    point_y,
-    point_z,
-    sigma_r,
-    sigma_theta,
-    sigma_phi,
-):
-    """Compute BVC response for a boundary point at (x,y,z) relative to agent at origin."""
-    # Convert Cartesian to Spherical coordinates
-    r = torch.sqrt(point_x**2 + point_y**2 + point_z**2)
-    theta = torch.atan2(point_y, point_x)  # horizontal angle (azimuth)
-    phi = torch.asin(point_z / r)  # vertical angle (elevation)
+# Check if running as script or in interactive mode
+try:
+    args = parse_args()
+    show_2d_plots = args.show_2d_plots
+except SystemExit:  # Catch the SystemExit when running in notebook
+    show_2d_plots = True  # Default when running in notebook/interactive mode
 
-    # Wrap horizontal angle difference to [-π, π]
-    theta_diff = torch.atan2(
-        torch.sin(theta - bvc_horiz_angle), torch.cos(theta - bvc_horiz_angle)
+# Define grid ranges and density
+x_range = (0, 20)
+y_range = (0, 20)
+z_range = (0, 20)
+density = 5  # Adjust this for resolution
+
+# Define BVC parameters
+preferred_distance = 2.0  # d_i
+preferred_horiz_angle = np.pi / 4  # φ_i (in radians)
+preferred_vert_angle = np.pi / 6  # ψ_i (in radians)
+
+sigma_r = 0.5  # Tuning width for distance
+sigma_theta = 0.02  # Tuning width for horizontal direction
+sigma_phi = 0.02  # Tuning width for vertical direction
+
+# Generate grid points
+x_values = np.linspace(*x_range, int((x_range[1] - x_range[0]) * density))
+y_values = np.linspace(*y_range, int((y_range[1] - y_range[0]) * density))
+z_values = np.linspace(*z_range, int((z_range[1] - z_range[0]) * density))
+
+X, Y, Z = np.meshgrid(x_values, y_values, z_values)
+X_flat, Y_flat, Z_flat = X.flatten(), Y.flatten(), Z.flatten()
+
+# Convert to spherical coordinates
+r_j = np.sqrt(X_flat**2 + Y_flat**2 + Z_flat**2)  # Distance
+theta_j = np.arctan2(Y_flat, X_flat)  # Horizontal angle
+phi_j = np.arcsin(Z_flat / (r_j + 1e-6))  # Vertical angle (avoid div by zero)
+
+# Compute the BVC activation based on Equation (2)
+activation = (
+    np.exp(-((r_j - preferred_distance) ** 2) / (2 * sigma_r**2))
+    / np.sqrt(2 * np.pi * sigma_r**2)
+    * np.exp(-((theta_j - preferred_horiz_angle) ** 2) / (2 * sigma_theta**2))
+    / np.sqrt(2 * np.pi * sigma_theta**2)
+    * np.exp(-((phi_j - preferred_vert_angle) ** 2) / (2 * sigma_phi**2))
+    / np.sqrt(2 * np.pi * sigma_phi**2)
+)
+
+# Store the raw activation values before normalization
+raw_activation = activation.copy()
+
+# Normalize activation between [0, 0.5]
+activation = activation / activation.max() * 0.5
+
+# Calculate the preferred location in Cartesian coordinates
+preferred_x = (
+    preferred_distance * np.cos(preferred_horiz_angle) * np.cos(preferred_vert_angle)
+)
+preferred_y = (
+    preferred_distance * np.sin(preferred_horiz_angle) * np.cos(preferred_vert_angle)
+)
+preferred_z = preferred_distance * np.sin(preferred_vert_angle)
+
+# Compute the preferred axis vector (from origin to preferred location)
+v = np.array([preferred_x, preferred_y, preferred_z])
+v_norm = np.linalg.norm(v)
+v_unit = v / v_norm if v_norm != 0 else np.array([1, 0, 0])
+
+# Choose an arbitrary vector that is not parallel to v_unit
+arbitrary = (
+    np.array([0, 0, 1])
+    if abs(np.dot(v_unit, np.array([0, 0, 1]))) < 0.9
+    else np.array([1, 0, 0])
+)
+
+# Compute two orthonormal vectors (u1 and u2) perpendicular to v_unit
+u1 = np.cross(v_unit, arbitrary)
+u1 = u1 / np.linalg.norm(u1)
+u2 = np.cross(v_unit, u1)
+u2 = u2 / np.linalg.norm(u2)
+
+# --- Apply quadrant masking to "chunk out" one quarter of the distribution ---
+# For each grid point, compute its dot products with u1 and u2.
+# Points with positive dot products with both (i.e. in one quadrant) are removed.
+dot1 = X_flat * u1[0] + Y_flat * u1[1] + Z_flat * u1[2]
+dot2 = X_flat * u2[0] + Y_flat * u2[1] + Z_flat * u2[2]
+mask = (dot1 > 0) & (dot2 > 0)
+activation[mask] = 0
+# --- End masking ---
+
+# Reshape the activation values to match the 3D grid
+activation_3d = activation.reshape(X.shape)
+
+# Create an interactive 3D plot
+fig = go.Figure()
+
+# Determine visualization approach based on activation distribution
+high_threshold = np.percentile(activation, 90)
+mid_threshold = np.percentile(activation, 70)
+
+# Add isosurfaces for better 3D visualization (multiple levels)
+for level_idx, level in enumerate(np.linspace(mid_threshold, high_threshold, 4)):
+    opacity = 0.2 + 0.1 * level_idx  # Increase opacity for higher activation levels
+    fig.add_trace(
+        go.Isosurface(
+            x=X.flatten(),
+            y=Y.flatten(),
+            z=Z.flatten(),
+            value=activation.flatten(),
+            isomin=level,
+            isomax=level + 0.02,
+            opacity=opacity,
+            surface_count=2,
+            colorscale="Plasma",
+            showscale=level_idx == 0,
+            colorbar=dict(title="Activation") if level_idx == 0 else None,
+            name=f"Activation Level {level:.3f}",
+            caps=dict(x=dict(show=False), y=dict(show=False), z=dict(show=False)),
+        )
     )
 
-    # Vertical angle difference (no wrapping needed as it's in [-π/2, π/2])
-    phi_diff = phi - bvc_vert_angle
+# Add a volume rendering for smoother visualization of the full 3D structure
+fig.add_trace(
+    go.Volume(
+        x=X.flatten(),
+        y=Y.flatten(),
+        z=Z.flatten(),
+        value=activation.flatten(),
+        isomin=mid_threshold * 0.8,
+        isomax=high_threshold,
+        opacity=0.1,
+        surface_count=20,
+        colorscale="Plasma",
+        showscale=False,
+        name="Volume Rendering",
+    )
+)
 
-    # Distance component
-    distance_component = torch.exp(-((r - bvc_distance) ** 2) / (2 * sigma_r**2))
-    distance_component /= torch.sqrt(2 * torch.pi * sigma_r**2)
+# Add a large red sphere at the origin (0,0,0)
+fig.add_trace(
+    go.Scatter3d(
+        x=[0],
+        y=[0],
+        z=[0],
+        mode="markers",
+        marker=dict(size=15, color="red", symbol="circle"),
+        name="Origin",
+    )
+)
 
-    # Horizontal angle component
-    horiz_component = torch.exp(-(theta_diff**2) / (2 * sigma_theta**2))
-    horiz_component /= torch.sqrt(2 * torch.pi * sigma_theta**2)
+# Add a large green sphere at the preferred location
+fig.add_trace(
+    go.Scatter3d(
+        x=[preferred_x],
+        y=[preferred_y],
+        z=[preferred_z],
+        mode="markers",
+        marker=dict(size=15, color="green", symbol="circle"),
+        name="Preferred Location",
+    )
+)
 
-    # Vertical angle component
-    vert_component = torch.exp(-(phi_diff**2) / (2 * sigma_phi**2))
-    vert_component /= torch.sqrt(2 * torch.pi * sigma_phi**2)
+# Add a black dashed line from the origin to the preferred location
+fig.add_trace(
+    go.Scatter3d(
+        x=[0, preferred_x],
+        y=[0, preferred_y],
+        z=[0, preferred_z],
+        mode="lines",
+        line=dict(color="black", width=6, dash="dash"),
+        name="Preferred Distance Vector",
+    )
+)
 
-    return distance_component * horiz_component * vert_component
+# Set layout and fix axis ranges with an improved camera angle
+fig.update_layout(
+    title="3D Boundary Vector Cell (BVC) Firing Field (with quadrant removed)",
+    scene=dict(
+        xaxis=dict(title="X", range=[x_range[0], x_range[1]]),
+        yaxis=dict(title="Y", range=[y_range[0], y_range[1]]),
+        zaxis=dict(title="Z", range=[z_range[0], z_range[1]]),
+        camera=dict(eye=dict(x=1.5, y=1.5, z=1.2), center=dict(x=0, y=0, z=0)),
+        aspectmode="cube",
+    ),
+    legend=dict(
+        x=0.01,
+        y=0.99,
+        traceorder="normal",
+        font=dict(family="sans-serif", size=12, color="black"),
+        bgcolor="white",
+        bordercolor="black",
+        borderwidth=1,
+    ),
+)
 
+# Display the 3D plot
+fig.show()
 
-def main():
-    # Use CUDA if available
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
+# Create and display 2D heatmap only if show_2d_plots is True
+if show_2d_plots:
+    z_mid_idx = (
+        len(z_values) // 2
+    )  # Use the middle index for the z=0 plane (or nearest)
+    activation_2d = activation.reshape(X.shape)[:, :, z_mid_idx]
 
-    # Initialize BVC layer with a single preferred vertical angle
-    bvc_layer = BoundaryVectorCellLayer3D(
-        max_dist=12.0,
-        n_hd=8,
-        phi_vert_preferred=[0.0],  # 0.3 radians ≈ 17 degrees elevation
-        sigma_rs=[1.0],
-        sigma_thetas=[0.3],  # broader horizontal tuning
-        sigma_phis=[0.3],  # broader vertical tuning
-        scaling_factors=[1.0],
-        num_bvc_per_dir=50,
-        device=device,
+    heatmap_fig = go.Figure(
+        data=go.Heatmap(
+            z=activation_2d,
+            x=x_values,
+            y=y_values,
+            colorscale="Plasma",
+            colorbar=dict(title="Activation"),
+        )
     )
 
-    # Select a random BVC to visualize
-    bvc_idx = np.random.randint(0, bvc_layer.num_bvc)
-    selected_distance = bvc_layer.d_i[bvc_idx].item()
-    selected_horiz_angle = bvc_layer.theta_i[bvc_idx].item()
-    selected_vert_angle = bvc_layer.psi_i[bvc_idx].item()
-
-    print(f"\nSelected BVC parameters:")
-    print(f"Distance: {selected_distance:.2f}m")
-    print(f"Horizontal angle: {np.rad2deg(selected_horiz_angle):.1f}°")
-    print(f"Vertical angle: {np.rad2deg(selected_vert_angle):.1f}°")
-
-    # Create 3D grid of points
-    resolution = 300
-    max_range = 15
-    x = torch.linspace(-max_range, max_range, resolution, device=device)
-    y = torch.linspace(-max_range, max_range, resolution, device=device)
-    z = torch.linspace(-max_range, max_range, resolution, device=device)
-    X, Y, Z = torch.meshgrid(x, y, z, indexing="ij")
-
-    # Compute BVC response for each point
-    response = compute_3d_bvc_response(
-        selected_distance,
-        selected_horiz_angle,
-        selected_vert_angle,
-        X,
-        Y,
-        Z,
-        bvc_layer.sigma_r[bvc_idx],
-        bvc_layer.sigma_theta[bvc_idx],
-        bvc_layer.sigma_phi[bvc_idx],
+    # Add a marker for the origin
+    heatmap_fig.add_trace(
+        go.Scatter(
+            x=[0],
+            y=[0],
+            mode="markers",
+            marker=dict(
+                size=12, color="red", symbol="circle", line=dict(color="black", width=1)
+            ),
+            name="Origin",
+        )
     )
 
-    # Normalize response to [0, 1]
-    response = response / response.max()
+    # Add a marker for the preferred location projection on the z=0 plane
+    if abs(preferred_z) < max(z_range):
+        heatmap_fig.add_trace(
+            go.Scatter(
+                x=[preferred_x],
+                y=[preferred_y],
+                mode="markers",
+                marker=dict(
+                    size=12,
+                    color="green",
+                    symbol="circle",
+                    line=dict(color="black", width=1),
+                ),
+                name="Preferred Location (z-projection)",
+            )
+        )
+        heatmap_fig.add_trace(
+            go.Scatter(
+                x=[0, preferred_x],
+                y=[0, preferred_y],
+                mode="lines",
+                line=dict(color="black", width=2, dash="dash"),
+                name="Preferred Vector (z-projection)",
+            )
+        )
 
-    # Create two subplots: full 3D view and cross-section
-    fig = plt.figure(figsize=(15, 7))
-
-    # 1. Full 3D view (with cutout)
-    ax1 = fig.add_subplot(121, projection="3d")
-
-    # Create mask for cutout (show only points where y > 0)
-    mask = Y > 0
-
-    # Plot points where response > threshold and Z <= 0
-    threshold = 0.01
-    strong_response = response > threshold
-    horizontal_mask = Z <= 0  # Only keep points at or below horizontal plane
-    points_to_plot = strong_response & horizontal_mask
-
-    # Convert to numpy and apply mask
-    X_plot = X[points_to_plot].cpu().numpy()
-    Y_plot = Y[points_to_plot].cpu().numpy()
-    Z_plot = Z[points_to_plot].cpu().numpy()
-    colors = response[points_to_plot].cpu().numpy()
-
-    scatter = ax1.scatter(X_plot, Y_plot, Z_plot, c=colors, cmap="viridis", alpha=0.3)
-
-    # Set equal aspect ratio for better 3D visualization
-    ax1.set_box_aspect([1, 1, 1])
-    plt.colorbar(scatter, ax=ax1, label="Normalized Response")
-
-    # Plot the agent position
-    ax1.scatter([0], [0], [0], color="red", s=100, marker="o", label="Agent")
-
-    # Plot the preferred location
-    x_pref = (
-        selected_distance * np.cos(selected_vert_angle) * np.cos(selected_horiz_angle)
-    )
-    y_pref = (
-        selected_distance * np.cos(selected_vert_angle) * np.sin(selected_horiz_angle)
-    )
-    z_pref = selected_distance * np.sin(selected_vert_angle)
-    ax1.scatter(
-        [x_pref],
-        [y_pref],
-        [z_pref],
-        color="red",
-        s=200,
-        marker="*",
-        label="Preferred Location",
+    heatmap_fig.update_layout(
+        title="2D Heatmap of BVC Activations (z=0 plane, quadrant removed)",
+        xaxis_title="X",
+        yaxis_title="Y",
+        template="plotly_white",
     )
 
-    # Draw line from origin to preferred location
-    ax1.plot([0, x_pref], [0, y_pref], [0, z_pref], "r--", alpha=0.5)
+    heatmap_fig.show()
 
-    ax1.set_xlabel("X (m)")
-    ax1.set_ylabel("Y (m)")
-    ax1.set_zlabel("Z (m)")
-    ax1.set_title("3D BVC Response Field\n(Z ≤ 0)")
-
-    # 2. Horizontal cross-section at preferred vertical height
-    ax2 = fig.add_subplot(122)
-
-    # Find closest Z plane to preferred height
-    z_idx = torch.argmin(torch.abs(z - z_pref))
-    cross_section = response[:, :, z_idx].cpu().numpy()
-
-    # Plot cross-section
-    im = ax2.imshow(
-        cross_section.T,
-        origin="lower",
-        extent=[-max_range, max_range, -max_range, max_range],
-        cmap="viridis",
-    )
-    ax2.set_xlabel("X (m)")
-    ax2.set_ylabel("Y (m)")
-    ax2.set_title(
-        f"Horizontal Cross-section at preferred elevation\nZ = {z_pref:.2f}m (elevation angle: {np.rad2deg(selected_vert_angle):.1f}°)"
-    )
-
-    # Add colorbar
-    plt.colorbar(im, ax=ax2, label="Normalized Response")
-
-    # Plot agent and preferred location on cross-section
-    ax2.plot(0, 0, "ro", markersize=10, label="Agent")
-    ax2.plot(x_pref, y_pref, "r*", markersize=15, label="Preferred Location")
-    ax2.plot([0, x_pref], [0, y_pref], "r--", alpha=0.5)
-
-    ax2.grid(True)
-    ax2.legend()
-
-    plt.tight_layout()
-    plt.show()
-
-
+# Add a main function to make the script runnable
 if __name__ == "__main__":
-    main()
+    print(
+        f"3D BVC visualization complete. 2D plots {'shown' if show_2d_plots else 'hidden'}."
+    )
+    print("To show 2D plots, run with: python 3D_bvc_field_view.py --show_2d_plots")

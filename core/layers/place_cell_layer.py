@@ -158,19 +158,26 @@ class PlaceCellLayer:
             distances=distances, angles=angles
         )
 
-        # Compute afferent excitation (BVC-to-place cell input)
-        afferent_excitation = torch.matmul(self.w_in, self.bvc_activations)
+        # Compute the input to place cells by taking the dot product of input weights and BVC activations
+        # Afferent excitation term: ∑_j W_ij^{pb} v_j^b (Equation 3.2a)
+        self.afferent_excitation = torch.matmul(self.w_in, self.bvc_activations)
 
-        # Compute inhibitory terms
-        afferent_inhibition = self.gamma_pb * torch.sum(self.bvc_activations)
-        recurrent_inhibition = self.gamma_pp * torch.sum(self.place_cell_activations)
+        # Compute total BVC activity for afferent inhibition
+        # Afferent inhibition term: Γ^{pb} ∑_j v_j^b (Equation 3.2a)
+        self.afferent_inhibition = self.gamma_pb * torch.sum(self.bvc_activations)
+
+        # Compute total place cell activity for recurrent inhibition
+        # Recurrent inhibition term: Γ^{pp} ∑_j v_j^p (Equation 3.2a)
+        self.recurrent_inhibition = self.gamma_pp * torch.sum(
+            self.place_cell_activations
+        )
 
         # Update activation based on the model equation
         self.activation_update += self.tau_p * (
             -self.activation_update
-            + afferent_excitation
-            - afferent_inhibition
-            - recurrent_inhibition
+            + self.afferent_excitation
+            - self.afferent_inhibition
+            - self.recurrent_inhibition
         )
 
         # Apply activation function
@@ -196,12 +203,15 @@ class PlaceCellLayer:
         if self.enable_ojas and torch.any(self.place_cell_activations > 0):
             pc_activations_col = self.place_cell_activations.unsqueeze(1)
             bvc_activations_row = self.bvc_activations.unsqueeze(0)
-            weight_update = self.tau * (
+
+            # Equation (3.3)
+            # weight_update[i, j] = tau * ( v_i^p [v_j^b - (1/alpha_pb) v_i^p * w_in[i,j]] )
+            self.weight_update = self.tau * (
                 pc_activations_col
                 * (bvc_activations_row - (1 / self.alpha_pb) * pc_activations_col * self.w_in)
             )
             with torch.no_grad():
-                self.w_in += weight_update
+                self.w_in += self.weight_update
 
     def reset_activations(self):
         """Reset place cell activations and related variables to zero."""
