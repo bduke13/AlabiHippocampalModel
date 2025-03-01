@@ -86,7 +86,7 @@ DEF agent Create {
 Wall {
   rotation 0 1 0 2.3554
   name "wall1"
-  size 7 1 0.4
+  size 10 1 0.4
 }
 DirectionalLight {
   direction 0.75 -1 0

@@ -45,6 +45,7 @@ class Driver(Supervisor):
         goal_location: Optional[List[float]] = None,
         max_dist: Optional[float] = None,
         plot_bvc: Optional[bool] = False,
+        td_learning: Optional[bool] = False,
     ):
         """
         Initializes the Driver class, setting up the robot's sensors and neural networks.
@@ -106,6 +107,7 @@ class Driver(Supervisor):
         
         # Store learning rates for later use in RCN initialization
         self.rcn_learning_rates = rcn_learning_rates if rcn_learning_rates is not None else [0.1] * len(scales)
+        self.td_learning = td_learning
 
         # Random or fixed start
         if randomize_start_loc:
@@ -217,6 +219,7 @@ class Driver(Supervisor):
             fname = f"pcn_scale_{i}.pkl"
             path = os.path.join(self.network_dir, fname)
             pcn = self._load_or_init_pcn_for_scale(path, scale_def, enable_ojas, enable_stdp)
+            pcn.to(self.device)
             self.pcns.append(pcn)
 
     def _load_or_init_pcn_for_scale(self, path, scale_def, enable_ojas, enable_stdp):
@@ -258,6 +261,7 @@ class Driver(Supervisor):
             fname = f"rcn_scale_{i}.pkl"
             path = os.path.join(self.network_dir, fname)
             rcn = self._load_or_init_rcn_for_scale(path, scale_def, self.rcn_learning_rates[i])
+            rcn.to(self.device)
             self.rcns.append(rcn)
 
     def _load_or_init_rcn_for_scale(self, path, scale_def, learning_rate):
@@ -326,8 +330,8 @@ class Driver(Supervisor):
             # 4) compute pcn_activations => fill self.pcn_activations_list
             self.compute_pcn_activations()
 
-            # 5) If DMTP => reward updates
-            if self.robot_mode == RobotMode.DMTP:
+            # 5) If DMTP or EXPOIT => reward updates
+            if self.robot_mode == RobotMode.DMTP or self.robot_mode == RobotMode.EXPLOIT:
                 actual_reward = self.get_actual_reward()
                 for pcn, rcn in zip(self.pcns, self.rcns):
                     rcn.update_reward_cell_activations(pcn.place_cell_activations)
@@ -370,6 +374,14 @@ class Driver(Supervisor):
         self.compute_pcn_activations()
         self.update_hmaps()
         self.check_goal_reached()
+
+        # Save old PCN activations for each scale
+        old_pcn_activations = []
+        for i, scale_def in enumerate(self.scales):
+            # Each scale has its own PCN; store its current activations
+            # (Assuming your PCN has an attribute `place_cell_activations`)
+            pcn = self.pcns[i]
+            old_pcn_activations.append(pcn.place_cell_activations.clone())
 
         if self.force_explore_count > 0:
             self.force_explore_count -= 1
@@ -483,9 +495,9 @@ class Driver(Supervisor):
         distances_per_hd = torch.tensor(distances_per_hd, device=self.device, dtype=self.dtype)
 
         # Compute penalty mask and apply an exponential penalty
-        penalty_mask = distances_per_hd < 1.0
+        penalty_mask = distances_per_hd < 1
         # Example: penalty gets stronger as distance gets smaller (dist < 1)
-        penalties = torch.exp(-1.0 * (1.0 - distances_per_hd))  # tweak scale if desired
+        penalties = torch.exp(-1.0 * (3.0 - distances_per_hd))  # tweak scale if desired
 
         combined_pot_rew[penalty_mask] *= penalties[penalty_mask]
 
@@ -535,31 +547,45 @@ class Driver(Supervisor):
             self.rotation_accumulator += abs(heading_diff)
             self.last_heading_deg = self.current_heading_deg
 
-            # Collision handling
-            if torch.any(self.collided):
-                print("Collision detected. Turning back and retrying.")
-                self.turn(np.pi)  # Reverse direction
-                for _ in range(self.tau_w):
-                    self.sense()
-                    self.compute_pcn_activations()
-                    self.update_hmaps()
-                    self.forward()
-                    self.check_goal_reached()
-                    if torch.any(self.collided):
-                        print("Still stuck after retry. Forcing future exploration.")
-                        self.force_explore_count = 5
-                        self.explore()
-                        return
-                break
+            # # Collision handling
+            # if torch.any(self.collided):
+            #     print("Collision detected. Turning back and retrying.")
+            #     self.turn(np.pi)  # Reverse direction
+            #     for _ in range(self.tau_w):
+            #         self.sense()
+            #         self.compute_pcn_activations()
+            #         self.update_hmaps()
+            #         self.forward()
+            #         self.check_goal_reached()
+            #         if torch.any(self.collided):
+            #             print("Still stuck after retry. Forcing future exploration.")
+            #             self.force_explore_count = 5
+            #             self.explore()
+            #             return
+            #     break
 
             if self.done:
                 return
 
-        # Optionally re-sense
-        self.sense()
-        self.compute_pcn_activations()
-        self.update_hmaps()
+        # #--------------------------
+        # # 7) TD Learning Step
+        # #--------------------------
+        # if self.td_learning:
+        #     for i, scale_def in enumerate(self.scales):
+        #         pcn, rcn = self.pcns[i], self.rcns[i]
+        #         # 1) Get the new place cell activations
+        #         new_pcn_activations = pcn.place_cell_activations
+        #         # Print the difference between old and new place cell activations
+        #         # print(f"Difference in PCN activations for scale {i}: {new_pcn_activations - old_pcn_activations[i]}")
+        #         # 2) Compute the observed reward from the new state
+        #         rcn.update_reward_cell_activations(new_pcn_activations, visit=False)
+        #         observed_reward = float(rcn.reward_cell_activations.item())
 
+        #         # 3) Update the reward cell weights using the old state + observed reward
+        #         rcn.td_update(old_pcn_activations[i], observed_reward)
+
+        # Done with exploit for this iteration
+        return
 
     def plot_current_heading(self):
         import matplotlib.pyplot as plt
@@ -661,9 +687,6 @@ class Driver(Supervisor):
             act = pcn.place_cell_activations.clone().detach()
             self.pcn_activations_list.append(act)
 
-        # Optionally step if you want to sync
-        self.step(self.timestep)
-
     ########################################### CHECK GOAL REACHED ###########################################
     def check_goal_reached(self):
         """
@@ -718,11 +741,13 @@ class Driver(Supervisor):
                 
                 self.stop()
                 self.done = True
-                self.save()
+                self.save(include_pcn=True if self.td_learning else False, 
+                          include_rcn=True if self.td_learning else False)
                 return
             else:
                 self.stop()
-                self.save()
+                self.save(include_pcn=True if self.td_learning else False, 
+                          include_rcn=True if self.td_learning else False)
                 self.done = True
                 self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
                 return

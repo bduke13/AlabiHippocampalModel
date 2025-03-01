@@ -206,7 +206,7 @@ def plot_overlayed_cells(
 
 # Main execution
 if __name__ == "__main__":
-    num_scales = 2  # Adjust based on how many scales you have
+    num_scales = 4  # Adjust based on how many scales you have
     hmap_loc, hmap_pcn_scales = load_hmaps_from_world(num_scales)
     hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
     
@@ -216,6 +216,7 @@ if __name__ == "__main__":
     hmap_y=hmap_y,
     gridsize=100,
     show_plot=True,
-    # num_cells_to_sample=10,
+    plot_most_active=False,
+    num_cells_to_sample=50
     )
 
