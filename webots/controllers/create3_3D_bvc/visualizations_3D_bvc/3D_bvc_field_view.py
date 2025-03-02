@@ -13,30 +13,48 @@ def parse_args():
         action="store_true",
         help="Show 2D histogram and heatmap plots",
     )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=80,
+        help="Percentile threshold for point visualization (0-100)",
+    )
+    parser.add_argument(
+        "--min_activation",
+        type=float,
+        default=None,
+        help="Minimum absolute activation value to display (overrides percentile threshold)",
+    )
+    parser.add_argument(
+        "--point_density",
+        type=float,
+        default=1.0,
+        help="Density of points to display (0.1-1.0)",
+    )
     return parser.parse_args()
 
 
-# Check if running as script or in interactive mode
-try:
-    args = parse_args()
-    show_2d_plots = args.show_2d_plots
-except SystemExit:  # Catch the SystemExit when running in notebook
-    show_2d_plots = True  # Default when running in notebook/interactive mode
-
+show_2d_plots = False
+min_activation = 0.000001
 # Define grid ranges and density
-x_range = (0, 20)
-y_range = (0, 20)
-z_range = (0, 20)
+x_range = (-2.5, 2.5)
+y_range = (-2.5, 2.5)
+z_range = (-2.5, 2.5)
 density = 5  # Adjust this for resolution
 
 # Define BVC parameters
 preferred_distance = 2.0  # d_i
 preferred_horiz_angle = np.pi / 4  # φ_i (in radians)
-preferred_vert_angle = np.pi / 6  # ψ_i (in radians)
+preferred_vert_angle = np.pi / 4  # ψ_i (in radians)
 
-sigma_r = 0.5  # Tuning width for distance
-sigma_theta = 0.02  # Tuning width for horizontal direction
-sigma_phi = 0.02  # Tuning width for vertical direction
+sigma_r = 2.5  # Tuning width for distance
+sigma_theta_deg = 50  # Tuning width for horizontal direction
+sigma_phi_deg = 50  # Tuning width for vertical direction
+
+sigma_theta = np.radians(sigma_theta_deg)
+sigma_phi = np.radians(sigma_phi_deg)
+
+print(f"sigma_theta = {sigma_theta} rad, sigma_phi = {sigma_phi} rad")
 
 # Generate grid points
 x_values = np.linspace(*x_range, int((x_range[1] - x_range[0]) * density))
@@ -94,12 +112,10 @@ u1 = u1 / np.linalg.norm(u1)
 u2 = np.cross(v_unit, u1)
 u2 = u2 / np.linalg.norm(u2)
 
-# --- Apply quadrant masking to "chunk out" one quarter of the distribution ---
-# For each grid point, compute its dot products with u1 and u2.
-# Points with positive dot products with both (i.e. in one quadrant) are removed.
-dot1 = X_flat * u1[0] + Y_flat * u1[1] + Z_flat * u1[2]
-dot2 = X_flat * u2[0] + Y_flat * u2[1] + Z_flat * u2[2]
-mask = (dot1 > 0) & (dot2 > 0)
+# --- Apply diagonal masking to "chunk out" half of the distribution ---
+# For each grid point, check if it's on one side of the x=y plane
+# Points where x > y are removed (keeping only the points where x ≤ y)
+mask = X_flat > Y_flat
 activation[mask] = 0
 # --- End masking ---
 
@@ -109,47 +125,79 @@ activation_3d = activation.reshape(X.shape)
 # Create an interactive 3D plot
 fig = go.Figure()
 
-# Determine visualization approach based on activation distribution
-high_threshold = np.percentile(activation, 90)
-mid_threshold = np.percentile(activation, 70)
-
-# Add isosurfaces for better 3D visualization (multiple levels)
-for level_idx, level in enumerate(np.linspace(mid_threshold, high_threshold, 4)):
-    opacity = 0.2 + 0.1 * level_idx  # Increase opacity for higher activation levels
-    fig.add_trace(
-        go.Isosurface(
-            x=X.flatten(),
-            y=Y.flatten(),
-            z=Z.flatten(),
-            value=activation.flatten(),
-            isomin=level,
-            isomax=level + 0.02,
-            opacity=opacity,
-            surface_count=2,
-            colorscale="Plasma",
-            showscale=level_idx == 0,
-            colorbar=dict(title="Activation") if level_idx == 0 else None,
-            name=f"Activation Level {level:.3f}",
-            caps=dict(x=dict(show=False), y=dict(show=False), z=dict(show=False)),
-        )
+# Filter points based on activation threshold to reduce visual clutter
+# Only show points with significant activation
+if min_activation is not None:
+    # Use absolute minimum activation value if provided
+    activation_threshold = min_activation
+    print(f"Using minimum activation threshold: {min_activation}")
+    mask = activation > activation_threshold
+else:
+    # Use percentile threshold if no minimum activation is provided
+    threshold_percentile = 80
+    activation_threshold = np.percentile(
+        activation[activation > 0], threshold_percentile
+    )
+    print(
+        f"Using {threshold_percentile}th percentile threshold: {activation_threshold:.6f}"
     )
 
-# Add a volume rendering for smoother visualization of the full 3D structure
+# Get coordinates and values of points above threshold
+x_points = X_flat[mask]
+y_points = Y_flat[mask]
+z_points = Z_flat[mask]
+activation_points = activation[mask]
+
+# Print information about the filtered points
+print(f"Number of points displayed: {len(x_points)} (out of {len(X_flat)} total)")
+if len(activation_points) > 0:
+    print(
+        f"Activation range of displayed points: {activation_points.min():.6f} to {activation_points.max():.6f}"
+    )
+
+# Normalize point sizes based on activation values
+min_size = 1
+max_size = 30
+point_sizes = min_size + (max_size - min_size) * (
+    activation_points / activation_points.max()
+)
+
+# Add scatter points colored by activation value
 fig.add_trace(
-    go.Volume(
-        x=X.flatten(),
-        y=Y.flatten(),
-        z=Z.flatten(),
-        value=activation.flatten(),
-        isomin=mid_threshold * 0.8,
-        isomax=high_threshold,
-        opacity=0.1,
-        surface_count=20,
-        colorscale="Plasma",
-        showscale=False,
-        name="Volume Rendering",
+    go.Scatter3d(
+        x=x_points,
+        y=y_points,
+        z=z_points,
+        mode="markers",
+        marker=dict(
+            size=point_sizes,
+            color=activation_points,
+            colorscale="Plasma",
+            opacity=0.8,
+            colorbar=dict(title="Activation"),
+            showscale=True,
+        ),
+        name="BVC Activation Points",
     )
 )
+
+# Optional: Add a very low opacity volume to show the general shape
+# Comment this out if you only want the points
+# fig.add_trace(
+#     go.Volume(
+#         x=X.flatten(),
+#         y=Y.flatten(),
+#         z=Z.flatten(),
+#         value=activation.flatten(),
+#         isomin=activation_threshold * 0.5,
+#         isomax=activation.max(),
+#         opacity=0.05,
+#         surface_count=10,
+#         colorscale="Plasma",
+#         showscale=False,
+#         name="Volume Outline",
+#     )
+# )
 
 # Add a large red sphere at the origin (0,0,0)
 fig.add_trace(
@@ -187,14 +235,49 @@ fig.add_trace(
     )
 )
 
-# Set layout and fix axis ranges with an improved camera angle
+# Add coordinate axis lines
+# X-axis (red)
+fig.add_trace(
+    go.Scatter3d(
+        x=[0, x_range[1]],
+        y=[0, 0],
+        z=[0, 0],
+        mode="lines",
+        line=dict(color="red", width=3),
+        name="X-axis",
+    )
+)
+# Y-axis (green)
+fig.add_trace(
+    go.Scatter3d(
+        x=[0, 0],
+        y=[0, y_range[1]],
+        z=[0, 0],
+        mode="lines",
+        line=dict(color="green", width=3),
+        name="Y-axis",
+    )
+)
+# Z-axis (blue)
+fig.add_trace(
+    go.Scatter3d(
+        x=[0, 0],
+        y=[0, 0],
+        z=[0, z_range[1]],
+        mode="lines",
+        line=dict(color="blue", width=3),
+        name="Z-axis",
+    )
+)
+
+# Set layout and fix axis ranges with a side angle camera view
 fig.update_layout(
-    title="3D Boundary Vector Cell (BVC) Firing Field (with quadrant removed)",
+    title="3D Boundary Vector Cell (BVC) Firing Field - Point Cloud Visualization",
     scene=dict(
         xaxis=dict(title="X", range=[x_range[0], x_range[1]]),
         yaxis=dict(title="Y", range=[y_range[0], y_range[1]]),
         zaxis=dict(title="Z", range=[z_range[0], z_range[1]]),
-        camera=dict(eye=dict(x=1.5, y=1.5, z=1.2), center=dict(x=0, y=0, z=0)),
+        camera=dict(eye=dict(x=1.5, y=0.1, z=0.5), center=dict(x=0, y=0, z=0)),
         aspectmode="cube",
     ),
     legend=dict(
@@ -225,6 +308,28 @@ if show_2d_plots:
             y=y_values,
             colorscale="Plasma",
             colorbar=dict(title="Activation"),
+        )
+    )
+
+    # Add coordinate axes to 2D plot
+    # X-axis (red)
+    heatmap_fig.add_trace(
+        go.Scatter(
+            x=[0, x_range[1]],
+            y=[0, 0],
+            mode="lines",
+            line=dict(color="red", width=2),
+            name="X-axis",
+        )
+    )
+    # Y-axis (green)
+    heatmap_fig.add_trace(
+        go.Scatter(
+            x=[0, 0],
+            y=[0, y_range[1]],
+            mode="lines",
+            line=dict(color="green", width=2),
+            name="Y-axis",
         )
     )
 
@@ -281,4 +386,11 @@ if __name__ == "__main__":
     print(
         f"3D BVC visualization complete. 2D plots {'shown' if show_2d_plots else 'hidden'}."
     )
-    print("To show 2D plots, run with: python 3D_bvc_field_view.py --show_2d_plots")
+    print(f"Point density: {point_density}")
+    print("Usage options:")
+    print("  --show_2d_plots         Show 2D heatmap plots")
+    print("  --threshold VALUE       Set percentile threshold for points (0-100)")
+    print(
+        "  --min_activation VALUE  Set minimum absolute activation value (overrides percentile)"
+    )
+    print("  --point_density VALUE   Set density of points to display (0.1-1.0)")
