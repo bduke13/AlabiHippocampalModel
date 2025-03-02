@@ -265,7 +265,7 @@ class Driver(Supervisor):
         timestep: int,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
-        device: Optional[str] = None,
+        device: Optional[torch.device] = None,
     ):
         """Loads an existing place cell network from disk or initializes a new one.
 
@@ -311,6 +311,7 @@ class Driver(Supervisor):
                 timestep=timestep,
                 n_hd=n_hd,
                 device=device,
+                w_in_init_ratio=0.25,
             )
             print("Initialized new PCN")
 
