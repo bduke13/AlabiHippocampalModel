@@ -124,7 +124,7 @@ class BoundaryVectorCellLayer:
             self.d_i.cpu().numpy(),
             c=activations,
             cmap="viridis",
-            s=activations * 50,
+            s=activations * 150,
             alpha=0.75,
         )
 
