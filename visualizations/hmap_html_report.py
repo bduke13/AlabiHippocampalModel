@@ -141,7 +141,12 @@ def generate_html_report(cell_indices, output_dir):
 
 
 def generate_place_cells_report(
-    hmap_x, hmap_y, hmap_pcn, output_dir=None, open_browser=True
+    hmap_x,
+    hmap_y,
+    hmap_pcn,
+    output_dir=None,
+    open_browser=True,
+    activation_threshold=None,
 ):
     # Use project root from vis_utils if output_dir not specified
     if output_dir is None:
@@ -186,9 +191,23 @@ def generate_place_cells_report(
     num_cells = hmap_pcn.shape[1]
     colors_rgb = generate_vibrant_colors(num_cells)
 
+    # Filter out dead cells if threshold is provided
+    if activation_threshold is not None:
+        # Calculate total activation for each cell
+        total_activations = np.sum(np.abs(hmap_pcn), axis=0)
+        active_cells = total_activations > activation_threshold
+        hmap_pcn = hmap_pcn[:, active_cells]
+        print(
+            f"Filtered out {np.sum(~active_cells)} cells below activation threshold {activation_threshold}"
+        )
+        print(f"Remaining cells: {np.sum(active_cells)}")
+
     # Try to read cells.csv if it exists, otherwise use all cells
     if os.path.exists("cells.csv"):
         cell_indices = np.loadtxt("cells.csv", dtype=int)
+        if activation_threshold is not None:
+            # Filter the cell indices based on which cells remained after thresholding
+            cell_indices = cell_indices[cell_indices < hmap_pcn.shape[1]]
         print(f"Loaded {len(cell_indices)} cell indices from cells.csv")
     else:
         print("cells.csv not found, using all cells")
@@ -221,9 +240,11 @@ def generate_place_cells_report(
     if open_browser:
         webbrowser.open(f"file://{os.path.abspath(html_path)}")
 
-    print(f"Processed plots for {len(cell_indices)} cell(s).")
-    print(f"HTML report generated at: {html_path}")
-    print(f"Images saved in: {assets_dir}")
+    print(f"- Processed plots for {len(cell_indices)} cell(s)")
+    if activation_threshold is not None:
+        print(f"- Activation threshold: {activation_threshold}")
+    print(f"- HTML report: {html_path}")
+    print(f"- Images directory: {assets_dir}")
 
     return html_path
 
@@ -241,4 +262,11 @@ if __name__ == "__main__":
     hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
 
     # %%
-    generate_place_cells_report(hmap_x, hmap_y, hmap_pcn, output_dir=OUTPUT_DIR)
+    # Example usage with activation threshold
+    generate_place_cells_report(
+        hmap_x,
+        hmap_y,
+        hmap_pcn,
+        output_dir=OUTPUT_DIR,
+        activation_threshold=0.1,  # Adjust this value as needed
+    )

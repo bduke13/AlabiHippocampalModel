@@ -115,10 +115,7 @@ if __name__ == "__main__":
     from visualizations.vis_utils import load_hmaps, convert_xzy_hmaps
 
     # Load hmap data
-    base_path = "webots/controllers/flying_3D_pcn/"
-    hmap_loc, hmap_pcn = load_hmaps(
-        prefix=base_path, hmap_names=["hmap_loc", "hmap_pcn"]
-    )
+    hmap_loc, hmap_pcn = load_hmaps(hmap_names=["hmap_loc", "hmap_pcn"])
     hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
 
     # Optional specific cell indices (e.g., [0, 5, 10]) or None to plot all
@@ -132,7 +129,7 @@ if __name__ == "__main__":
         hmap_y,
         hmap_z,
         hmap_pcn,
-        cell_indices=specific_cells,
+        cell_indices=None,
         save_plot=False,
         show_plot=True,
     )

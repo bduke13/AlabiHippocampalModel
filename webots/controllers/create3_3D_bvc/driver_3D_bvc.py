@@ -79,12 +79,13 @@ class Driver(Supervisor):
         input_cols: int = 180,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
-        visual_bvc: bool = False,
         world_name: Optional[str] = None,
         start_location: Optional[List[int]] = None,
         randomize_start_location: bool = True,
         goal_location: Optional[List[float]] = None,
         max_dist: float = 10,
+        show_bvc_activation_plot: bool = False,
+        show_save_dialogue_and_pause=True,
     ):
         """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
@@ -107,6 +108,8 @@ class Driver(Supervisor):
         # Set the robot mode and device
         self.robot = self.getFromDef("agent")  # Placeholder for robot instance
         self.robot_mode = mode
+        self.show_save_dialogue_and_pause = show_save_dialogue_and_pause
+        self.done = False  # Set to true to stop sim loop
         self.device = (
             torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
@@ -119,7 +122,7 @@ class Driver(Supervisor):
                 0
             ]  # Extract just the world name
         self.world_name = world_name
-        self.visual_bvc = visual_bvc
+        self.show_bvc_activation_plot = show_bvc_activation_plot
 
         # Construct directory paths
         self.hmap_dir = os.path.join("pkl", self.world_name, "hmaps")
@@ -140,7 +143,7 @@ class Driver(Supervisor):
         self.wheel_radius = 0.031
         self.axle_length = 0.271756
         self.run_time_minutes = run_time_hours * 60
-        self.step_count = 0
+
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
         self.goal_r = {"explore": 0.3, "exploit": 0.5}
 
@@ -243,7 +246,7 @@ class Driver(Supervisor):
 
         self.directional_reward_estimates = torch.zeros(n_hd, device=self.device)
         self.step(self.timestep)
-        self.step_count += 1
+        self.step_count = 1
 
         self.sense()
         self.compute_pcn_activations()
@@ -265,7 +268,7 @@ class Driver(Supervisor):
         timestep: int,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
-        device: Optional[str] = None,
+        device: Optional[torch.device] = None,
     ):
         """Loads an existing place cell network from disk or initializes a new one.
 
@@ -311,6 +314,7 @@ class Driver(Supervisor):
                 timestep=timestep,
                 n_hd=n_hd,
                 device=device,
+                w_in_init_ratio=0.25,
             )
             print("Initialized new PCN")
 
@@ -373,7 +377,7 @@ class Driver(Supervisor):
         print(f"Starting robot in {self.robot_mode}")
         print(f"Goal at {self.goal_location}")
 
-        while True:
+        while not self.done:
             if self.robot_mode == RobotMode.MANUAL_CONTROL:
                 self.manual_control()
 
@@ -513,6 +517,9 @@ class Driver(Supervisor):
         """
         Uses sensors to update range-image, heading, boundary data, collision flags, etc.
         """
+        # Advance simulation one timestep
+        self.step(self.timestep)
+
         # Get the latest boundary data from range finder
         vertical_data = self.vertical_range_finder.getRangeImage()
 
@@ -552,9 +559,6 @@ class Driver(Supervisor):
         self.collided[0] = int(self.left_bumper.getValue())
         self.collided[1] = int(self.right_bumper.getValue())
 
-        # Advance simulation one timestep
-        self.step(self.timestep)
-
     def get_bearing_in_degrees(self, north: List[float]) -> float:
         """
         Converts a 'north' vector (from compass) to a global heading in degrees [0, 360).
@@ -584,11 +588,8 @@ class Driver(Supervisor):
             hd_activations=self.hd_activations,
             collided=torch.any(self.collided),
         )
-        if self.visual_bvc:
+        if self.show_bvc_activation_plot:
             self.pcn.bvc_layer.plot_activation(self.boundaries)
-
-        # Advance simulation one timestep
-        self.step(self.timestep)
 
     ########################################### CHECK GOAL REACHED ###########################################
     def check_goal_reached(self):
@@ -939,15 +940,16 @@ class Driver(Supervisor):
                 pickle.dump(bvc_cpu, output)
                 files_saved.append(hmap_bvc_path)
 
-        # Show a message box to confirm saving
-        root = tk.Tk()
-        root.withdraw()  # Hide the main window
-        root.attributes("-topmost", True)  # Always keep the window on top
-        root.update()
-        messagebox.showinfo("Information", "Press OK to save data")
-        root.destroy()  # Destroy the main window
+        if self.show_save_dialogue_and_pause:
+            # Show a message box to confirm saving
+            root = tk.Tk()
+            root.withdraw()  # Hide the main window
+            root.attributes("-topmost", True)  # Always keep the window on top
+            root.update()
+            messagebox.showinfo("Information", "Press OK to save data")
+            root.destroy()  # Destroy the main window
 
-        self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
+            self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
 
         print(f"Files Saved: {files_saved}")
         print("Saving Done!")
