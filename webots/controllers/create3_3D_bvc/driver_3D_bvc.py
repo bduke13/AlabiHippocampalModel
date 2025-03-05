@@ -85,6 +85,7 @@ class Driver(Supervisor):
         goal_location: Optional[List[float]] = None,
         max_dist: float = 10,
         show_bvc_activation_plot: bool = False,
+        show_save_dialogue_and_pause=True,
     ):
         """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
@@ -107,6 +108,8 @@ class Driver(Supervisor):
         # Set the robot mode and device
         self.robot = self.getFromDef("agent")  # Placeholder for robot instance
         self.robot_mode = mode
+        self.show_save_dialogue_and_pause = show_save_dialogue_and_pause
+        self.done = False  # Set to true to stop sim loop
         self.device = (
             torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
@@ -374,7 +377,7 @@ class Driver(Supervisor):
         print(f"Starting robot in {self.robot_mode}")
         print(f"Goal at {self.goal_location}")
 
-        while True:
+        while not self.done:
             if self.robot_mode == RobotMode.MANUAL_CONTROL:
                 self.manual_control()
 
@@ -937,15 +940,16 @@ class Driver(Supervisor):
                 pickle.dump(bvc_cpu, output)
                 files_saved.append(hmap_bvc_path)
 
-        # Show a message box to confirm saving
-        root = tk.Tk()
-        root.withdraw()  # Hide the main window
-        root.attributes("-topmost", True)  # Always keep the window on top
-        root.update()
-        messagebox.showinfo("Information", "Press OK to save data")
-        root.destroy()  # Destroy the main window
+        if self.show_save_dialogue_and_pause:
+            # Show a message box to confirm saving
+            root = tk.Tk()
+            root.withdraw()  # Hide the main window
+            root.attributes("-topmost", True)  # Always keep the window on top
+            root.update()
+            messagebox.showinfo("Information", "Press OK to save data")
+            root.destroy()  # Destroy the main window
 
-        self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
+            self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
 
         print(f"Files Saved: {files_saved}")
         print("Saving Done!")

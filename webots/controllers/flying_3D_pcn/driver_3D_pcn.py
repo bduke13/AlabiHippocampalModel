@@ -5,17 +5,16 @@ import random
 import os
 from typing import Optional, List
 from controller import Supervisor
-from tkinter import N, messagebox
+from tkinter import messagebox
 import tkinter as tk
 import matplotlib.pyplot as plt
 
-
-# Add root directory to python to be able to import
+# Add project root to sys.path if needed
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]  # Moves two levels up
-sys.path.append(str(PROJECT_ROOT))  # Add project root to sys.path
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+sys.path.append(str(PROJECT_ROOT))
 
 from core.robot.robot_mode import RobotMode
 from core.layers.boundary_vector_cell_layer_3D import BoundaryVectorCellLayer3D
@@ -25,6 +24,64 @@ from core.layers.reward_cell_layer import RewardCellLayer
 
 np.set_printoptions(precision=2)
 PI = torch.tensor(np.pi)
+
+
+# Helper function: Generate a random unit vector within a cone.
+def random_cone_vector(target_vector, max_angle_deg=60):
+    """
+    Generates a random unit vector that is within max_angle_deg of the target_vector.
+
+    Args:
+        target_vector (array-like): The central target direction (assumed non-zero).
+        max_angle_deg (float): The cone half-angle in degrees.
+
+    Returns:
+        np.ndarray: A random unit vector within the cone.
+    """
+    max_angle = np.deg2rad(max_angle_deg)
+    # Sample cosine uniformly from [cos(max_angle), 1]
+    cos_theta = np.random.uniform(np.cos(max_angle), 1)
+    theta = np.arccos(cos_theta)
+    phi = np.random.uniform(0, 2 * np.pi)
+
+    # Create a vector in the local coordinate system (cone around z-axis)
+    local_vec = np.array(
+        [np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta)]
+    )
+
+    # Rotate local_vec so that the z-axis aligns with target_vector.
+    v = np.array(target_vector, dtype=np.float64)
+    v_norm = np.linalg.norm(v)
+    if v_norm == 0:
+        return local_vec  # Fallback if target is zero.
+    v = v / v_norm
+
+    # Find rotation axis (cross product between z-axis and v)
+    z_axis = np.array([0, 0, 1], dtype=np.float64)
+    if np.allclose(v, z_axis):
+        return local_vec
+    if np.allclose(v, -z_axis):
+        # v is opposite to z; rotate local_vec by 180 degrees.
+        return -local_vec
+
+    axis = np.cross(z_axis, v)
+    axis_norm = np.linalg.norm(axis)
+    if axis_norm != 0:
+        axis = axis / axis_norm
+    else:
+        axis = np.array([1, 0, 0], dtype=np.float64)
+
+    angle = np.arccos(np.clip(np.dot(z_axis, v), -1, 1))
+
+    # Rodrigues' rotation formula
+    local_vec = local_vec.astype(np.float64)
+    rotated_vec = (
+        local_vec * np.cos(angle)
+        + np.cross(axis, local_vec) * np.sin(angle)
+        + axis * np.dot(axis, local_vec) * (1 - np.cos(angle))
+    )
+    # Normalize just in case
+    return rotated_vec / np.linalg.norm(rotated_vec)
 
 
 class DriverFlying(Supervisor):
@@ -49,37 +106,34 @@ class DriverFlying(Supervisor):
         visual_bvc: bool = False,
         visual_pcn: bool = False,
         world_name: Optional[str] = None,
-        start_location: Optional[List[int]] = None,
+        start_location: Optional[List[float]] = None,
         randomize_start_location: bool = True,
         goal_location: Optional[List[float]] = None,
         max_dist: float = 10,
+        show_save_dialogue_and_pause=True,
     ):
-
         self.robot_mode = mode
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         # Set the world name and directories for saving data
         if world_name is None:
             world_path = self.getWorldPath()  # Get the full path to the world file
-            world_name = os.path.splitext(os.path.basename(world_path))[
-                0
-            ]  # Extract just the world name
+            world_name = os.path.splitext(os.path.basename(world_path))[0]
         self.world_name = world_name
         self.visual_bvc = visual_bvc
         self.visual_pcn = visual_pcn
+        self.show_save_dialogue_and_pause = show_save_dialogue_and_pause
+        self.done = False  # Setting to True stops sim
 
         # Construct directory paths
         self.hmap_dir = os.path.join("pkl", self.world_name, "hmaps")
         self.network_dir = os.path.join("pkl", self.world_name, "networks")
-        # Ensure directories exist
         os.makedirs(self.hmap_dir, exist_ok=True)
         os.makedirs(self.network_dir, exist_ok=True)
 
         # Model parameters
         self.timestep = 32 * 6
-        self.tau_w = 10  # time constant for the window function
-
-        self.visual_bvc = visual_bvc
+        self.tau_w = 10
 
         # Robot parameters
         self.max_speed = 16
@@ -92,41 +146,24 @@ class DriverFlying(Supervisor):
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
         self.goal_r = {"explore": 0.3, "exploit": 0.5}
 
-        # Initialize hmaps (history maps) as torch tensors on specified device
-        self.hmap_loc = torch.zeros(
-            (self.num_steps, 3), device=self.device
-        )  # coordinates [X, Z, Y]
-        self.hmap_pcn = torch.zeros(
-            (self.num_steps, num_place_cells), device=self.device
-        )  # place cell activations
-        self.hmap_bvc = torch.zeros(
-            (self.num_steps, len(phi_vert_preferred) * n_hd_bvc * num_bvc_per_dir),
-            device=self.device,
-        )  # BVC activations
-        self.hmap_hdn = torch.zeros(
-            (self.num_steps, n_hd_hdn), device=self.device
-        )  # head direction activations
-
         # Initialize hardware components and sensors
-        self.robot = self.getFromDef("agent")  # Placeholder for robot instance
+        self.robot = self.getFromDef("agent")
         self.keyboard = self.getKeyboard()
         self.keyboard.enable(self.timestep)
         self.compass = self.getDevice("compass")
         self.compass.enable(self.timestep)
 
-        # Initialize touch sensor
         self.touch_sensor = self.getDevice("touch_sensor")
         self.touch_sensor.enable(self.timestep)
 
-        # Initialize velocity
-        self.velocity = [0.1, 0.1, 0.1]  # Initial velocity vector
-        self.speed = 0.1  # Speed magnitude (reduced from 0.5 to 0.1)
+        self.velocity = [0.1, 0.1, 0.1]  # Velocity in [x, y, z]
+        self.speed = 0.1
         self.vertical_range_finder = self.getDevice("vertical-range-finder")
         self.vertical_range_finder.enable(self.timestep)
         self.collided = torch.zeros(2, dtype=torch.int32)
         self.rotation_field = self.robot.getField("rotation")
 
-        # Clear/Initialize/Load layers
+        # Clear/load layers
         if self.robot_mode == RobotMode.LEARN_OJAS:
             self.clear()
 
@@ -150,28 +187,41 @@ class DriverFlying(Supervisor):
         )
 
         self.head_direction_layer = HeadDirectionLayer3D(device=self.device)
-
-        # Initialize boundaries
         self.vertical_boundaries = torch.zeros((720, 360))
 
         self.step(self.timestep)
         self.step_count = 1
-
-        # Initialize goal
         self.expected_reward = 0
 
-        if randomize_start_location:
-            INITIAL = [
-                random.uniform(-2.3, 2.3),
-                random.uniform(0.5, 2),
-                random.uniform(-2.3, 2.3),
-            ]
-            self.robot.getField("translation").setSFVec3f(INITIAL)
-        else:
-            self.robot.getField("translation").setSFVec3f(
-                [start_location[0], start_location[1], start_location[1]]
-            )
+        # Define environment boundaries in Webots (x, y, z)
+        self.x_min, self.x_max = -2.5, 2.5
+        self.y_min, self.y_max = 0.25, 5.0
+        self.z_min, self.z_max = -2.5, 2.5
 
+        # Initialize hmaps (history maps)
+        self.hmap_loc = torch.zeros(
+            (self.num_steps, 3), device=self.device
+        )  # [x, y, z]
+        self.hmap_pcn = torch.zeros(
+            (self.num_steps, num_place_cells), device=self.device
+        )
+        self.hmap_bvc = torch.zeros(
+            (self.num_steps, self.pcn.bvc_layer.num_bvc),
+            device=self.device,
+        )
+        self.hmap_hdn = torch.zeros((self.num_steps, n_hd_hdn), device=self.device)
+
+        # Set the initial location
+        if randomize_start_location:
+            # Choose a random location within the boundaries (with a small margin)
+            init_pos = [
+                random.uniform(self.x_min + 0.2, self.x_max - 0.2),
+                random.uniform(self.y_min + 0.2, self.y_max - 0.2),
+                random.uniform(self.z_min + 0.2, self.z_max - 0.2),
+            ]
+        else:
+            init_pos = start_location  # Expected to be in [x, y, z]
+        self.robot.getField("translation").setSFVec3f(init_pos)
         self.robot.resetPhysics()
 
     def load_pcn(
@@ -181,10 +231,10 @@ class DriverFlying(Supervisor):
         n_hd_hdn: int,
         max_dist: float,
         num_bvc_per_dir: int,
-        phi_vert_preferred: List[float],  # vertical angle preferences (ψ)
-        sigma_rs: List[float],  # radial distance spread (σ_r)
-        sigma_thetas: List[float],  # horizontal angle spread (σ_θ)
-        sigma_phis: List[float],  # vertical angle spread (σ_φ)
+        phi_vert_preferred: List[float],
+        sigma_rs: List[float],
+        sigma_thetas: List[float],
+        sigma_phis: List[float],
         scaling_factors: List[float],
         input_rows: int,
         input_cols: int,
@@ -193,10 +243,7 @@ class DriverFlying(Supervisor):
         enable_stdp: Optional[bool] = None,
         device: str = "cpu",
     ):
-
-        # Fall back to the original loading method
         try:
-            # First try to load from the network directory for non-Ojas runs
             saved_pcn_path = os.path.join(self.network_dir, "pcn.pkl")
             print(os.path.exists(saved_pcn_path))
             with open(saved_pcn_path, "rb") as f:
@@ -206,15 +253,14 @@ class DriverFlying(Supervisor):
                 self.pcn.device = device
                 self.pcn.bvc_layer.device = device
         except:
-            print(f"File not found. Instantiating new PCN layer")
-            # Initialize BVC layer with per-layer sigma values
+            print("File not found. Instantiating new PCN layer")
             bvc = BoundaryVectorCellLayer3D(
                 max_dist=max_dist,
                 n_hd=n_hd_bvc,
-                phi_vert_preferred=phi_vert_preferred,  # vertical angle preferences (ψ)
-                sigma_rs=sigma_rs,  # radial distance spread (σ_r)
-                sigma_thetas=sigma_thetas,  # horizontal angle spread (σ_θ)
-                sigma_phis=sigma_phis,  # vertical angle spread (σ_φ)
+                phi_vert_preferred=phi_vert_preferred,
+                sigma_rs=sigma_rs,
+                sigma_thetas=sigma_thetas,
+                sigma_phis=sigma_phis,
                 scaling_factors=scaling_factors,
                 num_bvc_per_dir=num_bvc_per_dir,
                 input_rows=input_rows,
@@ -222,7 +268,6 @@ class DriverFlying(Supervisor):
                 bottom_cutoff_percentage=1.0,
                 device=device,
             )
-
             self.pcn = PlaceCellLayer(
                 bvc_layer=bvc,
                 num_pc=num_place_cells,
@@ -231,7 +276,6 @@ class DriverFlying(Supervisor):
                 w_in_init_ratio=0.50,
                 device=device,
             )
-
             print(
                 f"Initialized new Boundary Vector Cell Network with {self.pcn.num_bvc} cells"
             )
@@ -260,18 +304,16 @@ class DriverFlying(Supervisor):
         print(
             f"Starting robot in stage {self.robot_mode} for {self.num_steps} time steps"
         )
-        while self.step_count <= self.num_steps:
-            if (
-                self.robot_mode == RobotMode.LEARN_OJAS
-                or self.robot_mode == RobotMode.LEARN_HEBB
-                or self.robot_mode == RobotMode.PLOTTING
-            ):
-
+        while self.step_count <= self.num_steps and not self.done:
+            if self.robot_mode in [
+                RobotMode.LEARN_OJAS,
+                RobotMode.LEARN_HEBB,
+                RobotMode.PLOTTING,
+            ]:
                 self.explore()
             else:
                 print("Robot mode not implemented yet, quitting.")
                 break
-
         self.save()
 
     ########################################### EXPLORE ###########################################
@@ -280,139 +322,116 @@ class DriverFlying(Supervisor):
         self.sense()  # Preprocess sensor data
         self.compute()  # Handle activations
 
-        # Get current position
+        # Get current position (x, y, z)
         current_pos = self.robot.getField("translation").getSFVec3f()
 
-        # Predict next position
-        next_pos = [
-            current_pos[0] + self.velocity[0],
-            current_pos[1] + self.velocity[1],
-            current_pos[2] + self.velocity[2],
-        ]
-
-        # Check range finder for obstacles
-        range_data = self.vertical_range_finder.getRangeImage()
-        if range_data is not None:
-            min_distance = min(range_data)  # Closest obstacle distance
-            if min_distance < 0.2:  # Collision is imminent
-                # Reposition robot slightly away from the obstacle
-                self.reposition_away_from_obstacle(current_pos)
-
-                # Reflect velocity vector based on the wall's normal
-                self.reflect_velocity()
-
-                # Skip movement this step to avoid clipping
-                return
-
-        # Ensure robot stays within bounds
-        bounds = 2.3
-        height_bounds = 2.8
-        if (
-            abs(next_pos[0]) > bounds
-            or abs(next_pos[2]) > bounds
-            or next_pos[1] < 0.2
-            or next_pos[1] > height_bounds
-        ):
-            self.reposition_away_from_obstacle(current_pos)
-            self.reflect_velocity()
-            return
-
-        # Random walk behavior - 5% chance to adjust direction
-        if random.random() < 0.15:  # 5% chance each step
-            # Add Gaussian noise to each velocity component
-            # Using smaller std dev for vertical (y) component
-            noise = [
-                np.random.normal(0, 0.05),  # x component
-                np.random.normal(0, 0.05),  # y component (less variation)
-                np.random.normal(0, 0.05),  # z component
-            ]
-
-            # Add noise to current velocity
-            self.velocity = [v + n for v, n in zip(self.velocity, noise)]
-
-            # Normalize to maintain constant speed
-            magnitude = np.sqrt(sum(v * v for v in self.velocity))
-            self.velocity = [v / magnitude * self.speed for v in self.velocity]
-
-            # Recalculate next position with new velocity
-            next_pos = [
-                current_pos[0] + self.velocity[0],
-                current_pos[1] + self.velocity[1],
-                current_pos[2] + self.velocity[2],
-            ]
-
-        # Move the robot if no collisions detected
-        self.robot.getField("translation").setSFVec3f(next_pos)
-
-    def explore_equal(self) -> None:
-        """
-        Moves the agent in a nearly uniformly random 3D direction,
-        with equal treatment of x, y, and z components.
-        """
-        self.sense()  # Preprocess sensor data
-        self.compute()  # Compute activations if needed
-
-        # Generate a uniformly random direction in 3D
-        # Using np.random.randn generates samples from a normal distribution for each axis
-        random_direction = np.random.randn(3)
-        # Normalize to get a unit vector
-        norm = np.linalg.norm(random_direction)
-        if norm == 0:
-            random_direction = np.array([1.0, 0.0, 0.0])
-        else:
-            random_direction = random_direction / norm
-
-        # Set the velocity based on the chosen direction and constant speed
-        self.velocity = (random_direction * self.speed).tolist()
-
-        # Compute the next position from current position and velocity
-        current_pos = self.robot.getField("translation").getSFVec3f()
+        # Predict next position using current velocity (in x, y, z)
         next_pos = [current_pos[i] + self.velocity[i] for i in range(3)]
 
-        # Optionally, include a collision check using range data
+        # Check vertical range finder for obstacles
         range_data = self.vertical_range_finder.getRangeImage()
         if range_data is not None:
             min_distance = min(range_data)
-            if (
-                min_distance < 0.2
-            ):  # Collision is imminent, adjust position/velocity accordingly
-                self.reposition_away_from_obstacle(current_pos)
-                self.reflect_velocity()
+            if min_distance < 0.2:
+                self.handle_collision(current_pos)
                 return
 
-        # If you want to relax vertical constraints, either remove or adjust them.
-        bounds = 2.3
-        # Example: using same bounds for x, y, and z, or customizing as needed
-        if (
-            abs(next_pos[0]) > bounds
-            or abs(next_pos[1]) > bounds
-            or abs(next_pos[2]) > bounds
+        # Check if the next position is within the boundaries
+        if not (
+            self.x_min <= next_pos[0] <= self.x_max
+            and self.y_min <= next_pos[1] <= self.y_max
+            and self.z_min <= next_pos[2] <= self.z_max
         ):
-            self.reposition_away_from_obstacle(current_pos)
-            self.reflect_velocity()
+            self.handle_collision(current_pos)
             return
 
-        # Move the robot to the next position
+        # Random walk behavior: 10% chance to adjust direction
+        if random.random() < 0.10:
+            noise = [np.random.normal(0, 0.2) for _ in range(3)]
+            self.velocity = [self.velocity[i] + noise[i] for i in range(3)]
+            mag = np.sqrt(sum(v * v for v in self.velocity))
+            self.velocity = [v / mag * self.speed for v in self.velocity]
+            next_pos = [current_pos[i] + self.velocity[i] for i in range(3)]
+
         self.robot.getField("translation").setSFVec3f(next_pos)
+
+    ########################################### MOVEMENT ###########################################
+    ###########################################
+    # In your DriverFlying class:
+
+    def handle_collision(self, current_pos):
+        # Increase collision counter
+        if not hasattr(self, "collision_counter"):
+            self.collision_counter = 0
+        self.collision_counter += 1
+
+        self.reposition_away_from_obstacle(current_pos)
+        self.reflect_velocity()
+
+        # If stuck for 3 consecutive collisions, adjust velocity toward center
+        if self.collision_counter >= 3:
+            self.push_towards_center(current_pos)
+            center = [0.0, 2.5, 0.0]  # Center of the room in [x, y, z]
+            target_vector = [center[i] - current_pos[i] for i in range(3)]
+            # Generate a random velocity vector within a 60° cone around the center direction
+            new_dir = random_cone_vector(target_vector, max_angle_deg=60)
+            # Set velocity to this new direction scaled by speed
+            self.velocity = [float(new_dir[i]) * self.speed for i in range(3)]
+            self.collision_counter = 0
+
+    def push_towards_center(self, current_pos):
+        # Define the center of the room.
+        center = [0.0, 2.5, 0.0]
+        # Compute vector from current position to center.
+        vector_to_center = [center[i] - current_pos[i] for i in range(3)]
+        norm = np.linalg.norm(vector_to_center)
+        if norm == 0:
+            return
+        unit_vector = [v / norm for v in vector_to_center]
+        push_distance = 0.5  # Adjust push distance as needed.
+        new_pos = [current_pos[i] + push_distance * unit_vector[i] for i in range(3)]
+        # Ensure the new position is within boundaries.
+        new_pos[0] = np.clip(new_pos[0], self.x_min, self.x_max)
+        new_pos[1] = np.clip(new_pos[1], self.y_min, self.y_max)
+        new_pos[2] = np.clip(new_pos[2], self.z_min, self.z_max)
+        self.robot.getField("translation").setSFVec3f(new_pos)
+
+    def reposition_away_from_obstacle(self, current_pos):
+        x, y, z = current_pos
+        offset = 0.3  # Larger offset to clear the wall
+        if x < self.x_min:
+            x = self.x_min + offset
+        elif x > self.x_max:
+            x = self.x_max - offset
+        if y < self.y_min:
+            y = self.y_min + offset
+        elif y > self.y_max:
+            y = self.y_max - offset
+        if z < self.z_min:
+            z = self.z_min + offset
+        elif z > self.z_max:
+            z = self.z_max - offset
+        self.robot.getField("translation").setSFVec3f([x, y, z])
+
+    def reflect_velocity(self):
+        # Invert the entire velocity vector to push the agent away from the wall.
+        self.velocity = [-v for v in self.velocity]
+        # Add small random noise to help avoid repeating the same collision.
+        self.velocity = [v + np.random.uniform(-0.1, 0.1) for v in self.velocity]
+        mag = np.sqrt(sum(v * v for v in self.velocity))
+        self.velocity = [v / mag * self.speed for v in self.velocity]
 
     ########################################### SENSE ###########################################
 
     def sense(self):
-        """Preprocess sensor data for use in collision detection and navigation."""
-        # Get the current heading from the compass
         self.current_heading_deg = int(
             self.get_bearing_in_degrees(self.compass.getValues())
         )
-
-        # Get the range finder data and roll to align with heading
         vertical_data = self.vertical_range_finder.getRangeImage()
         if vertical_data is not None:
-            # Create tensor directly on target device
             self.vertical_boundaries = torch.tensor(
                 vertical_data, dtype=torch.float32, device=self.device
             ).reshape(90, 180)
-
-            # Roll operation stays on device
             self.vertical_boundaries = torch.roll(
                 self.vertical_boundaries,
                 shifts=int(self.current_heading_deg / 2),
@@ -420,94 +439,31 @@ class DriverFlying(Supervisor):
             )
         else:
             self.vertical_boundaries = None
-
-        # Advance the timestep for the control loop
         self.step(self.timestep)
 
     def get_bearing_in_degrees(self, north: List[float]) -> float:
-        """Converts compass readings to bearing in degrees.
-
-        Args:
-            north (List[float]): List containing the compass sensor values [x, y, z].
-
-        Returns:
-            float: Bearing angle in degrees (0-360), where 0 is North.
-        """
         rad = np.arctan2(north[0], north[2])
         bearing = (rad - 1.5708) / np.pi * 180.0
         if bearing < 0:
-            bearing = bearing + 360.0
+            bearing += 360.0
         return bearing
 
     ########################################### COMPUTE ###########################################
 
     def compute(self):
-        """
-        Compute the activations of place cells and handle the environment interactions.
-        """
-        # Ensure data is on correct device with correct dtype
         self.vertical_boundaries = self.vertical_boundaries.to(
             device=self.device, dtype=torch.float32
         )
-
-        # Convert velocity to tensor on correct device
         hd_vel = torch.tensor(self.velocity, dtype=torch.float32, device=self.device)
-
-        # Get head direction activations (already on correct device)
         self.head_directions = self.head_direction_layer.get_hd_activation(hd_vel)
-
         self.pcn.get_place_cell_activations(
             self.vertical_boundaries,
             hd_activations=self.head_directions,
             collided=torch.any(self.collided).item(),
         )
 
-        if False:
-
-            # Get 1D tensor and move to CPU for visualization
-            data = self.pcn.bvc_activations.cpu().detach().numpy().flatten()
-            print(data)
-
-            # Compute dynamic reshaping (closest square)
-            side_length = int(np.ceil(np.sqrt(len(data))))
-            reshaped_w_in = np.zeros((side_length, side_length))  # Create a square
-            reshaped_w_in.flat[: len(data)] = data  # Fill with values
-
-            # Plot heatmap
-            plt.figure(figsize=(8, 8))
-            plt.imshow(
-                reshaped_w_in, aspect="auto", cmap="viridis", interpolation="nearest"
-            )
-            plt.colorbar(label="Weight Value")
-            plt.xlabel("Columns")
-            plt.ylabel("Rows")
-            plt.title("heatmap")
-            plt.show()
-            # print(self.pcn.weight_update)
-            # print(self.pcn.bvc_activations)
-            # print(self.pcn.activation_update)
-
-        if False:
-            print("bvc sum")
-            print(torch.sum(self.pcn.bvc_activations))
-            print("afferent excitation")
-            print(self.pcn.afferent_excitation.cpu()[:6])
-
-            print("afferent inhibition")
-            print(self.pcn.afferent_inhibition.cpu())
-            print("recurrent inhibition")
-            print(self.pcn.recurrent_inhibition.cpu())
-
-            print("activation update")
-            print(self.pcn.activation_update.cpu()[:6])
-
-            print("pcn activations")
-            print(self.pcn.place_cell_activations[:6])
-
         if self.visual_pcn:
             activations = self.pcn.place_cell_activations.cpu().detach().numpy()
-            print(activations)
-
             plt.figure(figsize=(10, 4))
             plt.bar(range(len(activations)), activations)
             plt.xlabel("Place Cell Index")
@@ -518,71 +474,19 @@ class DriverFlying(Supervisor):
         if self.visual_bvc:
             self.pcn.bvc_layer.plot_activation(self.vertical_boundaries)
 
-        # Advance the timestep and update position
         self.step(self.timestep)
 
-        # Update place cell and sensor maps
         if self.step_count < self.num_steps:
-            # Record position as tensor
             self.hmap_loc[self.step_count] = torch.tensor(
                 self.robot.getField("translation").getSFVec3f(), device=self.device
             )
-            # Record network activations (keeping on device)
             self.hmap_pcn[self.step_count] = self.pcn.place_cell_activations.to(
                 self.device
             )
             self.hmap_bvc[self.step_count] = self.pcn.bvc_activations.to(self.device)
             self.hmap_hdn[self.step_count] = self.head_directions.to(self.device)
 
-        # Increment timestep
         self.step_count += 1
-
-    ########################################### MOVEMENT ###########################################
-
-    def reposition_away_from_obstacle(self, current_pos):
-        """Move the robot slightly away from the obstacle and towards origin."""
-        # Calculate vector to origin (0, 1, 0)
-        to_origin = [0 - current_pos[0], 1 - current_pos[1], 0 - current_pos[2]]
-
-        # Normalize the vector
-        magnitude = np.sqrt(sum(x * x for x in to_origin))
-        if magnitude > 0:
-            to_origin = [x / magnitude for x in to_origin]
-
-        # Move slightly towards origin
-        self.robot.getField("translation").setSFVec3f(
-            [
-                current_pos[0] + to_origin[0] * 0.1,
-                current_pos[1] + to_origin[1] * 0.1,
-                current_pos[2] + to_origin[2] * 0.1,
-            ]
-        )
-
-    def reflect_velocity(self):
-        """Invert the dominant axis of motion and add slight randomness."""
-        # Find the axis with the largest absolute velocity (dominant direction)
-        abs_velocities = [abs(v) for v in self.velocity]
-        dominant_axis = abs_velocities.index(max(abs_velocities))
-
-        # Only invert the dominant axis
-        new_velocity = list(self.velocity)
-        new_velocity[dominant_axis] = -new_velocity[dominant_axis]
-
-        # Add small random variation to other axes to prevent getting stuck
-        for i in range(3):
-            if i != dominant_axis:
-                new_velocity[i] += np.random.uniform(-0.05, 0.05)
-
-        # Update velocity and normalize to maintain speed
-        self.velocity = new_velocity
-        magnitude = np.sqrt(sum(v * v for v in self.velocity))
-        self.velocity = [v / magnitude * self.speed for v in self.velocity]
-
-    def rotate_in_place(self):
-        """Rotate the robot in place to escape deadlock."""
-        self.velocity = [0.0, 0.0, 0.0]  # Stop movement
-        self.rotation_field.setSFRotation([0, 1, 0, np.random.uniform(0, 2 * np.pi)])
-        self.step(self.timestep * 10)  # Rotate for a short time
 
     ########################################### FILE IO ###########################################
 
@@ -592,64 +496,49 @@ class DriverFlying(Supervisor):
         include_rcn: bool = False,
         include_hmaps: bool = True,
     ):
-        """
-        Saves the state of the PCN (Place Cell Network), RCN (Reward Cell Network), and optionally
-        the maps that store the agent's movement and activations.
-        """
         files_saved = []
-
-        # Ensure directories exist
         os.makedirs(self.hmap_dir, exist_ok=True)
         os.makedirs(self.network_dir, exist_ok=True)
 
-        # Save the Place Cell Network (PCN)
         if include_pcn:
             pcn_path = os.path.join(self.network_dir, "pcn.pkl")
             with open(pcn_path, "wb") as output:
                 pickle.dump(self.pcn, output)
                 files_saved.append(pcn_path)
 
-        # Save the Reward Cell Network (RCN)
         if include_rcn:
             rcn_path = os.path.join(self.network_dir, "rcn.pkl")
             with open(rcn_path, "wb") as output:
                 pickle.dump(self.rcn, output)
                 files_saved.append(rcn_path)
 
-        # Save history maps if specified
         if include_hmaps:
-            # Convert tensors to numpy arrays only during save
             hmaps = {
                 "hmap_loc.pkl": self.hmap_loc[: self.step_count].cpu().numpy(),
                 "hmap_pcn.pkl": self.hmap_pcn[: self.step_count].cpu().numpy(),
                 "hmap_bvc.pkl": self.hmap_bvc[: self.step_count].cpu().numpy(),
                 "hmap_hdn.pkl": self.hmap_hdn[: self.step_count].cpu().numpy(),
             }
-
             for filename, data in hmaps.items():
                 filepath = os.path.join(self.hmap_dir, filename)
                 with open(filepath, "wb") as output:
                     pickle.dump(data, output)
                     files_saved.append(filepath)
 
-        # Show a message box to confirm saving
-        root = tk.Tk()
-        root.withdraw()  # Hide the main window
-        root.attributes("-topmost", True)  # Always keep the window on top
-        root.update()
-        messagebox.showinfo("Information", "Press OK to save data")
-        root.destroy()  # Destroy the main window
+        if show_save_dialogue_and_pause:
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            root.update()
+            messagebox.showinfo("Information", "Press OK to save data")
+            root.destroy()
 
-        self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
-
+            self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
+        self.done = True
         print(f"Files Saved: {files_saved}")
         print("Saving Done!")
 
     def clear(self):
-        """
-        Clears all saved state files by removing all files in the hmap and network directories.
-        """
-        # Clear network directory
         if os.path.exists(self.network_dir):
             for file in os.listdir(self.network_dir):
                 file_path = os.path.join(self.network_dir, file)
@@ -658,8 +547,6 @@ class DriverFlying(Supervisor):
                     print(f"Removed {file_path}")
                 except Exception as e:
                     print(f"Error removing {file_path}: {e}")
-
-        # Clear hmap directory
         if os.path.exists(self.hmap_dir):
             for file in os.listdir(self.hmap_dir):
                 file_path = os.path.join(self.hmap_dir, file)
