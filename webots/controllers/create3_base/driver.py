@@ -1,4 +1,5 @@
 import numpy as np
+import matplotlib.pyplot as plt
 from numpy.random import default_rng
 import pickle
 import os
@@ -72,7 +73,7 @@ class Driver(Supervisor):
     def initialization(
         self,
         mode=RobotMode.PLOTTING,
-        run_time_hours: int = 2,
+        run_time_hours: float = 2,
         randomize_start_loc: bool = True,
         start_loc: Optional[List[int]] = None,
         enable_ojas: Optional[bool] = None,
@@ -81,6 +82,7 @@ class Driver(Supervisor):
         goal_location: Optional[List[float]] = None,
         max_dist: float = 10,
         show_bvc_activation: bool = False,
+        show_save_dialogue_and_pause: bool = True,
     ):
         """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
 
@@ -103,6 +105,10 @@ class Driver(Supervisor):
         # Set the robot mode and device
         self.robot = self.getFromDef("agent")  # Placeholder for robot instance
         self.robot_mode = mode
+        self.show_save_dialogue_and_pause = show_save_dialogue_and_pause
+        self.done = (
+            False  # If set to true will trigger goal_reached condition in driver
+        )
         self.device = (
             torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
@@ -127,10 +133,10 @@ class Driver(Supervisor):
         os.makedirs(self.network_dir, exist_ok=True)
 
         # Model parameters
-        self.num_place_cells = 500
+        self.num_place_cells = 50
         self.num_bvc_per_dir = 50
         self.sigma_r = 0.5
-        self.sigma_theta = 5
+        self.sigma_theta = 1  # Degree
         self.n_hd = 8
         self.timestep = 32 * 3
         self.tau_w = 5  # time constant for the window function
@@ -307,6 +313,7 @@ class Driver(Supervisor):
                 device=device,
             )
             print("Initialized new PCN")
+            print(f"Initialized new BVC with {sigma_theta}")
 
         if enable_ojas is not None:
             self.pcn.enable_ojas = enable_ojas
@@ -372,7 +379,7 @@ class Driver(Supervisor):
         print(f"Starting robot in {self.robot_mode}")
         print(f"Goal at {self.goal_location}")
 
-        while True:
+        while not self.done:
             if self.robot_mode == RobotMode.MANUAL_CONTROL:
                 self.manual_control()
 
@@ -574,9 +581,15 @@ class Driver(Supervisor):
         )
         if self.show_bvc_activation:
             self.pcn.bvc_layer.plot_activation(self.boundaries.cpu())
+            # self.pcn.bvc_layer.plot_activation_histogram(self.boundaries.cpu())
+            # self.pcn.bvc_layer.plot_kernel_heatmaps(self.boundaries.cpu())
 
-        # Advance simulation one timestep
-        # self.step(self.timestep)
+        # Convert to NumPy for plotting
+        # boundary_activations = self.pcn.bvc_layer.bvc_activations.detach().cpu().numpy()
+
+        # Plot histogram
+
+        # print(boundary_activations)
 
     ########################################### CHECK GOAL REACHED ###########################################
     def check_goal_reached(self):
@@ -927,16 +940,18 @@ class Driver(Supervisor):
                 pickle.dump(bvc_cpu, output)
                 files_saved.append(hmap_bvc_path)
 
-        # Show a message box to confirm saving
-        root = tk.Tk()
-        root.withdraw()  # Hide the main window
-        root.attributes("-topmost", True)  # Always keep the window on top
-        root.update()
-        messagebox.showinfo("Information", "Press OK to save data")
-        root.destroy()  # Destroy the main window
+        if self.show_save_dialogue_and_pause:
+            # Show a message box to confirm saving
+            root = tk.Tk()
+            root.withdraw()  # Hide the main window
+            root.attributes("-topmost", True)  # Always keep the window on top
+            root.update()
+            messagebox.showinfo("Information", "Press OK to save data")
+            root.destroy()  # Destroy the main window
 
-        self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
+            self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
 
+        self.done = True  # Stops the main sim run loop
         print(f"Files Saved: {files_saved}")
         print("Saving Done!")
 
