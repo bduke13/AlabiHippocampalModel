@@ -28,7 +28,6 @@ def plot_single_cell_activation_3d(
 
     # Apply threshold filter
     mask = cell_activations >= min_activation
-    print(mask)
 
     # Create 3D plot
     fig = plt.figure(figsize=(12, 8))
@@ -63,7 +62,7 @@ def plot_single_cell_activation_3d(
     # Set axis limits
     ax.set_xlim([-2.5, 2.5])
     ax.set_ylim([-2.5, 2.5])
-    ax.set_zlim([0, 3])
+    ax.set_zlim([0, 5])
 
     plt.tight_layout()
     plt.show()
@@ -139,7 +138,7 @@ def plot_multiple_cells_activation_3d(
         # Set axis limits
         ax.set_xlim([-2.5, 2.5])
         ax.set_ylim([-2.5, 2.5])
-        ax.set_zlim([0, 3])
+        ax.set_zlim([0, 5])
 
     # Add a single colorbar for all subplots
     cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])
@@ -200,7 +199,7 @@ def plot_overlayed_cells_3d(
     # Set axis limits
     ax.set_xlim([-2.5, 2.5])
     ax.set_ylim([-2.5, 2.5])
-    ax.set_zlim([0, 3])
+    ax.set_zlim([0, 5])
 
     # Add legend
     # ax.legend(loc="upper right", fontsize=10)
@@ -216,7 +215,7 @@ if __name__ == "__main__":
     )
 
     # Load hmap data from hardcoded world name
-    hmap_loc, hmap_pcn = load_hmaps(hmap_names=["hmap_loc", "hmap_bvc"])
+    hmap_loc, hmap_pcn = load_hmaps(hmap_names=["hmap_loc", "hmap_pcn"])
     hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
 
     # Compute the sum of each column in hmap_pcn
@@ -224,13 +223,20 @@ if __name__ == "__main__":
 
     # Get the indices of the top 10 highest sums
     top_indices = np.argsort(column_sums)[-25:]  # Gets the top 10 indices
+    plot_overlayed_cells_3d(
+        hmap_x=hmap_x,
+        hmap_z=hmap_z,
+        hmap_y=hmap_y,
+        hmap_pcn=hmap_pcn,
+        cell_indices=[500],
+    )
 
     plot_overlayed_cells_3d(
         hmap_x=hmap_x,
         hmap_z=hmap_z,
         hmap_y=hmap_y,
         hmap_pcn=hmap_pcn,
-        cell_indices=range(200),
+        cell_indices=range(1000),
     )
     if True:
         # Plot overlayed cells
@@ -251,12 +257,3 @@ if __name__ == "__main__":
                 hmap_pcn=hmap_pcn,
                 cell_index=cell_index,
             )
-
-        # Plot multiple cells
-        plot_multiple_cells_activation_3d(
-            hmap_x=hmap_x,
-            hmap_z=hmap_z,
-            hmap_y=hmap_y,
-            hmap_pcn=hmap_pcn,
-            cell_indices=np.argsort(column_sums)[-25:],  # Example cell indices
-        )
