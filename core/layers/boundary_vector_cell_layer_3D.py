@@ -50,35 +50,21 @@ class BoundaryVectorCellLayer3D:
             dtype: PyTorch tensor data type.
             device: PyTorch device (e.g., "cpu" or "cuda").
         """
-        # Validate that all parameter lists have the same length
-        param_lengths = {
-            "phi_vert_preferred": len(phi_vert_preferred),
-            "sigma_rs": len(sigma_rs),
-            "sigma_thetas": len(sigma_thetas),
-            "sigma_phis": len(sigma_phis),
-            "scaling_factors": len(scaling_factors),
-        }
-
-        if len(set(param_lengths.values())) != 1:
-            raise ValueError(
-                f"All parameter lists must have the same length as phi_vert_preferred. "
-                f"Got lengths: {param_lengths}"
-            )
 
         self.device = device
         self.dtype = dtype
         self.input_rows = input_rows
         self.input_cols = input_cols
 
-        # Prepare distance and horizontal angles
-        d_i = np.linspace(0, max_dist, num=num_bvc_per_dir)  # e.g. 50 distances
-        N_dist = len(d_i)
-        phi_horiz = np.repeat(np.linspace(0, 2 * np.pi, n_hd, endpoint=False), N_dist)
-        d_i = np.tile(d_i, n_hd)  # shape: (n_hd * num_bvc_per_dir,)
-
-        # We will create one set of BVCs for each preferred_vertical_angle
-        # so total BVC count = (n_hd * num_bvc_per_dir) * len(phi_vert_preferred).
-        self.num_bvc = num_bvc_per_dir * n_hd * len(phi_vert_preferred)
+        # Prepare distance and horizontal angles for non-extreme vertical angles
+        # d_i_base: distances for one horizontal axis
+        d_i_base = np.linspace(0, max_dist, num=num_bvc_per_dir)  # e.g. 50 distances
+        N_dist = len(d_i_base)
+        # For standard vertical angles, we create n_hd horizontal directions
+        phi_horiz_base = np.repeat(
+            np.linspace(0, 2 * np.pi, n_hd, endpoint=False), N_dist
+        )
+        d_i_full = np.tile(d_i_base, n_hd)  # shape: (n_hd * num_bvc_per_dir,)
 
         # Prepare lists to hold repeated parameters for each group
         d_i_all = []
@@ -89,16 +75,34 @@ class BoundaryVectorCellLayer3D:
         sigma_phi_all = []
         scaling_factors_all = []
 
+        tol = 1e-3  # tolerance for checking extreme vertical angles (±π/2)
         # Populate parameter arrays for each vertical angle group
         for idx, vert_angle in enumerate(phi_vert_preferred):
-            num_neurons = len(phi_horiz)
-            d_i_all.extend(d_i)
-            phi_i_all.extend(phi_horiz)
-            phi_i_vert_all.extend([vert_angle] * num_neurons)
-            sigma_r_all.extend([sigma_rs[idx]] * num_neurons)
-            sigma_theta_all.extend([sigma_thetas[idx]] * num_neurons)
-            sigma_phi_all.extend([sigma_phis[idx]] * num_neurons)
-            scaling_factors_all.extend([scaling_factors[idx]] * num_neurons)
+            if np.isclose(vert_angle, np.pi / 2, atol=tol) or np.isclose(
+                vert_angle, -np.pi / 2, atol=tol
+            ):
+                # Extreme vertical angles: use a single horizontal direction (0 radians)
+                num_neurons = num_bvc_per_dir
+                d_i_all.extend(d_i_base)
+                phi_i_all.extend(np.zeros_like(d_i_base))
+                phi_i_vert_all.extend([vert_angle] * num_neurons)
+                sigma_r_all.extend([sigma_rs[idx]] * num_neurons)
+                sigma_theta_all.extend([sigma_thetas[idx]] * num_neurons)
+                sigma_phi_all.extend([sigma_phis[idx]] * num_neurons)
+                scaling_factors_all.extend([scaling_factors[idx]] * num_neurons)
+            else:
+                # Standard case: use full set of horizontal directions
+                num_neurons = len(phi_horiz_base)
+                d_i_all.extend(d_i_full)
+                phi_i_all.extend(phi_horiz_base)
+                phi_i_vert_all.extend([vert_angle] * num_neurons)
+                sigma_r_all.extend([sigma_rs[idx]] * num_neurons)
+                sigma_theta_all.extend([sigma_thetas[idx]] * num_neurons)
+                sigma_phi_all.extend([sigma_phis[idx]] * num_neurons)
+                scaling_factors_all.extend([scaling_factors[idx]] * num_neurons)
+
+        # Update total BVC count based on accumulated neurons from each vertical group
+        self.num_bvc = len(d_i_all)
 
         # Convert everything to tensors
         self.d_i = torch.tensor(d_i_all, dtype=dtype, device=device)  # (M,)
@@ -149,8 +153,7 @@ class BoundaryVectorCellLayer3D:
 
         # Horizontal angle difference with wrapping
         theta_diff = torch.atan2(
-            torch.sin(lon_slice_2d - theta_i_2d),
-            torch.cos(lon_slice_2d - theta_i_2d),
+            torch.sin(lon_slice_2d - theta_i_2d), torch.cos(lon_slice_2d - theta_i_2d)
         )  # (N_points, M)
         theta_gauss = (
             torch.exp(-((theta_diff**2) / self.two_sigma_theta_squared))
@@ -165,13 +168,13 @@ class BoundaryVectorCellLayer3D:
         )
 
         # Combine horizontally and vertically into a single precomputed matrix
-        # point_gaussian_precomputed[p, m] = theta_gaussian * phi_gaussian
+        # point_gaussian_precomputed[p, m] = theta_gauss * phi_gauss
         self.point_gaussian_precomputed = theta_gauss * phi_gauss  # shape (N_points, M)
 
         # Store for later usage
         self.lat_flat = lat_flat
         self.lon_flat = lon_flat
-        self.N_points = lat_slice.shape[0]  # # of valid points for the slice
+        self.N_points = lat_slice.shape[0]  # number of valid points for the slice
 
     def get_bvc_activation(self, distances: torch.Tensor) -> torch.Tensor:
         """
