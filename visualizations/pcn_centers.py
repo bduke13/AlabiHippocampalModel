@@ -5,9 +5,6 @@ import os
 import pickle
 from typing import Optional, List
 
-# Hardcoded world name
-WORLD_NAME = "10x10"
-
 
 # Custom function to calculate weighted mean
 def weighted_mean(data, weights):
