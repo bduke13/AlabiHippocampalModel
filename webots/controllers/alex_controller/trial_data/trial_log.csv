@@ -1,2 +1,0 @@
-environment_label,max_runtime_hours,randomize_start_loc,start_loc,goal_location,mode,movement_method,sigma_ang,sigma_d,max_dist,num_bvc_per_dir,num_place_cells,n_hd,trial_name,trial_folder,timestamp
-20Maze,6,False,"[4, -4]","[-3, 3]",RobotMode.LEARN_OJAS,default,5,0.7,10,200,500,8,10x10_Test,C:\Users\alexm\Documents\Projects\Alex-Dev-Updated\webots\controllers\alex_controller\trial_data\10x10_Test,2025-02-20T21:45:24.472814

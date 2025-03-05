@@ -125,7 +125,7 @@ class Driver(Supervisor):
         os.makedirs(self.network_dir, exist_ok=True)
 
         # Model parameters
-        self.num_place_cells = 500
+        self.num_place_cells = 800
         self.num_bvc_per_dir = 50
         self.sigma_r = 0.5
         self.sigma_theta = 1
@@ -507,6 +507,9 @@ class Driver(Supervisor):
         """
         Uses sensors to update range-image, heading, boundary data, collision flags, etc.
         """
+        # Advance simulation one timestep
+        self.step(self.timestep)
+
         # Get the latest boundary data from range finder
         boundaries = self.range_finder.getRangeImage()
 
@@ -536,8 +539,6 @@ class Driver(Supervisor):
         self.collided[0] = int(self.left_bumper.getValue())
         self.collided[1] = int(self.right_bumper.getValue())
 
-        # Advance simulation one timestep
-        self.step(self.timestep)
 
     def get_bearing_in_degrees(self, north: List[float]) -> float:
         """

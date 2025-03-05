@@ -13,7 +13,7 @@ sys.path.append(str(project_root))
 
 CONTROLLER_PATH_PREFIX = "webots/controllers/"
 CONTROLLER_NAME = "create3_grid"
-WORLD_NAME = "A_iCreateBotEasy_10"
+WORLD_NAME = "A_20x20_Maze"
 
 # Define output directories relative to project root
 OUTPUT_DIR = os.path.join(

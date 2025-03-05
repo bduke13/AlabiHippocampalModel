@@ -21,7 +21,7 @@ bot = Driver()
 
 bot.initialization(
     mode=RobotMode.LEARN_OJAS,
-    run_time_hours=6,
+    run_time_hours=5,
     randomize_start_loc=False,
     start_loc=[4, -4],
     goal_location=[-3, 3],

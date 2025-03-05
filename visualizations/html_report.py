@@ -165,9 +165,9 @@ def generate_cells_report(
 
 if __name__ == "__main__":
     # Load place cell data
-    #hmap_loc, hmap_pcn = load_hmaps(hmap_names=["hmap_loc", "hmap_pcn"])
-    #hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
-    #generate_cells_report(hmap_x, hmap_y, hmap_pcn, "place")
+    hmap_loc, hmap_pcn = load_hmaps(hmap_names=["hmap_loc", "hmap_pcn"])
+    hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
+    generate_cells_report(hmap_x, hmap_y, hmap_pcn, "place")
 
     # Load grid cell data
     hmap_loc, hmap_grid = load_hmaps(hmap_names=["hmap_loc", "hmap_gcn"])

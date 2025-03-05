@@ -146,7 +146,7 @@ def plot_overlayed_cells(
     # Save the plot if a save path is provided
     if save_path is not None:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.savefig(save_path, dpi=500, bbox_inches="tight")
         print(f"Plot saved to: {save_path}")
 
     # Show the plot if requested
@@ -171,7 +171,7 @@ if __name__ == "__main__":
         hmap_pcn=hmap_pcn,
         hmap_x=hmap_x,
         hmap_y=hmap_y,
-        gridsize=100,
+        gridsize=200,
         num_cells_to_sample=None,  # Use all cells with non-zero activation
         show_plot=True,
         save_path=None,

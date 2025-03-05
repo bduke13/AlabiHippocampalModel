@@ -20,16 +20,15 @@ bot = DriverGrid()
 
 bot.initialization(
     mode=RobotMode.LEARN_OJAS,
-    run_time_hours=3,
+    run_time_hours=12,
     randomize_start_loc=False,
-    start_loc=[4, -4],
+    start_loc=[-3, 3],
     goal_location=[-3, 3],
-    max_dist=20,
+    max_dist=10,
     show_bvc_activation=False,
-    num_place_cells=300,
-    num_modules=3,
-    grid_spacings=[0.3, 0.5, 0.7],
-    num_cells_per_module=50,
+    num_place_cells=2000,
+    num_grid_cells=400,
+    grid_influence=0.5,
 )
 
 bot.run()

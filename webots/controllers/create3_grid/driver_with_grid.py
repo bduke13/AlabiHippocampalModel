@@ -21,7 +21,7 @@ sys.path.append(str(PROJECT_ROOT))  # Add project root to sys.path
 from core.layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
 from core.layers.head_direction_layer import HeadDirectionLayer
 from core.layers.place_cell_layer_with_grid import PlaceCellLayerWithGrid
-from core.layers.grid_cell_layer import OscillatoryInterferenceGridCellLayer
+from core.layers.grid_cell_layer import GridCellLayer
 from core.layers.reward_cell_layer import RewardCellLayer
 from core.robot.robot_mode import RobotMode
 
@@ -52,10 +52,9 @@ class DriverGrid(Supervisor):
         goal_location: Optional[List[float]] = None,
         max_dist: float = 10,
         show_bvc_activation: bool = False,
-        num_place_cells: int = 500,  # Added for compatibility and grid integration
-        num_modules: int = 4,  # Grid cell parameter
-        grid_spacings: List[float] = [0.3, 0.5, 0.7, 1.0],  # Grid cell parameter
-        num_cells_per_module: int = 10,  # Grid cell parameter
+        num_place_cells: int = 500,
+        num_grid_cells: int = 1000,
+        grid_influence: float = 0.5,
     ):
         """Initialize the robot, neural layers, and history maps with grid cell integration.
 
@@ -175,23 +174,20 @@ class DriverGrid(Supervisor):
         )
 
         # Initialize grid cell layer (new for grid integration)
-        self.gcn = OscillatoryInterferenceGridCellLayer(
-            num_modules=num_modules,
-            grid_spacings=grid_spacings,
-            num_cells_per_module=num_cells_per_module,
-            device=self.device,
-            dtype=self.dtype,
+        self.gcn = GridCellLayer(
+            num_cells=num_grid_cells,
         )
 
         # Load or initialize place cell network with grid inputs (modified)
         self.load_pcn(
             bvc_layer=bvc,
             num_place_cells=num_place_cells,
-            num_grid_cells=self.gcn.total_grid_cells,
+            num_grid_cells=num_grid_cells,
             timestep=self.timestep,
             n_hd=self.n_hd,
             enable_ojas=enable_ojas,
             enable_stdp=enable_stdp,
+            grid_influence = grid_influence,
             device=self.device,
         )
 
@@ -236,6 +232,7 @@ class DriverGrid(Supervisor):
         device: torch.device,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
+        grid_influence: float = 0.5,
     ):
         """Load or initialize the place cell network with grid inputs.
 
@@ -264,6 +261,7 @@ class DriverGrid(Supervisor):
                 num_grid_cells=num_grid_cells,
                 timestep=timestep,
                 n_hd=n_hd,
+                grid_influence=grid_influence,
                 device=device,
             )
             print("Initialized new PCN with grid")
@@ -461,6 +459,9 @@ class DriverGrid(Supervisor):
         """
         Uses sensors to update range-image, heading, boundary data, collision flags, etc.
         """
+        # Advance simulation one timestep
+        self.step(self.timestep)
+
         # Get the latest boundary data from range finder
         boundaries = self.range_finder.getRangeImage()
 
@@ -490,8 +491,6 @@ class DriverGrid(Supervisor):
         self.collided[0] = int(self.left_bumper.getValue())
         self.collided[1] = int(self.right_bumper.getValue())
 
-        # Advance simulation one timestep
-        self.step(self.timestep)
 
     def get_bearing_in_degrees(self, north: List[float]) -> float:
         """
@@ -525,15 +524,16 @@ class DriverGrid(Supervisor):
         grid_activations = self.gcn.get_grid_cell_activations(position)
 
         # Update place cell activations based on sensor data
+        
         self.pcn.get_place_cell_activations(
             distances=self.boundaries,
+            grid_activations=grid_activations,  # Pass grid cell activations
             hd_activations=self.hd_activations,
-            grid_activations=grid_activations,
             collided=torch.any(self.collided),
         )
         if self.show_bvc_activation:
             self.pcn.bvc_layer.plot_activation(self.boundaries.cpu())
-
+        
         # Advance simulation one timestep
         self.step(self.timestep)
 

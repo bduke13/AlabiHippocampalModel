@@ -14,7 +14,7 @@ sys.path.append(str(project_root))
 
 # --- Configuration ---
 CONTROLLER_PATH_PREFIX = "webots/controllers/"
-CONTROLLER_NAME = "create3_grid"
+CONTROLLER_NAME = "create3_grid_v3"
 WORLD_NAME = "A_iCreateBotEasy_10"
 
 HMAP_DIR = os.path.join(CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl", WORLD_NAME, "hmaps")
@@ -100,11 +100,11 @@ def plot_embedding(embedding, hmap_loc, start_step=0, end_step=None, show_path=T
     plt.show()
 
 # Example usage: Visualize steps 1000 to 2000 with path
-#plot_embedding(embedding, hmap_loc, start_step=1000, end_step=2000, show_path=False)
+#plot_embedding(embedding, hmap_loc, start_step=1000, end_step=1500, show_path=True)
 plot_embedding(embedding, hmap_loc, show_path=False)
 
 # To visualize without the path:
-# plot_embedding(embedding, hmap_loc, start_step=1000, end_step=2000, show_path=False)
+plot_embedding(embedding, hmap_loc, start_step=1000, end_step=2000, show_path=True)
 
 # To visualize the entire path:
 # plot_embedding(embedding, hmap_loc, show_path=True)

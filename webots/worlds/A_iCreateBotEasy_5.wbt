@@ -2,34 +2,36 @@
 
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/robots/irobot/create/protos/Create.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
-EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/Roughcast.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/Parquetry.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/apartment_structure/protos/Wall.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
 
 WorldInfo {
   info [
-    "Open 20x20 environment for iRobot Create"
+    "iRobot Create simulation in a 5x5 arena"
+    "Scaled version of the original 10x10 world."
   ]
-  title "Open 20x20 Environment"
+  title "iRobot Create 5x5"
   coordinateSystem "NUE"
 }
 Viewpoint {
-  orientation 0.8011468031821405 -0.4196529718756546 0.42667925066373663 4.496974624807713
-  position -27.87742736089337 43.937530387906534 -2.1631755792943124
+  orientation 0.6870353705862984 -0.6861336487797677 -0.2391715191562539 3.6159835242749345
+  position 0.1649201538671352 17.995738904695664 14.990603253541922
   near 0.1
-  follow "agent"
+  follow "Create"
   followType "None"
 }
 TexturedBackground {
 }
 RectangleArena {
   rotation 1 0 0 -1.5708
-  floorSize 20 20
-  floorAppearance NULL
-  wallHeight 0.01
+  floorSize 5 5
+  floorAppearance Parquetry {
+    type "light strip"
+  }
 }
 DEF agent Create {
-  translation -8 0.044 -8
+  translation 0.70156 0.02209 0.70798
   rotation -0.6607352787486408 0.5303053028717288 0.5312298722427797 1.9727887896457816
   controller "create3_grid_v3"
   supervisor TRUE
@@ -48,7 +50,7 @@ DEF agent Create {
           width 720
           height 1
           projection "cylindrical"
-          maxRange 40
+          maxRange 10
         }
         Camera {
           translation -0.002 0.02 0
@@ -84,41 +86,29 @@ DEF agent Create {
     }
   ]
 }
+Wall {
+  translation 0 0.6 2.5
+  name "wall(north)"
+  size 5 1.2 0.15
+}
+Wall {
+  translation 0 0.6 -2.5
+  rotation 0 1 0 3.1416
+  name "wall(south)"
+  size 5 1.2 0.15
+}
+Wall {
+  translation 2.5 0.6 0
+  rotation 0 1 0 1.5708
+  name "wall(east)"
+  size 5.3 1.2 0.15
+}
+Wall {
+  translation -2.5 0.6 0
+  rotation 0 1 0 -1.5708
+  name "wall(west)"
+  size 5.3 1.2 0.15
+}
 DirectionalLight {
   direction 0 -1 0
-}
-Wall {
-  translation 0 1.2 10
-  name "OuterWall_North"
-  size 20 2.4 0.3
-  appearance Roughcast {
-    colorOverride 0.7 0.45 0.25
-  }
-}
-Wall {
-  translation 0 1.2 -10
-  rotation 0 1 0 3.1416
-  name "OuterWall_South"
-  size 20 2.4 0.3
-  appearance Roughcast {
-    colorOverride 0.7 0.45 0.25
-  }
-}
-Wall {
-  translation 10 1.2 0
-  rotation 0 1 0 1.5708
-  name "OuterWall_East"
-  size 20.6 2.4 0.3
-  appearance Roughcast {
-    colorOverride 0.7 0.45 0.25
-  }
-}
-Wall {
-  translation -10 1.2 0
-  rotation 0 1 0 -1.5708
-  name "OuterWall_West"
-  size 20.6 2.4 0.3
-  appearance Roughcast {
-    colorOverride 0.7 0.45 0.25
-  }
 }
