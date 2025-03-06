@@ -1,4 +1,5 @@
-"""my_controller_iCreate controller."""
+import os
+import numpy as np
 
 from driver_3D_pcn import DriverFlying
 
@@ -11,12 +12,13 @@ sys.path.append(str(PROJECT_ROOT))  # Add project root to sys.path
 
 from core.robot.robot_mode import RobotMode
 
-run_time_hours = 10
 
-phi_vert_preferred = [-1.25, -0.7, 0.0, 0.7, 1.25]
+run_time_hours = 3
+
+phi_vert_preferred = [np.radians(x) for x in [-90, -60, -30, 0, 30, 60, 90]]
 sigma_rs = [0.2] * len(phi_vert_preferred)
-sigma_thetas = [0.05] * len(phi_vert_preferred)
-sigma_phis = [0.05] * len(phi_vert_preferred)
+sigma_thetas = [np.radians(2)] * len(phi_vert_preferred)
+sigma_phis = [np.radians(2)] * len(phi_vert_preferred)
 scaling_factors = [1] * len(phi_vert_preferred)
 visual_bvc = False
 visual_pcn = False
@@ -24,8 +26,8 @@ n_hd_bvc = 8
 n_hd_hdn = 20
 
 num_place_cells = 1000
-num_bvc_per_dir = 30
-max_dist = 5
+num_bvc_per_dir = 50
+max_dist = 8
 
 start_location = [1, 1]
 goal_location = [-1, 1]
@@ -33,6 +35,13 @@ goal_location = [-1, 1]
 bot = DriverFlying()
 # Create walls with angles for this trial
 # for index, model_type in enumerate(models):
+
+world_path = bot.getWorldPath()  # Get the full path to the world file
+world_name = os.path.splitext(os.path.basename(world_path))[
+    0
+]  # Extract just the world name
+
+world_name += "0.2"
 
 bot.initialization(
     mode=RobotMode.LEARN_OJAS,
@@ -50,6 +59,7 @@ bot.initialization(
     max_dist=max_dist,
     num_place_cells=num_place_cells,
     num_bvc_per_dir=num_bvc_per_dir,
+    world_name=world_name,
 )
 
 bot.run()

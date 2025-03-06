@@ -111,6 +111,9 @@ class DriverFlying(Supervisor):
         goal_location: Optional[List[float]] = None,
         max_dist: float = 10,
         show_save_dialogue_and_pause=True,
+        gamma_pp=0.5,
+        gamma_pb=0.3,
+        tau_denom=1000,
     ):
         self.robot_mode = mode
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -132,7 +135,7 @@ class DriverFlying(Supervisor):
         os.makedirs(self.network_dir, exist_ok=True)
 
         # Model parameters
-        self.timestep = 32 * 6
+        self.timestep = 32 * 3
         self.tau_w = 10
 
         # Robot parameters
@@ -186,6 +189,10 @@ class DriverFlying(Supervisor):
             device=self.device,
         )
 
+        self.pcn.gamma_pb = gamma_pb
+        self.pcn.gamma_pp = gamma_pp
+        self.pcn.tau = self.timestep / tau_denom
+
         self.head_direction_layer = HeadDirectionLayer3D(device=self.device)
         self.vertical_boundaries = torch.zeros((720, 360))
 
@@ -194,9 +201,9 @@ class DriverFlying(Supervisor):
         self.expected_reward = 0
 
         # Define environment boundaries in Webots (x, y, z)
-        self.x_min, self.x_max = -2.5, 2.5
-        self.y_min, self.y_max = 0.25, 5.0
-        self.z_min, self.z_max = -2.5, 2.5
+        self.x_min, self.x_max = -2.3, 2.3
+        self.y_min, self.y_max = 0.1, 4.8
+        self.z_min, self.z_max = -2.3, 2.3
 
         # Initialize hmaps (history maps)
         self.hmap_loc = torch.zeros(
@@ -346,8 +353,8 @@ class DriverFlying(Supervisor):
             return
 
         # Random walk behavior: 10% chance to adjust direction
-        if random.random() < 0.10:
-            noise = [np.random.normal(0, 0.2) for _ in range(3)]
+        if random.random() < 0.50:
+            noise = [np.random.normal(0, 0.025) for _ in range(3)]
             self.velocity = [self.velocity[i] + noise[i] for i in range(3)]
             mag = np.sqrt(sum(v * v for v in self.velocity))
             self.velocity = [v / mag * self.speed for v in self.velocity]
@@ -373,8 +380,8 @@ class DriverFlying(Supervisor):
             self.push_towards_center(current_pos)
             center = [0.0, 2.5, 0.0]  # Center of the room in [x, y, z]
             target_vector = [center[i] - current_pos[i] for i in range(3)]
-            # Generate a random velocity vector within a 60° cone around the center direction
-            new_dir = random_cone_vector(target_vector, max_angle_deg=60)
+            # Generate a random velocity vector within a 90° cone around the center direction
+            new_dir = random_cone_vector(target_vector, max_angle_deg=90)
             # Set velocity to this new direction scaled by speed
             self.velocity = [float(new_dir[i]) * self.speed for i in range(3)]
             self.collision_counter = 0
@@ -388,7 +395,7 @@ class DriverFlying(Supervisor):
         if norm == 0:
             return
         unit_vector = [v / norm for v in vector_to_center]
-        push_distance = 0.5  # Adjust push distance as needed.
+        push_distance = 0.1  # Adjust push distance as needed.
         new_pos = [current_pos[i] + push_distance * unit_vector[i] for i in range(3)]
         # Ensure the new position is within boundaries.
         new_pos[0] = np.clip(new_pos[0], self.x_min, self.x_max)
@@ -473,6 +480,7 @@ class DriverFlying(Supervisor):
 
         if self.visual_bvc:
             self.pcn.bvc_layer.plot_activation(self.vertical_boundaries)
+            self.pcn.bvc_layer.plot_activation_distribution(self.vertical_boundaries)
 
         self.step(self.timestep)
 
@@ -525,7 +533,7 @@ class DriverFlying(Supervisor):
                     pickle.dump(data, output)
                     files_saved.append(filepath)
 
-        if show_save_dialogue_and_pause:
+        if self.show_save_dialogue_and_pause:
             root = tk.Tk()
             root.withdraw()
             root.attributes("-topmost", True)
