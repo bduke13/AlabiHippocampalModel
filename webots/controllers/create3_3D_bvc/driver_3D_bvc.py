@@ -951,6 +951,8 @@ class Driver(Supervisor):
 
             self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
 
+        self.done = True
+
         print(f"Files Saved: {files_saved}")
         print("Saving Done!")
 
