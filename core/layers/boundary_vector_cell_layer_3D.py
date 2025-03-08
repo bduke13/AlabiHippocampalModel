@@ -81,6 +81,9 @@ class BoundaryVectorCellLayer3D:
             if np.isclose(vert_angle, np.pi / 2, atol=tol) or np.isclose(
                 vert_angle, -np.pi / 2, atol=tol
             ):
+                print(
+                    f"BVC: vertical angle {vert_angle} is close to +-90. Only adding one axis."
+                )
                 # Extreme vertical angles: use a single horizontal direction (0 radians)
                 num_neurons = num_bvc_per_dir
                 d_i_all.extend(d_i_base)
@@ -207,6 +210,9 @@ class BoundaryVectorCellLayer3D:
         max_val = torch.max(bvc_activations)
         if max_val > 0:
             bvc_activations = bvc_activations / (2.0 * max_val)
+
+        # Apply scaling factors to each BVC neuron
+        bvc_activations = bvc_activations * self.scaling_factors
 
         return bvc_activations
 
