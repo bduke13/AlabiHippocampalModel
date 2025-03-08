@@ -1,5 +1,7 @@
 # %%
+from posix import replace
 import numpy as np
+import os
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.cm as cm
@@ -76,7 +78,7 @@ def plot_multiple_cells_activation_3d(
     cell_indices: list,
     subplot_layout=None,
     min_activation: float = 0.01,
-):
+):tau_denom
     """Create multiple 3D plots of place cell activations across the trajectory.
 
     Args:
@@ -194,7 +196,7 @@ def plot_overlayed_cells_3d(
     ax.set_xlabel("X Position", fontsize=12)
     ax.set_ylabel("Z Position", fontsize=12)
     ax.set_zlabel("Y Position", fontsize=12)
-    ax.set_title("Top 10 Place Cell Activations Overlaid", fontsize=14)
+    ax.set_title("10 Random Place Cell Activations Overlaid", fontsize=14)
 
     # Set axis limits
     ax.set_xlim([-2.5, 2.5])
@@ -212,44 +214,83 @@ if __name__ == "__main__":
         load_hmaps,
         convert_xzy_hmaps,
         generate_random_colors,
+        CONTROLLER_NAME,
+        WORLD_NAME,
     )
+    worlds = os.listdir('webots/controllers/flying_3D_pcn_looping/pkl/')
 
-    # Load hmap data from hardcoded world name
-    hmap_loc, hmap_pcn = load_hmaps(hmap_names=["hmap_loc", "hmap_pcn"])
-    hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
+    for world in worlds:
+        CONTROLLER_NAME = "flying_3D_pcn_looping"
+        WORLD_NAME = world
+        print(f'WORLD: {world}')
 
-    # Compute the sum of each column in hmap_pcn
-    column_sums = np.sum(hmap_pcn, axis=0)
 
-    # Get the indices of the top 10 highest sums
-    top_indices = np.argsort(column_sums)[-25:]  # Gets the top 10 indices
-    plot_overlayed_cells_3d(
-        hmap_x=hmap_x,
-        hmap_z=hmap_z,
-        hmap_y=hmap_y,
-        hmap_pcn=hmap_pcn,
-        cell_indices=[500],
-    )
 
-    plot_overlayed_cells_3d(
-        hmap_x=hmap_x,
-        hmap_z=hmap_z,
-        hmap_y=hmap_y,
-        hmap_pcn=hmap_pcn,
-        cell_indices=range(1000),
-    )
-    if True:
-        # Plot overlayed cells
+        # Load hmap data from hardcoded world name
+        hmap_loc, hmap_pcn = load_hmaps(hmap_names=["hmap_loc", "hmap_pcn"])
+        hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
+        for cell_index in range(0, hmap_pcn.shape[1], 5):
+            plot_single_cell_activation_3d(
+                hmap_x=hmap_x,
+                hmap_z=hmap_z,
+                hmap_y=hmap_y,
+                hmap_pcn=hmap_pcn,
+                cell_index=cell_index,
+            )
+
         plot_overlayed_cells_3d(
             hmap_x=hmap_x,
             hmap_z=hmap_z,
             hmap_y=hmap_y,
             hmap_pcn=hmap_pcn,
-            cell_indices=top_indices,
+            cell_indices=np.random.choice(hmap_pcn.shape[1], size = 100, replace=False),
         )
 
-        # Plot each of the top 10 cells
-        for cell_index in top_indices:
+
+    # %%
+    # Get the total number of cells
+    total_cells = hmap_pcn.shape[1]
+    random_indices = np.random.choice(total_cells, size=10, replace=False)
+
+    # Select 10 random cell indices
+    if True:
+
+        # Plot overlayed cells with random indices
+        plot_overlayed_cells_3d(
+            hmap_x=hmap_x,
+            hmap_z=hmap_z,
+            hmap_y=hmap_y,
+            hmap_pcn=hmap_pcn,
+            cell_indices=random_indices,
+        )
+        plot_overlayed_cells_3d(
+            hmap_x=hmap_x,
+            hmap_z=hmap_z,
+            hmap_y=hmap_y,
+            hmap_pcn=hmap_pcn,
+            cell_indices=range(1000),
+        )
+
+    if True:
+        index = 1
+        plot_overlayed_cells_3d(
+            hmap_x=hmap_x,
+            hmap_z=hmap_z,
+            hmap_y=hmap_y,
+            hmap_pcn=hmap_pcn,
+            cell_indices=[index],
+        )
+        plot_single_cell_activation_3d(
+            hmap_x=hmap_x,
+            hmap_z=hmap_z,
+            hmap_y=hmap_y,
+            hmap_pcn=hmap_pcn,
+            cell_index=index,
+        )
+
+        print(total_cells)
+        # Plot each of the randomly selected cells
+        for cell_index in range(0, total_cells, 10):
             plot_single_cell_activation_3d(
                 hmap_x=hmap_x,
                 hmap_z=hmap_z,
