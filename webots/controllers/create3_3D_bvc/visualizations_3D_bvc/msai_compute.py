@@ -12,11 +12,27 @@ from webots.controllers.create3_3D_bvc.visualizations_3D_bvc.hexbins import *
 def parse_path_for_model_and_env(full_path: str):
     """
     Extract the model name and environment name from the directory path.
-    Adjust this logic if your directory structure differs.
+    Extracts model number (e.g., 'model4') and maps rotated_X to envX
     """
-    parts = full_path.strip("/").split("/")
-    env_name = parts[-1]
-    model_name = parts[-2]
+    # Extract model number (e.g., model4)
+    if "_model" in full_path:
+        model_name = full_path.split("_model")[-1]
+        model_name = f"model{model_name}"
+    else:
+        model_name = "unknown_model"
+
+    # Map rotated_X to envX
+    if "rotated_1" in full_path:
+        env_name = "env1"
+    elif "rotated_2" in full_path:
+        env_name = "env2"
+    elif "rotated_3" in full_path:
+        env_name = "env3"
+    elif "rotated_4" in full_path:
+        env_name = "env4"
+    else:
+        env_name = "unknown_env"
+
     return model_name, env_name
 
 
@@ -73,17 +89,29 @@ def process_hmap(path):
 
 if __name__ == "__main__":
 
+    CONTROLLER_NAME = "create3_3D_bvc_looping"
+
     # Parameters
-    root_path = os.path.join(CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl", WORLD_NAME)
-    # root_path = "IJCNN"
-    desired_path_ends = ["inside_shallow", "inside_medium", "inside_steep", "upright"]
+    root_path = os.path.join(CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl")
+    trials = os.listdir(root_path)
 
-    # Get and filter directories
-    directories = get_available_directories(root_path)
-    filtered_dirs = [d for d in directories if "250" in d]
-    filtered_dirs = filter_directories(filtered_dirs, desired_path_ends)
-    filtered_dirs = [d for d in filtered_dirs if "html_assets" not in d]
+    worlds = ["rotated_1", "rotated_2", "rotated_3", "rotated_4"]
 
+    world_trial_paths = {}
+    for world in worlds:
+        world_trials = [os.path.join(root_path, x) for x in trials if world in x]
+        world_trial_paths[world] = world_trials
+        print(f"found {len(world_trials)} trials for {world}")
+        print(world_trials)
+
+    # Flatten the list of trial paths
+    filtered_dirs = []
+    for world_trials in world_trial_paths.values():
+        filtered_dirs.extend(world_trials)
+
+    print(f"Total trials to process: {len(filtered_dirs)}")
+
+    # %%
     # Process all hmaps in parallel
     num_processes = max(1, cpu_count() - 1)  # Leave at least one CPU free
     with Pool(processes=num_processes) as pool:
@@ -112,8 +140,8 @@ if __name__ == "__main__":
         for (x, y), value in sim_sums.items():
             data_rows.append(
                 {
-                    "model": model_name,
-                    "environment": env_name,
+                    "model": model_name,  # Will now be like "model4"
+                    "environment": env_name,  # Will now be like "env1"
                     "x": x,
                     "y": y,
                     "cosine_similarity_sum": value,

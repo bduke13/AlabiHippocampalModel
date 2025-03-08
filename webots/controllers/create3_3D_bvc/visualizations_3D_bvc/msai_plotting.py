@@ -22,33 +22,32 @@ if __name__ == "__main__":
     global_max = df["cosine_similarity_sum"].max()
     print(f"Global Cosine Sum Range: [{global_min:.3f}, {global_max:.3f}]")
 
-    # Define name mappings
+    # Define name mappings for model numbers
     MODEL_NAMES = {
-        "2D_250": "2D Model",
-        "3D_2L_250_1": "3D-2Layer (0.1 rad)",
-        "3D_2L_250_2": "3D-2Layer (0.2 rad)",
-        "3D_3L_250": "3D-3Layer",
+        "model2": "Model 2",
+        "model3": "Model 3",
+        "model4": "Model 4",
     }
 
+    # Define environment mappings based on rotated_X to tilt angles
     ENV_NAMES = {
-        "upright": "Upright",
-        "inside_shallow": "30° Tilt",
-        "inside_medium": "45° Tilt",
-        "inside_steep": "60° Tilt",
+        "env1": "Upright",
+        "env2": "30° Tilt",
+        "env3": "45° Tilt",
+        "env4": "60° Tilt",
     }
 
     # Desired model/environment order
     MODEL_ORDER = [
-        "2D_250",
-        "3D_2L_250_1",
-        "3D_2L_250_2",
-        "3D_3L_250",
+        "model2",
+        "model3",
+        "model4",
     ]
     ENV_ORDER = [
-        "upright",
-        "inside_shallow",
-        "inside_medium",
-        "inside_steep",
+        "env1",
+        "env2",
+        "env3",
+        "env4",
     ]
 
     n_rows = len(MODEL_ORDER)
@@ -85,15 +84,16 @@ if __name__ == "__main__":
                 sums = subset["cosine_similarity_sum"].values
 
                 # Slightly smaller points
-                # Normalize sums by total number of bins
-                normalized_sums = sums / 2662
+                # Normalize sums by total number of data points
+                num_points = len(subset)
+                normalized_sums = sums / num_points
                 sc = ax.scatter(
                     x_vals,
                     y_vals,
                     c=normalized_sums,
                     cmap="viridis",
-                    vmin=global_min / 2662,  # Normalize global min/max
-                    vmax=global_max / 2662,
+                    vmin=global_min / num_points,  # Normalize global min/max
+                    vmax=global_max / num_points,
                     s=3,  # ~10% smaller than 30
                 )
                 scatter_obj = sc
@@ -141,7 +141,10 @@ if __name__ == "__main__":
         for model_name in MODEL_ORDER:
             model_data = env_data[df["model"] == model_name]
             if len(model_data) > 0:
-                total_sum = model_data["cosine_similarity_sum"].sum() / (2662**2)
+                # Count the number of data points to get accurate normalization
+                num_points = len(model_data)
+                # Calculate the total sum and normalize by the square of the number of points
+                total_sum = model_data["cosine_similarity_sum"].sum() / (num_points**2)
                 sum_data.append(
                     {
                         "Environment": ENV_NAMES[env_name],
