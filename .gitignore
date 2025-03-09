@@ -40,3 +40,6 @@ main.py
 
 # Ignore wbproj
 *.wbproj
+
+# Ignore JSON for now
+*.json

@@ -15,7 +15,7 @@ WorldInfo {
 }
 Viewpoint {
   orientation -0.7071057814660382 0.7071077809056435 5.551115123136879e-17 3.1415966524690035
-  position 0.6754288305783366 40.82651170506043 -0.004693901566912073
+  position 0.6754288305783365 40.82651170506043 -0.004693901566912295
   near 0.1
   follow "Create"
   followType "None"
@@ -86,7 +86,19 @@ DEF agent Create {
 Wall {
   rotation 0 1 0 2.3554
   name "wall1"
-  size 10 1 0.4
+  size 7 1 0.4
+}
+Wall {
+  translation 4 0 2.5
+  rotation 0 1 0 3.141592653589793
+  name "wall2"
+  size 3 1 0.4
+}
+Wall {
+  translation -3.7 0 -2.76
+  rotation 0 1 0 0
+  name "wall3"
+  size 3 1 0.4
 }
 DirectionalLight {
   direction 0.75 -1 0

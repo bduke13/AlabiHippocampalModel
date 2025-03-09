@@ -46,6 +46,7 @@ class Driver(Supervisor):
         max_dist: Optional[float] = None,
         plot_bvc: Optional[bool] = False,
         td_learning: Optional[bool] = False,
+        use_prox_mod: Optional[bool] = False,
     ):
         """
         Initializes the Driver class, setting up the robot's sensors and neural networks.
@@ -93,6 +94,7 @@ class Driver(Supervisor):
         # Exploration/exploitation radius
         self.goal_r = {"explore": 0.3, "exploit": 0.8}
         self.goal_location = goal_location if goal_location else [-3, 3]
+        self.start_loc = start_loc
 
         # Default single scale if none provided
         if not scales:
@@ -108,6 +110,7 @@ class Driver(Supervisor):
         # Store learning rates for later use in RCN initialization
         self.rcn_learning_rates = rcn_learning_rates if rcn_learning_rates is not None else [0.1] * len(scales)
         self.td_learning = td_learning
+        self.use_prox_mod = use_prox_mod
 
         # Random or fixed start
         if randomize_start_loc:
@@ -126,8 +129,8 @@ class Driver(Supervisor):
             self.robot.getField("translation").setSFVec3f(candidate)
             self.robot.resetPhysics()
         else:
-            if start_loc is not None:
-                self.robot.getField("translation").setSFVec3f([start_loc[0], 0, start_loc[1]])
+            if self.start_loc is not None:
+                self.robot.getField("translation").setSFVec3f([self.start_loc[0], 0, self.start_loc[1]])
                 self.robot.resetPhysics()
 
         # Initialize sensors
@@ -180,6 +183,12 @@ class Driver(Supervisor):
         # Prep for logging
         self.hmap_loc = np.zeros((self.num_steps, 3))
         self.hmap_hdn = torch.zeros((self.num_steps, self.n_hd), device="cpu", dtype=torch.float32)
+        self.hmap_prox = torch.zeros((self.num_steps,), device="cuda", dtype=torch.float32)
+        self.hmap_alpha = torch.zeros(
+            (self.num_steps, len(self.scales)),  # row per step, col per scale
+            device="cuda", 
+            dtype=torch.float32
+        )
 
         # For multi-scale place cell logs
         self.hmap_pcn_activities = []
@@ -219,7 +228,6 @@ class Driver(Supervisor):
             fname = f"pcn_scale_{i}.pkl"
             path = os.path.join(self.network_dir, fname)
             pcn = self._load_or_init_pcn_for_scale(path, scale_def, enable_ojas, enable_stdp)
-            pcn.to(self.device)
             self.pcns.append(pcn)
 
     def _load_or_init_pcn_for_scale(self, path, scale_def, enable_ojas, enable_stdp):
@@ -261,7 +269,6 @@ class Driver(Supervisor):
             fname = f"rcn_scale_{i}.pkl"
             path = os.path.join(self.network_dir, fname)
             rcn = self._load_or_init_rcn_for_scale(path, scale_def, self.rcn_learning_rates[i])
-            rcn.to(self.device)
             self.rcns.append(rcn)
 
     def _load_or_init_rcn_for_scale(self, path, scale_def, learning_rate):
@@ -283,36 +290,19 @@ class Driver(Supervisor):
     ########################################### RUN LOOP ###########################################
 
     def run(self):
-        """Runs the main control loop of the robot.
-
-        The method manages the robot's behavior based on its current mode:
-        - MANUAL_CONTROL: Allows user keyboard control
-        - LEARN_OJAS/LEARN_HEBB/DMTP/PLOTTING: Runs exploration behavior
-        - EXPLOIT: Runs goal-directed navigation
-        - RECORDING: Records sensor data
-        """
-
         print(f"[DRIVER] Starting robot in {self.robot_mode}")
         print(f"[DRIVER] Goal at {self.goal_location}")
-
-        while True:
+        
+        while not self.done:
             if self.robot_mode == RobotMode.MANUAL_CONTROL:
                 self.manual_control()
-
-            elif (
-                self.robot_mode == RobotMode.LEARN_OJAS
-                or self.robot_mode == RobotMode.LEARN_HEBB
-                or self.robot_mode == RobotMode.DMTP
-                or self.robot_mode == RobotMode.PLOTTING
-            ):
+            elif self.robot_mode in (RobotMode.LEARN_OJAS, 
+                                     RobotMode.LEARN_HEBB, 
+                                     RobotMode.DMTP, 
+                                     RobotMode.PLOTTING):
                 self.explore()
-
             elif self.robot_mode == RobotMode.EXPLOIT:
                 self.exploit()
-
-            elif self.robot_mode == RobotMode.RECORDING:
-                self.recording()
-
             else:
                 print("Unknown state. Exiting...")
                 break
@@ -356,7 +346,10 @@ class Driver(Supervisor):
 
             # 7) Check goal, update hmaps, forward
             self.check_goal_reached()
-            self.update_hmaps()
+            self.update_hmaps(update_loc=True, 
+                              update_pcn=True,
+                              update_alpha=True if self.robot_mode == RobotMode.EXPLOIT else False, 
+                              update_prox=True if (self.use_prox_mod and self.robot_mode == RobotMode.LEARN_OJAS) else False)
             self.forward()
 
         # A small random turn at the end
@@ -366,20 +359,23 @@ class Driver(Supervisor):
     def exploit(self):
         """
         Follows the reward gradient to reach the goal location using multiscale place field navigation.
+        If self.use_vis_density_mod is True, then we apply additional mixing-weight modulation
+        based on self.prox, otherwise we skip it.
         """
         #-------------------------------------------------------------------
         # 1) Sense and compute: update heading, place/boundary cell activations
         #-------------------------------------------------------------------
         self.sense()
         self.compute_pcn_activations()
-        self.update_hmaps()
+        self.update_hmaps(update_loc=True,
+                          update_pcn=True,
+                          update_alpha=True)
         self.check_goal_reached()
 
         # Save old PCN activations for each scale
         old_pcn_activations = []
         for i, scale_def in enumerate(self.scales):
             # Each scale has its own PCN; store its current activations
-            # (Assuming your PCN has an attribute `place_cell_activations`)
             pcn = self.pcns[i]
             old_pcn_activations.append(pcn.place_cell_activations.clone())
 
@@ -397,7 +393,7 @@ class Driver(Supervisor):
             self.rotation_accumulator = 0.0
             self.rotation_loop_count = 0
             self.steps_since_last_loop = 0
-        
+
         if not hasattr(self, 'last_heading_deg') or self.last_heading_deg is None:
             self.last_heading_deg = self.current_heading_deg
 
@@ -432,84 +428,77 @@ class Driver(Supervisor):
                 self.rotation_loop_count = 0
 
         #-------------------------------------------------------------------
-        # 3) Compute potential rewards at multiple scales
+        # 3) Compute potential rewards at multiple scales, skipping directions too close to a wall
         #-------------------------------------------------------------------
-        num_steps_preplay = 1  # Number of future steps to "preplay"
-        pot_rew_scales = []
+        boundaries_rolled = torch.roll(self.boundaries, shifts=len(self.boundaries)//2)
+        num_points_per_hd = len(boundaries_rolled) // self.n_hd
 
+        distances_per_hd = []
+        for hd_i in range(self.n_hd):
+            start_idx = hd_i * num_points_per_hd
+            end_idx   = (hd_i+1) * num_points_per_hd
+            min_dist  = torch.min(boundaries_rolled[start_idx:end_idx])
+            distances_per_hd.append(min_dist)
+        distances_per_hd = torch.tensor(distances_per_hd, device=self.device, dtype=self.dtype)
+
+        pot_rew_scales = []
         for i, scale_def in enumerate(self.scales):
             pcn, rcn = self.pcns[i], self.rcns[i]
+
+            # Allocate potential rewards tensor
             pot_rew = torch.empty(self.n_hd, dtype=self.dtype, device=self.device)
             for d in range(self.n_hd):
-                pcn_activations = pcn.preplay(d, num_steps=num_steps_preplay)
-                rcn.update_reward_cell_activations(pcn_activations, visit=False)
-                pot_rew[d] = torch.max(torch.nan_to_num(rcn.reward_cell_activations))
+                if distances_per_hd[d] < 1.5:
+                    pot_rew[d] = 0.0
+                else:
+                    pcn_activations = pcn.preplay(d)
+                    rcn.update_reward_cell_activations(pcn_activations, visit=False)
+                    pot_rew[d] = torch.max(torch.nan_to_num(rcn.reward_cell_activations))
+
             pot_rew_scales.append(pot_rew)
 
         if len(pot_rew_scales) == 0:
             print("No valid scales selected. Defaulting to first available scale.")
             pot_rew_scales.append(torch.zeros(self.n_hd, dtype=self.dtype, device=self.device))
 
-        # Initialize alpha if not already done
-        if not hasattr(self, 'alpha'):
-            self.alpha = torch.tensor(0.5, dtype=self.dtype, device=self.device)
-
-        # Normalize and blend across scales
+        #-------------------------------------------------------------------
+        # 4) Normalize and blend across scales
+        #-------------------------------------------------------------------
         pot_rew_scales = torch.stack(pot_rew_scales)
-        pot_rew_scales /= (pot_rew_scales.max(dim=1, keepdim=True)[0] + 1e-6)  # Normalize
+        pot_rew_scales /= (pot_rew_scales.max(dim=1, keepdim=True)[0] + 1e-6)  # Avoid div by zero
 
-        # Compute gradients for each scale
-        grads = torch.sum(torch.abs(torch.diff(pot_rew_scales, dim=1)), dim=1)  # Shape: (num_scales,)
+        # Compute "gradients" for each scale
+        grads = torch.sum(torch.abs(torch.diff(pot_rew_scales, dim=1)), dim=1)  # shape: (num_scales,)
 
-        # Normalize the gradients to sum to 1, ensuring proper mixing
-        mixing_weights = grads / (grads.sum() + 1e-6)  # Shape: (num_scales,)
+        # Basic mixing weights
+        mixing_weights = grads / (grads.sum() + 1e-6)  # shape: (num_scales,)
         mixing_weights = torch.clamp(mixing_weights, min=0.0, max=1.0)
         mixing_weights /= mixing_weights.sum()
 
-        # Weighted sum over all scales based on dynamic mixing_weights
+        # If we want to do "vis_density" or "proximity" modulation:
+        if self.use_prox_mod:  
+            # Example approach: smaller scale more heavily weighted if we are "close" to goal
+            prox_weight = self.prox  # self.prox is in [0, 1]
+            scale_biases = torch.tensor(
+                [1.0 / (i + 1) for i in range(len(self.scales))],
+                dtype=self.dtype, device=self.device
+            )
+            scale_biases /= scale_biases.sum()
+
+            # Blend mixing_weights with scale_biases based on prox_weight
+            mixing_weights = (1 - prox_weight) * mixing_weights + prox_weight * scale_biases
+            mixing_weights /= mixing_weights.sum()
+
+        # Print which scale is being preferred
+        if not hasattr(self, 'last_preferred_scale_index') or self.last_preferred_scale_index != torch.argmax(mixing_weights).item():
+            self.last_preferred_scale_index = torch.argmax(mixing_weights).item()
+            # print(f"Preferred scale: {self.last_preferred_scale_index}, Weight: {mixing_weights[self.last_preferred_scale_index].item()}")
+
+        # Weighted sum of the pot_rew_scales over "num_scales"
         combined_pot_rew = torch.sum(mixing_weights[:, None] * pot_rew_scales, dim=0)
 
-        # Now compute alpha as a vector that shows each scale's contribution
+        # Store alpha as the portion of each scale's gradient
         self.alpha = grads / (grads.sum() + 1e-6)
-
-        #-------------------------------------------------------------------
-        # 4) Wall avoidance logic
-        #-------------------------------------------------------------------
-        # Roll boundaries so index 0 corresponds to "front", etc.
-        boundaries_rolled = torch.roll(self.boundaries, shifts=len(self.boundaries)//2)
-
-        num_points_per_hd = len(boundaries_rolled) // self.n_hd
-        distances_per_hd = []
-        cancelled_angles = []  # optional: store which angles get penalized
-
-        for i in range(self.n_hd):
-            start_idx = i * num_points_per_hd
-            end_idx   = (i+1) * num_points_per_hd
-            min_dist  = torch.min(boundaries_rolled[start_idx:end_idx])
-            distances_per_hd.append(min_dist)
-
-            if min_dist < 1.0:
-                # This heading is "too close" to a wall
-                cancelled_angles.append(i * (360 / self.n_hd))
-
-        distances_per_hd = torch.tensor(distances_per_hd, device=self.device, dtype=self.dtype)
-
-        # Compute penalty mask and apply an exponential penalty
-        penalty_mask = distances_per_hd < 1
-        # Example: penalty gets stronger as distance gets smaller (dist < 1)
-        penalties = torch.exp(-1.0 * (3.0 - distances_per_hd))  # tweak scale if desired
-
-        combined_pot_rew[penalty_mask] *= penalties[penalty_mask]
-
-        # Renormalize after penalty
-        combined_sum = combined_pot_rew.sum()
-        if combined_sum > 1e-6:
-            combined_pot_rew /= combined_sum
-        else:
-            # If everything got zeroed out, fallback to explore or skip
-            print("All directions heavily penalized. Forcing exploration.")
-            self.explore()
-            return
 
         #-------------------------------------------------------------------
         # 5) Compute action heading
@@ -518,7 +507,6 @@ class Driver(Supervisor):
         sin_component = torch.sum(torch.sin(angles) * combined_pot_rew)
         cos_component = torch.sum(torch.cos(angles) * combined_pot_rew)
         action_angle = torch.atan2(sin_component, cos_component)
-
         if action_angle < 0:
             action_angle += 2 * np.pi
 
@@ -530,14 +518,14 @@ class Driver(Supervisor):
         angle_to_turn_deg = self.action_heading_deg - self.current_heading_deg
         angle_to_turn_deg = (angle_to_turn_deg + 180) % 360 - 180
         angle_to_turn = torch.deg2rad(torch.tensor(angle_to_turn_deg, dtype=self.dtype, device=self.device))
-
         self.turn(angle_to_turn.item())
 
-        # Move forward for `tau_w` steps
         for _ in range(self.tau_w):
             self.sense()
             self.compute_pcn_activations()
-            self.update_hmaps()
+            self.update_hmaps(update_loc=True,
+                              update_pcn=True,
+                              update_alpha=True)
             self.forward()
             self.check_goal_reached()
 
@@ -547,44 +535,20 @@ class Driver(Supervisor):
             self.rotation_accumulator += abs(heading_diff)
             self.last_heading_deg = self.current_heading_deg
 
-            # # Collision handling
-            # if torch.any(self.collided):
-            #     print("Collision detected. Turning back and retrying.")
-            #     self.turn(np.pi)  # Reverse direction
-            #     for _ in range(self.tau_w):
-            #         self.sense()
-            #         self.compute_pcn_activations()
-            #         self.update_hmaps()
-            #         self.forward()
-            #         self.check_goal_reached()
-            #         if torch.any(self.collided):
-            #             print("Still stuck after retry. Forcing future exploration.")
-            #             self.force_explore_count = 5
-            #             self.explore()
-            #             return
-            #     break
-
             if self.done:
                 return
 
-        # #--------------------------
-        # # 7) TD Learning Step
-        # #--------------------------
+        #--------------------------
+        # 7) (Optional) TD Learning Step
+        #--------------------------
         # if self.td_learning:
         #     for i, scale_def in enumerate(self.scales):
         #         pcn, rcn = self.pcns[i], self.rcns[i]
-        #         # 1) Get the new place cell activations
         #         new_pcn_activations = pcn.place_cell_activations
-        #         # Print the difference between old and new place cell activations
-        #         # print(f"Difference in PCN activations for scale {i}: {new_pcn_activations - old_pcn_activations[i]}")
-        #         # 2) Compute the observed reward from the new state
         #         rcn.update_reward_cell_activations(new_pcn_activations, visit=False)
         #         observed_reward = float(rcn.reward_cell_activations.item())
-
-        #         # 3) Update the reward cell weights using the old state + observed reward
         #         rcn.td_update(old_pcn_activations[i], observed_reward)
 
-        # Done with exploit for this iteration
         return
 
     def plot_current_heading(self):
@@ -632,6 +596,10 @@ class Driver(Supervisor):
             2 * self.current_heading_deg
         )
 
+        # Compute prox
+        if self.use_prox_mod:
+            self.prox = self.compute_proximity(boundaries)
+
         # Convert heading to radians for HD-layer input
         current_heading_rad = np.deg2rad(self.current_heading_deg)
         v_in = torch.tensor([np.cos(current_heading_rad), np.sin(current_heading_rad)],
@@ -643,6 +611,10 @@ class Driver(Supervisor):
         # Check for collisions via bumpers
         self.collided[0] = int(self.left_bumper.getValue())
         self.collided[1] = int(self.right_bumper.getValue())
+
+        if torch.any(self.collided):
+            if self.stats_collector:
+                self.stats_collector.update_stat("collision_count", self.stats_collector.stats["collision_count"] + 1)
 
         # Advance simulation one timestep
         self.step(self.timestep)
@@ -663,7 +635,34 @@ class Driver(Supervisor):
             bearing += 360.0
 
         return bearing
+    
+    ########################################### COMPUTE ###########################################
+    def compute_proximity(self, boundaries):
+        """
+        Computes the visual density based on distances to walls,
+        applying an exponential decay to each LiDAR reading.
 
+        Args:
+            boundaries (list): LiDAR readings indicating distances to obstacles.
+
+        Returns:
+            float: The computed visual density, emphasizing proximity to walls.
+        """
+        # Threshold distance for influence (e.g., max effective wall influence)
+        max_influence_radius = 2  # Adjust based on environment size
+
+        # Convert LiDAR data to a PyTorch tensor
+        lidar_tensor = torch.tensor(boundaries, dtype=self.dtype, device=self.device)
+
+        # Apply exponential decay to each LiDAR reading for wall density
+        wall_densities = torch.exp(-lidar_tensor / max_influence_radius)
+        wall_density = torch.mean(wall_densities)
+
+        # Clamp between 0 and 1
+        proximity = torch.clamp(wall_density, 0, 1)
+
+        return proximity
+    
     ########################################### COMPUTE ###########################################
     def compute_pcn_activations(self):
         """
@@ -702,6 +701,8 @@ class Driver(Supervisor):
             self.save(include_pcn=self.robot_mode != RobotMode.PLOTTING,
                     include_rcn=self.robot_mode != RobotMode.PLOTTING,
                     include_hmaps=True)
+            self.done = True
+            self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
 
         elif self.robot_mode == RobotMode.DMTP and torch.allclose(
             torch.tensor(self.goal_location, dtype=self.dtype, device=self.device),
@@ -715,6 +716,8 @@ class Driver(Supervisor):
                 rcn.update_reward_cell_activations(pcn.place_cell_activations, visit=True)
                 rcn.replay(pcn=pcn)
             self.save(include_pcn=True, include_rcn=True)
+            self.done = True
+            self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
 
         elif self.robot_mode == RobotMode.EXPLOIT and torch.allclose(
             torch.tensor(self.goal_location, dtype=self.dtype, device=self.device),
@@ -740,17 +743,14 @@ class Driver(Supervisor):
                 print(f"Success: {self.getTime() <= time_limit * 60}")
                 
                 self.stop()
+                self.save(save_trajectory=True)
                 self.done = True
-                self.save(include_pcn=True if self.td_learning else False, 
-                          include_rcn=True if self.td_learning else False)
                 return
             else:
                 self.stop()
-                self.save(include_pcn=True if self.td_learning else False, 
-                          include_rcn=True if self.td_learning else False)
+                self.save()
                 self.done = True
                 self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
-                return
 
     ########################################### AUTO PILOT ###########################################
 
@@ -796,7 +796,9 @@ class Driver(Supervisor):
             # Move forward one step
             self.sense()
             self.compute_pcn_activations()
-            self.update_hmaps()
+            self.update_hmaps(update_loc=True,
+                              update_pcn=True,
+                              update_alpha=True)
             self.forward()
             s_start += 1
 
@@ -880,6 +882,8 @@ class Driver(Supervisor):
             if not orientation < neg * angle:
                 break
         self.stop()
+        if self.stats_collector:
+            self.stats_collector.update_stat("turn_count", self.stats_collector.stats["turn_count"] + 1)
         self.sense()
 
     def stop(self):
@@ -924,39 +928,59 @@ class Driver(Supervisor):
 
         return path_length
     
-    def update_hmaps(self):
+    def update_hmaps(self, 
+                     update_loc=False, 
+                     update_hdn=False, 
+                     update_pcn=False, 
+                     update_alpha=False, 
+                     update_prox=False):
         """
-        Store agent position, head direction activations, place cell activations, and alpha values.
+        Store agent position, head direction activations, place cell activations, alpha values, and proximity values.
+        
+        Parameters:
+        - update_loc (bool): Whether to update agent location history.
+        - update_hdn (bool): Whether to update head direction activations.
+        - update_pcn (bool): Whether to update place cell activations.
+        - update_alpha (bool): Whether to update alpha values (gradient weights for each scale).
+        - update_prox (bool): Whether to update proximity values.
         """
         curr_pos = self.robot.getField("translation").getSFVec3f()
 
         if self.step_count < self.num_steps:
-            # 1) Record agent location
-            self.hmap_loc[self.step_count] = curr_pos
+            # 1) Update agent location if requested
+            if update_loc:
+                self.hmap_loc[self.step_count] = curr_pos
 
-            # 2) Record HDN on CPU
-            self.hmap_hdn[self.step_count] = self.hd_activations.clone().detach().cpu()
+            # 2) Update head direction activations
+            if update_hdn:
+                self.hmap_hdn[self.step_count] = self.hd_activations.clone().detach().cpu()
 
             # 3) Dynamically resize hmap_pcn_activities if needed
-            if len(self.hmap_pcn_activities) != len(self.pcn_activations_list):
+            if update_pcn and len(self.hmap_pcn_activities) != len(self.pcn_activations_list):
                 self.hmap_pcn_activities = [
                     torch.zeros((self.num_steps, act.shape[0]), device="cuda", dtype=torch.float32)
                     for act in self.pcn_activations_list
                 ]
 
-            # 4) Record place cell activations for each scale
-            for i, act in enumerate(self.pcn_activations_list):
-                if self.hmap_pcn_activities[i].shape[1] != act.shape[0]:
-                    self.hmap_pcn_activities[i] = torch.zeros(
-                        (self.num_steps, act.shape[0]), device="cuda", dtype=torch.float32
-                    )
-                self.hmap_pcn_activities[i][self.step_count] = act.clone().detach().cpu()
+            # 4) Update place cell activations for each scale
+            if update_pcn:
+                for i, act in enumerate(self.pcn_activations_list):
+                    if self.hmap_pcn_activities[i].shape[1] != act.shape[0]:
+                        self.hmap_pcn_activities[i] = torch.zeros(
+                            (self.num_steps, act.shape[0]), device="cuda", dtype=torch.float32
+                        )
+                    self.hmap_pcn_activities[i][self.step_count] = act.clone().detach().cpu()
 
-            # 5) Ensure alpha value is recorded
-            if self.step_count < self.num_steps:
+            # 5) Update alpha values if available
+            if update_alpha and hasattr(self, 'alpha'):
                 self.hmap_alpha[self.step_count, :] = self.alpha.clone().detach().cpu()
 
+            # 6) Update proximity value if available
+            if update_prox and hasattr(self, 'prox'):
+                self.hmap_prox[self.step_count] = self.prox
+
         self.step_count += 1
+
 
     def get_actual_reward(self):
         """
@@ -997,12 +1021,14 @@ class Driver(Supervisor):
         include_pcn: bool = False,
         include_rcn: bool = False,
         include_hmaps: bool = False,
+        save_trajectory: bool = False,
     ):
         """
         Saves:
         - PCN networks (one file per scale) if include_pcn=True
         - RCN networks (one file per scale) if include_rcn=True
         - The history maps if include_hmaps=True
+        - The agent's path if save_path=True
         """
         files_saved = []
 
@@ -1037,7 +1063,6 @@ class Driver(Supervisor):
             # (a) Agent location
             hmap_loc_path = os.path.join(self.hmap_dir, "hmap_loc.pkl")
             with open(hmap_loc_path, "wb") as f:
-                # store only up to self.step_count
                 pickle.dump(self.hmap_loc[: self.step_count], f)
             files_saved.append(hmap_loc_path)
 
@@ -1049,23 +1074,72 @@ class Driver(Supervisor):
 
             # (c) Place-cell history maps for each scale
             for i, pc_history in enumerate(self.hmap_pcn_activities):
-                # pc_history shape: (num_steps, num_pc_for_scale_i)
-                # We'll name file as "hmap_pcn_scale_i.pkl"
                 hmap_scale_path = os.path.join(self.hmap_dir, f"hmap_pcn_scale_{i}.pkl")
                 with open(hmap_scale_path, "wb") as f:
-                    # Move to CPU or .numpy() if desired
                     pc_data = pc_history[: self.step_count].cpu().numpy()
                     pickle.dump(pc_data, f)
                 files_saved.append(hmap_scale_path)
 
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        root.update()
-        messagebox.showinfo("Information", "Press OK to save data")
-        root.destroy()
+            # (d) Alpha values
+            if hasattr(self, "hmap_alpha"):
+                hmap_alpha_path = os.path.join(self.hmap_dir, "hmap_alpha.pkl")
+                with open(hmap_alpha_path, "wb") as f:
+                    alpha_data = self.hmap_alpha[: self.step_count].cpu().numpy()
+                    pickle.dump(alpha_data, f)
+                files_saved.append(hmap_alpha_path)
 
-        self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
+            # (e) Prox values
+            if hasattr(self, "hmap_prox"):
+                hmap_prox_path = os.path.join(self.hmap_dir, "hmap_prox.pkl")
+                with open(hmap_prox_path, "wb") as f:
+                    prox_data = self.hmap_prox[: self.step_count].cpu().numpy()
+                    pickle.dump(prox_data, f)
+                files_saved.append(hmap_prox_path)
+                
+        # ----------------------------------------------------------------------
+        # 4) Save the agent's path if requested
+        # ----------------------------------------------------------------------
+        if save_trajectory:
+            # Get world name and parse scale names
+            scale_name_list = [scale["name"] for scale in self.scales]
+
+            # Ensure the scales are always sorted as small → medium → large → xlarge
+            scale_order = ["small", "medium", "large", "xlarge"]
+            scale_name_list = sorted(scale_name_list, key=lambda x: scale_order.index(x))
+
+            # Construct the scale combination string
+            scale_combination = "_".join(scale_name_list)
+
+            # Define the correct base directory (ensures it's not under Webots controllers)
+            base_stats_dir = os.path.join(PROJECT_ROOT, "analysis", "stats", self.world_name, scale_combination)
+            hmaps_path_dir = os.path.join(base_stats_dir, "hmaps")
+            os.makedirs(hmaps_path_dir, exist_ok=True)
+
+            # Trial ID-based filename
+            trial_id = getattr(self, "trial_id", "default")
+            hmap_loc_file = os.path.join(hmaps_path_dir, f"{trial_id}_hmap_loc.pkl")
+            hmap_alpha_file = os.path.join(hmaps_path_dir, f"{trial_id}_hmap_alpha.pkl")
+
+            with open(hmap_loc_file, "wb") as f:
+                pickle.dump(self.hmap_loc[:self.step_count], f)
+                files_saved.append(hmap_loc_file)
+
+            with open(hmap_alpha_file, "wb") as f:
+                pickle.dump(self.hmap_alpha[:self.step_count].cpu().numpy(), f)
+                files_saved.append(hmap_alpha_file)
+
+            print(f"Saved path data for trial {trial_id} in {scale_combination}.")
+
+        # ----------------------------------------------------------------------
+        # 5) Show the dialog box and print saved files
+        # ----------------------------------------------------------------------
+        if not self.stats_collector:
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            root.update()
+            messagebox.showinfo("Information", "Press OK to save data")
+            root.destroy()
 
         print(f"Files Saved: {files_saved}")
         print("Saving Done!")

@@ -46,30 +46,30 @@ SCALES_DEFS = {
         "name": "small",
         "num_pc": 2000,
         "sigma_r": 0.5,
-        "sigma_theta": 1,
+        "sigma_theta": 90,
         "rcn_learning_rate": 0.1,
     },
-    # "medium": {
-        # "name": "medium",
-        # "num_pc": 1000,
-        # "sigma_r": 3,
-        # "sigma_theta": 2,
-        # "rcn_learning_rate": 0.2,
-    # },
+    "medium": {
+        "name": "medium",
+        "num_pc": 500,
+        "sigma_r": 2,
+        "sigma_theta": 90,
+        "rcn_learning_rate": 0.1,
+    },
     "large": {
         "name": "large",
-        "num_pc": 500,
-        "sigma_r": 1.5,
-        "sigma_theta": 1,
+        "num_pc": 250,
+        "sigma_r": 4,
+        "sigma_theta": 90,
         "rcn_learning_rate": 0.1,
     },
-    # "xlarge": {
-    #     "name": "xlarge",
-    #     "num_pc": 200,
-    #     "sigma_r": 4,
-    #     "sigma_theta": 4,
-    #     "rcn_learning_rate": 0.1,
-    # }
+    "xlarge": {
+        "name": "xlarge",
+        "num_pc": 200,
+        "sigma_r": 4,
+        "sigma_theta": 8,
+        "rcn_learning_rate": 0.005,
+    }
 }
 
 def compile_scales(scale_names):
@@ -95,19 +95,39 @@ def run_bot(mode, corners=None, save_data=False, **kwargs):
     world_name = get_world_name(bot)
     print(f"[INFO] Current world: {world_name}")
 
-    stats_collector_instance = None
+    # Grab scale names from kwargs (with fallback to empty list)
+    scale_names = kwargs.get("scale_names", [])
+
+    # Convert scale names => scale definitions
+    scales_list = compile_scales(scale_names)
+
+    # Build a string like "small_medium_large"
+    # This will be used instead of "3_scales"
+    scale_name_str = "_".join(scale_names)
+
+    # Decide how many loops/trials to run
     num_loops = kwargs.get("num_loops", 1)
 
     # If we're in exploit mode, optionally enable data saving
     if mode == RobotMode.EXPLOIT:
         if save_data:
-            stats_folder = os.path.join(PROJECT_ROOT, "analysis", "stats", world_name, "JSON")
+            # Build path: analysis/stats/<world_name>/<scale_name_str>/JSON
+            stats_folder = os.path.join(
+                PROJECT_ROOT, 
+                "analysis", 
+                "stats", 
+                world_name,
+                scale_name_str,   # <--- Use the joined scale names here
+                "JSON"
+            )
             os.makedirs(stats_folder, exist_ok=True)
             stats_collector_instance = stats_collector(output_dir=stats_folder)
         else:
             stats_folder = None
+            stats_collector_instance = None
     else:
         stats_folder = None
+        stats_collector_instance = None
 
     # If no corners provided, default to a single corner
     if corners is None:
@@ -119,7 +139,7 @@ def run_bot(mode, corners=None, save_data=False, **kwargs):
 
         # Check how many times we might run for this corner
         if save_data and mode == RobotMode.EXPLOIT:
-            # If data is saved, see how many are already done
+            # If saving data, figure out the latest trial # for this corner
             current_trial_id = get_highest_trial_id(stats_folder, corner)
         else:
             current_trial_id = 0
@@ -132,29 +152,30 @@ def run_bot(mode, corners=None, save_data=False, **kwargs):
             current_trial_id += 1
             bot.trial_indices[corner_tuple] = current_trial_id
             trial_id = f"trial_{current_trial_id}_corner_{corner[0]}_{corner[1]}"
+
             if save_data:
                 print(f"[INFO] Running trial: {trial_id}")
 
-            # Convert scale names => scale definitions
-            scale_names = kwargs.get("scale_names", [])
-            scales_list = compile_scales(scale_names)
-
+            # Extract RCN learning rates from the scale definitions
             rcn_learning_rates = [scale["rcn_learning_rate"] for scale in scales_list]
 
             bot.initialization(
                 mode=mode,
                 run_time_hours=kwargs.get("run_time_hours", 2),
                 randomize_start_loc=kwargs.get("randomize_start_loc", True),
-                start_loc=start_loc,
+                start_loc=kwargs.get("start_loc", corner),
                 enable_ojas=kwargs.get("enable_ojas", None),
                 enable_stdp=kwargs.get("enable_stdp", None),
                 scales=scales_list,
-                rcn_learning_rates=rcn_learning_rates,  # <-- NEW: Pass learning rates list
+                rcn_learning_rates=rcn_learning_rates, 
                 stats_collector=stats_collector_instance,
                 trial_id=trial_id,
                 world_name=world_name,
                 goal_location=kwargs.get("goal_location", None),
-                max_dist=kwargs.get("max_dist", 10)
+                max_dist=kwargs.get("max_dist", 10),
+                plot_bvc=kwargs.get("plot_bvc", False),
+                td_learning=kwargs.get("td_learning", False),
+                use_prox_mod=kwargs.get("use_prox_mod", False),
             )
 
             bot.trial_id = trial_id
@@ -162,12 +183,11 @@ def run_bot(mode, corners=None, save_data=False, **kwargs):
             bot.run()
 
             # If in exploit mode, reload the world between runs
-            if mode == RobotMode.EXPLOIT:
+            if mode == RobotMode.EXPLOIT and save_data:
                 bot.worldReload()
 
     # Pause the sim
     bot.simulationSetMode(bot.SIMULATION_MODE_PAUSE)
-
 
 #################################
 # Main Controller Entry Point
@@ -185,15 +205,23 @@ if __name__ == "__main__":
         "PLOTTING": RobotMode.PLOTTING  
     }
     
-    SELECTED_MODE = "LEARN_OJAS"
-    corners = [[8,-8], [-8,-8], [8,8]]
-    start_loc = [0,0]
+    SELECTED_MODE = "EXPLOIT_SAVE"
+    td_learning = False
+    corners = [[8,-8]]
+    start_loc = corners[0]
     goal_location = [-7, 7]    
     randomize_start_loc = False
+    use_prox_mod = True
+
     # ["small", "medium", "large"]
-    scale_names = ["small","large"]
-    run_time_hours = 2
-    max_dist = 15
+    scale_names = ["large"]
+    run_time_hours = 4
+    max_dist = 25
+    plot_bvc = False
+
+    enable_ojas = False
+    enable_stdp = False
+
 
     MODE_PARAMS = {
         "LEARN_OJAS": {
@@ -207,7 +235,8 @@ if __name__ == "__main__":
             "enable_stdp": False,
             "run_time_hours": run_time_hours,
             "num_loops": 1,
-            "save_data": False,     
+            "save_data": False,
+            "plot_bvc": plot_bvc     
         },
         "LEARN_HEBB": {
             "corners": corners,
@@ -221,6 +250,7 @@ if __name__ == "__main__":
             "run_time_hours": run_time_hours,
             "num_loops": 1,
             "save_data": False,
+            "plot_bvc": plot_bvc
         },
         "DMTP": {
             "corners": corners,
@@ -234,6 +264,7 @@ if __name__ == "__main__":
             "run_time_hours": run_time_hours,
             "num_loops": 1,
             "save_data": False,
+            "plot_bvc": plot_bvc
         },
         "EXPLOIT": {
             "corners": corners,
@@ -247,6 +278,8 @@ if __name__ == "__main__":
             "run_time_hours": run_time_hours,
             "num_loops": 1, 
             "save_data": False,
+            "td_learning": td_learning,
+            "use_prox_mod": use_prox_mod,
         },
         "EXPLOIT_SAVE": {
             "corners": corners,
@@ -258,7 +291,7 @@ if __name__ == "__main__":
             "enable_ojas": False,
             "enable_stdp": False,
             "run_time_hours": run_time_hours,
-            "num_loops": 3, 
+            "num_loops": 5, 
             "save_data": True,
         },
         "PLOTTING": {
@@ -273,6 +306,7 @@ if __name__ == "__main__":
             "run_time_hours": run_time_hours,
             "num_loops": 1,
             "save_data": False,
+            "plot_bvc": plot_bvc
         }
     }
     
