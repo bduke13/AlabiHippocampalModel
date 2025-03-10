@@ -211,10 +211,15 @@ if __name__ == "__main__":
     start_loc = corners[0]
     goal_location = [-7, 7]    
     randomize_start_loc = False
-    use_prox_mod = True
+    use_prox_mod = False
 
     # ["small", "medium", "large"]
-    scale_names = ["large"]
+    multiscale = ["small", "medium", "large"]
+    small = ["small"]
+    medium = ["medium"]
+    large = ["large"]
+    
+    scale_names = large
     run_time_hours = 4
     max_dist = 25
     plot_bvc = False

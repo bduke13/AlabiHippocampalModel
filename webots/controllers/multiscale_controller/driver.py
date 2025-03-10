@@ -92,7 +92,7 @@ class Driver(Supervisor):
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
 
         # Exploration/exploitation radius
-        self.goal_r = {"explore": 0.3, "exploit": 0.8}
+        self.goal_r = {"explore": 0.3, "exploit": 0.5}
         self.goal_location = goal_location if goal_location else [-3, 3]
         self.start_loc = start_loc
 
@@ -177,14 +177,13 @@ class Driver(Supervisor):
         # Initialize alpha as a tensor of zeros with the same length as the number of scales
         self.alpha = torch.zeros(len(self.scales), dtype=self.dtype, device=self.device)
 
-        # Initialize hmap_alpha with the correct shape
-        self.hmap_alpha = torch.zeros((self.num_steps, len(self.scales)), device="cuda", dtype=torch.float32)
+        self.hmap_scale_priority = torch.zeros(self.num_steps, device="cuda", dtype=torch.float32)
 
         # Prep for logging
         self.hmap_loc = np.zeros((self.num_steps, 3))
         self.hmap_hdn = torch.zeros((self.num_steps, self.n_hd), device="cpu", dtype=torch.float32)
         self.hmap_prox = torch.zeros((self.num_steps,), device="cuda", dtype=torch.float32)
-        self.hmap_alpha = torch.zeros(
+        self.hmap_scale_priority = torch.zeros(
             (self.num_steps, len(self.scales)),  # row per step, col per scale
             device="cuda", 
             dtype=torch.float32
@@ -348,7 +347,7 @@ class Driver(Supervisor):
             self.check_goal_reached()
             self.update_hmaps(update_loc=True, 
                               update_pcn=True,
-                              update_alpha=True if self.robot_mode == RobotMode.EXPLOIT else False, 
+                              update_scale_priority=True if self.robot_mode == RobotMode.EXPLOIT else False, 
                               update_prox=True if (self.use_prox_mod and self.robot_mode == RobotMode.LEARN_OJAS) else False)
             self.forward()
 
@@ -369,7 +368,7 @@ class Driver(Supervisor):
         self.compute_pcn_activations()
         self.update_hmaps(update_loc=True,
                           update_pcn=True,
-                          update_alpha=True)
+                          update_scale_priority=True)
         self.check_goal_reached()
 
         # Save old PCN activations for each scale
@@ -500,6 +499,8 @@ class Driver(Supervisor):
         # Store alpha as the portion of each scale's gradient
         self.alpha = grads / (grads.sum() + 1e-6)
 
+        self.scale_idx = torch.argmax(mixing_weights).item()
+
         #-------------------------------------------------------------------
         # 5) Compute action heading
         #-------------------------------------------------------------------
@@ -525,7 +526,7 @@ class Driver(Supervisor):
             self.compute_pcn_activations()
             self.update_hmaps(update_loc=True,
                               update_pcn=True,
-                              update_alpha=True)
+                              update_scale_priority=True)
             self.forward()
             self.check_goal_reached()
 
@@ -693,7 +694,7 @@ class Driver(Supervisor):
         If reached and in the correct mode, call auto_pilot() and save logs.
         """
         curr_pos = self.robot.getField("translation").getSFVec3f()
-        time_limit = 45 # minutes
+        time_limit = 120 # minutes
 
         if self.robot_mode in (RobotMode.LEARN_OJAS, RobotMode.LEARN_HEBB, RobotMode.PLOTTING) \
                 and self.getTime() >= 60 * self.run_time_minutes:
@@ -719,11 +720,11 @@ class Driver(Supervisor):
             self.done = True
             self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
 
-        elif self.robot_mode == RobotMode.EXPLOIT and torch.allclose(
+        elif self.robot_mode == RobotMode.EXPLOIT and (torch.allclose(
             torch.tensor(self.goal_location, dtype=self.dtype, device=self.device),
             torch.tensor([curr_pos[0], curr_pos[2]], dtype=self.dtype, device=self.device),
             atol=self.goal_r["exploit"]
-        ):
+        ) or self.getTime() >= 60 * time_limit):
             if self.stats_collector:
                 # Update and save stats once
                 self.stats_collector.update_stat("trial_id", self.trial_id)
@@ -798,7 +799,7 @@ class Driver(Supervisor):
             self.compute_pcn_activations()
             self.update_hmaps(update_loc=True,
                               update_pcn=True,
-                              update_alpha=True)
+                              update_scale_priority=True)
             self.forward()
             s_start += 1
 
@@ -928,20 +929,20 @@ class Driver(Supervisor):
 
         return path_length
     
-    def update_hmaps(self, 
-                     update_loc=False, 
-                     update_hdn=False, 
-                     update_pcn=False, 
-                     update_alpha=False, 
+    def update_hmaps(self,
+                     update_loc=False,
+                     update_hdn=False,
+                     update_pcn=False,
+                     update_scale_priority=False,
                      update_prox=False):
         """
-        Store agent position, head direction activations, place cell activations, alpha values, and proximity values.
+        Store agent position, head direction activations, place cell activations, scale priority (previously alpha), and proximity values.
         
         Parameters:
         - update_loc (bool): Whether to update agent location history.
         - update_hdn (bool): Whether to update head direction activations.
         - update_pcn (bool): Whether to update place cell activations.
-        - update_alpha (bool): Whether to update alpha values (gradient weights for each scale).
+        - update_scale_priority (bool): Whether to update scale priority (dominant scale index).
         - update_prox (bool): Whether to update proximity values.
         """
         curr_pos = self.robot.getField("translation").getSFVec3f()
@@ -971,16 +972,15 @@ class Driver(Supervisor):
                         )
                     self.hmap_pcn_activities[i][self.step_count] = act.clone().detach().cpu()
 
-            # 5) Update alpha values if available
-            if update_alpha and hasattr(self, 'alpha'):
-                self.hmap_alpha[self.step_count, :] = self.alpha.clone().detach().cpu()
+            # 5) Update scale priority
+            if update_scale_priority and hasattr(self, 'scale_idx'):
+                # print(f"scale_idx: {self.scale_idx}")
+                self.hmap_scale_priority[self.step_count] = self.scale_idx 
 
             # 6) Update proximity value if available
             if update_prox and hasattr(self, 'prox'):
                 self.hmap_prox[self.step_count] = self.prox
-
         self.step_count += 1
-
 
     def get_actual_reward(self):
         """
@@ -1028,7 +1028,7 @@ class Driver(Supervisor):
         - PCN networks (one file per scale) if include_pcn=True
         - RCN networks (one file per scale) if include_rcn=True
         - The history maps if include_hmaps=True
-        - The agent's path if save_path=True
+        - The agent's path if save_trajectory=True
         """
         files_saved = []
 
@@ -1080,14 +1080,6 @@ class Driver(Supervisor):
                     pickle.dump(pc_data, f)
                 files_saved.append(hmap_scale_path)
 
-            # (d) Alpha values
-            if hasattr(self, "hmap_alpha"):
-                hmap_alpha_path = os.path.join(self.hmap_dir, "hmap_alpha.pkl")
-                with open(hmap_alpha_path, "wb") as f:
-                    alpha_data = self.hmap_alpha[: self.step_count].cpu().numpy()
-                    pickle.dump(alpha_data, f)
-                files_saved.append(hmap_alpha_path)
-
             # (e) Prox values
             if hasattr(self, "hmap_prox"):
                 hmap_prox_path = os.path.join(self.hmap_dir, "hmap_prox.pkl")
@@ -1095,22 +1087,18 @@ class Driver(Supervisor):
                     prox_data = self.hmap_prox[: self.step_count].cpu().numpy()
                     pickle.dump(prox_data, f)
                 files_saved.append(hmap_prox_path)
-                
+
         # ----------------------------------------------------------------------
         # 4) Save the agent's path if requested
         # ----------------------------------------------------------------------
         if save_trajectory:
             # Get world name and parse scale names
             scale_name_list = [scale["name"] for scale in self.scales]
-
-            # Ensure the scales are always sorted as small → medium → large → xlarge
             scale_order = ["small", "medium", "large", "xlarge"]
             scale_name_list = sorted(scale_name_list, key=lambda x: scale_order.index(x))
-
-            # Construct the scale combination string
             scale_combination = "_".join(scale_name_list)
 
-            # Define the correct base directory (ensures it's not under Webots controllers)
+            # Define the correct base directory
             base_stats_dir = os.path.join(PROJECT_ROOT, "analysis", "stats", self.world_name, scale_combination)
             hmaps_path_dir = os.path.join(base_stats_dir, "hmaps")
             os.makedirs(hmaps_path_dir, exist_ok=True)
@@ -1118,29 +1106,21 @@ class Driver(Supervisor):
             # Trial ID-based filename
             trial_id = getattr(self, "trial_id", "default")
             hmap_loc_file = os.path.join(hmaps_path_dir, f"{trial_id}_hmap_loc.pkl")
-            hmap_alpha_file = os.path.join(hmaps_path_dir, f"{trial_id}_hmap_alpha.pkl")
+            hmap_scale_priority_file = os.path.join(hmaps_path_dir, f"{trial_id}_hmap_scale_priority.pkl")
 
             with open(hmap_loc_file, "wb") as f:
                 pickle.dump(self.hmap_loc[:self.step_count], f)
                 files_saved.append(hmap_loc_file)
 
-            with open(hmap_alpha_file, "wb") as f:
-                pickle.dump(self.hmap_alpha[:self.step_count].cpu().numpy(), f)
-                files_saved.append(hmap_alpha_file)
+            with open(hmap_scale_priority_file, "wb") as f:
+                pickle.dump(self.hmap_scale_priority[: self.step_count].cpu().numpy(), f)
+                files_saved.append(hmap_scale_priority_file)
 
             print(f"Saved path data for trial {trial_id} in {scale_combination}.")
 
         # ----------------------------------------------------------------------
-        # 5) Show the dialog box and print saved files
+        # 5) Print saved files
         # ----------------------------------------------------------------------
-        if not self.stats_collector:
-            root = tk.Tk()
-            root.withdraw()
-            root.attributes("-topmost", True)
-            root.update()
-            messagebox.showinfo("Information", "Press OK to save data")
-            root.destroy()
-
         print(f"Files Saved: {files_saved}")
         print("Saving Done!")
 
