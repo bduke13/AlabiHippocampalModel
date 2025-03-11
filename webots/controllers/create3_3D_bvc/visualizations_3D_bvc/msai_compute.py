@@ -19,9 +19,9 @@ def parse_path_for_model_and_env(full_path: str):
         model_name = "unknown_model"
 
     # Map rotated_X to envX
-    if "rotated_1" in full_path:
+    if "rotated_1" in full_path or "_control" in full_path:
         env_name = "env1"
-    elif "rotated_2" in full_path:
+    elif "rotated_2" in full_path or "_test" in full_path:
         env_name = "env2"
     elif "rotated_3" in full_path:
         env_name = "env3"
@@ -88,13 +88,18 @@ def process_hmap(path):
 
 if __name__ == "__main__":
 
-    CONTROLLER_NAME = "create3_3D_bvc_looping"
+    CONTROLLER_NAME = "create3_3D_bvc"
 
     # Parameters
     root_path = os.path.join(CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl")
     trials = os.listdir(root_path)
 
-    worlds = ["rotated_1", "rotated_2", "rotated_3", "rotated_4"]
+    worlds = [
+        "3D_bvc_cross_rotated_1_normal",
+        "3D_bvc_cross_rotated_2_no_vert_scaling",
+        "3D_bvc_cross_rotated_3_no_dist_scaling",
+        "3D_bvc_cross_rotated_4_no_vert_or_dist_scaling",
+    ]
 
     world_trial_paths = {}
     for world in worlds:
