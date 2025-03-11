@@ -30,6 +30,7 @@ class BoundaryVectorCellLayer3D:
         input_cols: int = 180,
         top_cutoff_percentage: float = 0.0,
         bottom_cutoff_percentage: float = 0.5,
+        scaling_max_dist: float = 1.0,
         dtype: torch.dtype = torch.float32,
         device: torch.device = torch.device("cpu"),
     ) -> None:
@@ -178,11 +179,26 @@ class BoundaryVectorCellLayer3D:
         self.lat_flat = lat_flat
         self.lon_flat = lon_flat
         self.N_points = lat_slice.shape[0]  # number of valid points for the slice
+        self.max_dist = max_dist  # Store max_dist for distance-based scaling
 
-    def get_bvc_activation(self, distances: torch.Tensor) -> torch.Tensor:
+        # Store scaling_max_dist (distance at which scaling reaches 1.0)
+        # If not provided, use max_dist as default
+        self.scaling_max_dist = (
+            scaling_max_dist if scaling_max_dist is not None else max_dist
+        )
+
+    def get_bvc_activation(
+        self, distances: torch.Tensor, prioritize_far_points: bool = True
+    ) -> torch.Tensor:
         """
         Given a 3D scan (distance array) of shape (input_rows, input_cols), compute
         the activation of each BVC neuron.
+
+        Args:
+            distances: Tensor of shape (input_rows, input_cols) containing distance measurements
+            prioritize_far_points: If True, apply distance-based scaling where:
+                                  - Distances from 0 to scaling_max_dist scale from 0 to 1
+                                  - Distances beyond scaling_max_dist remain at 1
         """
         # Flatten scan data
         dist_flat = distances.view(-1)  # shape: (input_rows * input_cols,)
@@ -211,22 +227,42 @@ class BoundaryVectorCellLayer3D:
         if max_val > 0:
             bvc_activations = bvc_activations / (2.0 * max_val)
 
+        # Apply distance-based scaling if requested
+        if prioritize_far_points:
+            # Create a distance scaling that maps:
+            # - 0 to scaling_max_dist → 0 to 1
+            # - Beyond scaling_max_dist → 1
+            distance_scaling = torch.clamp(self.d_i / self.scaling_max_dist, 0.0, 1.0)
+            bvc_activations = bvc_activations * distance_scaling
+
         # Apply scaling factors to each BVC neuron
         bvc_activations = bvc_activations * self.scaling_factors
 
         return bvc_activations
 
     def plot_activation_distribution(
-        self, distances: np.ndarray, return_plot: bool = False
+        self,
+        distances: np.ndarray,
+        prioritize_far_points: bool = False,
+        return_plot: bool = False,
     ):
         """
         Plot a histogram of BVC activation values and a sorted line plot, to
         see how strongly the BVCs respond for the given 3D scan.
+
+        Args:
+            distances: Numpy array of distance measurements
+            prioritize_far_points: If True, multiply each BVC's activation by its preferred distance
+            return_plot: If True, return the figure instead of displaying it
         """
         # Convert scan data to torch
         distances_t = torch.tensor(distances, dtype=self.dtype, device=self.device)
         with torch.no_grad():
-            activations = self.get_bvc_activation(distances_t).cpu().numpy()
+            activations = (
+                self.get_bvc_activation(distances_t, prioritize_far_points)
+                .cpu()
+                .numpy()
+            )
 
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
 
@@ -249,17 +285,29 @@ class BoundaryVectorCellLayer3D:
         else:
             plt.show()
 
-    def plot_activation(self, distances: torch.Tensor, return_plot: bool = False):
+    def plot_activation(
+        self,
+        distances: torch.Tensor,
+        prioritize_far_points: bool = False,
+        return_plot: bool = False,
+    ):
         """
         Create a 3D radial plot of the scan data and overlay BVCs using their
         spherical coordinates (distance, horizontal angle, vertical angle).
 
         The scan data is drawn as points in 3D space, color-coded by distance,
         and the BVC centers are drawn as scatter points sized by activation.
+
+        Args:
+            distances: Tensor of distance measurements
+            prioritize_far_points: If True, multiply each BVC's activation by its preferred distance
+            return_plot: If True, return the figure instead of displaying it
         """
         # 1) Compute BVC activations
         with torch.no_grad():
-            activations = self.get_bvc_activation(distances).cpu().numpy()
+            activations = (
+                self.get_bvc_activation(distances, prioritize_far_points).cpu().numpy()
+            )
 
         # Avoid zero to keep some minimal marker size
         activations = np.maximum(activations, 1e-3)
