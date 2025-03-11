@@ -27,30 +27,36 @@ if __name__ == "__main__":
 
     # Define name mappings for model numbers
     MODEL_NAMES = {
+        # -- Rotated Walls
         # "model0": "Model 0",
         # "model1": "Model 1",
         # "model2": "Model 2",
         # "model3": "Model 3",
         # "model4": "Model 4",
-        # --
-        "unknown_model": "Model 4",
+        # -- Obstacles
+        "3D_bvc": "3D_bvc",
+        "3D_bvc": "3D_bvc",
         # --
     }
 
     # Define environment mappings based on rotated_X to tilt angles
     ENV_NAMES = {
+        # -- Rotated Walls
         # "env1": "Upright",
         # "env2": "30° Tilt",
         # "env3": "45° Tilt",
         # "env4": "60° Tilt",
-        # --
-        # "env1": "Control",
-        # "env2": "Test",
-        # --
-        "env1": "normal",
-        "env2": "no vert",
-        "env3": "no dist",
-        "env4": "nothing",
+        # -- Obstacles
+        "env1": "Same Obstacles",
+        "env2": "Different Obstacles",
+        # -- Ceilings
+        # "env1" : "Control",
+        # "env2": "Test"
+        # -- Scaling
+        # "env1": "normal",
+        # "env2": "no vert",
+        # "env3": "no dist",
+        # "env4": "nothing",
     }
 
     # Desired model/environment order
@@ -61,7 +67,7 @@ if __name__ == "__main__":
         # "model3",
         # "model4",
         # --
-        "unknown_model",
+        "3D_bvc",
         # --
     ]
 
@@ -76,8 +82,7 @@ if __name__ == "__main__":
         # --
         "env1",
         "env2",
-        "env3",
-        "env4",
+        # "env4",
     ]
 
     n_rows = len(MODEL_ORDER)

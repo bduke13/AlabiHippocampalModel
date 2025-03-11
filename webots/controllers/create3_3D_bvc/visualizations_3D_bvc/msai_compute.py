@@ -6,31 +6,36 @@ from visualizations.vis_utils import *
 from webots.controllers.create3_3D_bvc.visualizations_3D_bvc.hexbins import *
 
 
+def get_world_from_path(full_path: str):
+    """
+    Extract the world name from the path.
+    """
+    for world, _, _ in experiments:
+        if world in full_path:
+            return world
+    return "unknown_world"
+
+
 def parse_path_for_model_and_env(full_path: str):
     """
-    Extract the model name and environment name from the directory path.
-    Extracts model number (e.g., 'model4') and maps rotated_X to envX
+    Extract the model name and environment name from the directory path
+    based on the experiments configuration.
     """
-    # Extract model number (e.g., model4)
+    world_name = get_world_from_path(full_path)
+
+    # Find the matching experiment
+    for world, env_name, model_name in experiments:
+        if world == world_name:
+            return model_name, env_name, world_name
+
+    # Fallback to old method if no match found
     if "_model" in full_path:
         model_name = full_path.split("_model")[-1]
         model_name = f"model{model_name}"
     else:
         model_name = "unknown_model"
 
-    # Map rotated_X to envX
-    if "rotated_1" in full_path or "_control" in full_path:
-        env_name = "env1"
-    elif "rotated_2" in full_path or "_test" in full_path:
-        env_name = "env2"
-    elif "rotated_3" in full_path:
-        env_name = "env3"
-    elif "rotated_4" in full_path:
-        env_name = "env4"
-    else:
-        env_name = "unknown_env"
-
-    return model_name, env_name
+    return model_name, "unknown_env", world_name
 
 
 def process_hmap(path):
@@ -39,8 +44,8 @@ def process_hmap(path):
     """
     try:
         print(f"Processing: {path}")
-        model_name, env_name = parse_path_for_model_and_env(path)
-        print(f"model name is {model_name} and env name is {env_name}")
+        model_name, env_name, world_name = parse_path_for_model_and_env(path)
+        print(f"model name: {model_name}, env name: {env_name}, world: {world_name}")
         # Load data
         hmap_loc, hmap_pcn = load_hmaps_from_dir(
             hmap_names=["hmap_loc", "hmap_pcn"], base_dir=path
@@ -50,26 +55,6 @@ def process_hmap(path):
         if hmap_pcn is None or not isinstance(hmap_pcn, np.ndarray):
             raise ValueError(f"hmap_pcn not loaded or invalid for {path}")
 
-        num_cells = hmap_pcn.shape[1]
-        all_binned_data_for_env = []
-
-        # Process all cells
-        # for cell_index in range(num_cells):
-        #    _, _, _, binned_data = create_hexbin(
-        #        cell_index=cell_index,
-        #        hmap_x=hmap_x,
-        #        hmap_y=hmap_y,
-        #        hmap_pcn=hmap_pcn,
-        #        normalize=True,
-        #        filter_bottom_ratio=0.1,
-        #        analyze=True,
-        #        close_plot=True,
-        #    )
-        #    all_binned_data_for_env.append(binned_data)
-
-        # Stack binned data
-        # stacked_dict = stack_binned_data_by_location(all_binned_data_for_env)
-
         # Compute cosine similarity sums
         similarity_sums = analyze_cosine_similarity_torch(
             hmap_x=hmap_x, hmap_y=hmap_y, hmap_pcn=hmap_pcn, distance_threshold=2.0
@@ -78,6 +63,7 @@ def process_hmap(path):
         return {
             "model_name": model_name,
             "env_name": env_name,
+            "world_name": world_name,
             "similarity_sums": similarity_sums,
         }
 
@@ -93,13 +79,34 @@ if __name__ == "__main__":
     # Parameters
     root_path = os.path.join(CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl")
     trials = os.listdir(root_path)
+    # Define experiments as [world, env_name, model_name]
 
-    worlds = [
-        "3D_bvc_cross_rotated_1_normal",
-        "3D_bvc_cross_rotated_2_no_vert_scaling",
-        "3D_bvc_cross_rotated_3_no_dist_scaling",
-        "3D_bvc_cross_rotated_4_no_vert_or_dist_scaling",
+    experiments_obstacles = [
+        ["3D_bvc_two_shapes_control", "env1", "3D_bvc"],
+        ["3D_bvc_two_shapes_test", "env2", "3D_bvc"],
     ]
+
+    experiments_ceilings = [
+        ["3D_bvc_ceilings_control", "env1", "3D_bvc"],
+        ["3D_bvc_ceilings_test", "env2", "3D_bvc"],
+    ]
+
+    experiments_scaling = [
+        ["3D_bvc_cross_rotated_1_normal", "env1", "normal"],
+        ["3D_bvc_cross_rotated_2_no_vert_scaling", "env2", "no_vert"],
+        ["3D_bvc_cross_rotated_3_no_dist_scaling", "env3", "no_dist"],
+        ["3D_bvc_cross_rotated_4_no_vert_or_dist_scaling", "env4", "no_vert_dist"],
+    ]
+
+    experiments = experiments_ceilings
+
+    # Extract just the world names for filtering
+    worlds = [world for world, _, _ in experiments]
+
+    # Print experiment configuration
+    print("Experiment Configuration:")
+    for world, env_name, model_name in experiments:
+        print(f"  {world} -> {env_name} ({model_name})")
 
     world_trial_paths = {}
     for world in worlds:
@@ -135,20 +142,23 @@ if __name__ == "__main__":
     for result in results:
         model_name = result["model_name"]
         env_name = result["env_name"]
+        world_name = result["world_name"]
         similarity_sums = result["similarity_sums"]
 
-        all_env_data[(model_name, env_name)] = {"similarity_sums": similarity_sums}
+        all_env_data[(model_name, env_name, world_name)] = {
+            "similarity_sums": similarity_sums
+        }
         global_values.extend(list(similarity_sums.values()))
 
-    # Build rows for CSV
     data_rows = []
-    for (model_name, env_name), env_data in all_env_data.items():
+    for (model_name, env_name, world_name), env_data in all_env_data.items():
         sim_sums = env_data["similarity_sums"]
         for (x, y), value in sim_sums.items():
             data_rows.append(
                 {
-                    "model": model_name,  # Will now be like "model4"
-                    "environment": env_name,  # Will now be like "env1"
+                    "model": model_name,
+                    "environment": env_name,
+                    "world": world_name,
                     "x": x,
                     "y": y,
                     "cosine_similarity_sum": value,
@@ -164,6 +174,11 @@ if __name__ == "__main__":
     df.to_csv(output_path, index=False)
 
     print(f"\nSaved cosine similarity data to: {output_path}")
+
+    # Print experiment mapping for reference
+    print("\nExperiment mapping:")
+    for world, env_name, model_name in experiments:
+        print(f"  {env_name} = {model_name} ({world})")
 
     if global_values:
         print(
