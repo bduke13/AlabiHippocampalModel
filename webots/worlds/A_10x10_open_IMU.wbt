@@ -39,12 +39,30 @@ DEF agent Create {
   bodySlot [
     Solid {
       translation 0 0 0.08
+      physics Physics {
+        mass 1.0
+        centerOfMass [ 0 0 0 ]
+        inertiaMatrix [
+          0.00075833 0.00125 0.00075833
+          0 0 0
+        ]
+      }
+      boundingObject Shape {
+        geometry Cylinder {
+          height 0.04
+          radius 0.05
+        }
+      }
       children [
         Display {
           width 100
           height 100
         }
         Compass {
+        }
+        Accelerometer {
+        }
+        Gyro {
         }
         DEF range-finder RangeFinder {
           fieldOfView 6.28

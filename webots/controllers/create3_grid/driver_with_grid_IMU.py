@@ -134,6 +134,10 @@ class DriverGrid(Supervisor):
         self.keyboard.enable(self.timestep)
         self.compass = self.getDevice("compass")
         self.compass.enable(self.timestep)
+        self.accelerometer = self.getDevice("accelerometer")
+        self.accelerometer.enable(self.timestep)
+        self.gyro = self.getDevice("gyro")
+        self.gyro.enable(self.timestep)
         self.range_finder = self.getDevice("range-finder")
         self.range_finder.enable(self.timestep)
         self.left_bumper = self.getDevice("bumper_left")
@@ -469,6 +473,15 @@ class DriverGrid(Supervisor):
         self.current_heading_deg = int(
             self.get_bearing_in_degrees(self.compass.getValues())
         )
+
+        # Optional: Read and store accelerometer and gyro data
+        self.accelerometer_values = self.accelerometer.getValues()
+        self.gyro_values = self.gyro.getValues()
+
+        # For debugging/testing purposes, you can print these values:
+        print("Accelerometer:", self.accelerometer_values)
+        print("Gyro:", self.gyro_values)
+
 
         # Shift boundary data based on global heading
         self.boundaries = torch.roll(

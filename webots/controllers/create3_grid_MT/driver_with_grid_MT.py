@@ -10,6 +10,8 @@ import torch.nn.functional as F
 from controller import Supervisor
 from astropy.stats import circmean
 import random
+import json
+import shutil
 
 # Add root directory to python to be able to import
 import sys
@@ -24,6 +26,7 @@ from core.layers.place_cell_layer_with_grid import PlaceCellLayerWithGrid
 from core.layers.grid_cell_layer import GridCellLayer
 from core.layers.reward_cell_layer import RewardCellLayer
 from core.robot.robot_mode import RobotMode
+from data_manager import archive_trial_data
 
 # --- PyTorch seeds / random ---
 # torch.manual_seed(5)
@@ -31,90 +34,97 @@ from core.robot.robot_mode import RobotMode
 # rng = default_rng(5)  # or keep it as is
 np.set_printoptions(precision=2)
 
-class DriverGrid(Supervisor):
-    def __init__(self):
-        super(DriverGrid, self).__init__()
-        # Use self.getFromDef("agent") to get robot instance, consistent with driver.py
-        self.robot = self.getFromDef("agent")  # Removed robot: RobotInterface parameter
+class DriverGridMT(Supervisor):
+    def __init__(self, **kwargs):
+        """Initializes the driver with standard and grid cell parameters.
+        
+        Args:
+            **kwargs: Parameters for robot behavior and model configuration.
+            
+        Expected parameters include standard params like:
+            environment_label, max_runtime_hours, randomize_start_loc, start_loc,
+            goal_location, mode, movement_method, etc.
+            
+        And grid cell specific params like:
+            num_grid_cells, grid_influence, rotation_range, spread_range,
+            x_trans_range, y_trans_range, scale_multiplier, frequency_divisor
+        """
+        super().__init__()
+        self.saved_once = False
+        
+        # Store standard parameters (from AlexDriver)
+        self.environment_label = kwargs.get("environment_label", "default_env")
+        self.max_runtime_hours = kwargs.get("max_runtime_hours", 2)
+        self.randomize_start_loc = kwargs.get("randomize_start_loc", True)
+        self.start_loc = kwargs.get("start_loc", [4, -4])
+        self.goal_location = kwargs.get("goal_location", [-3, 3])
+        self.robot_mode = kwargs.get("mode", RobotMode.PLOTTING)
+        self.movement_method = kwargs.get("movement_method", "default")
+        self.sigma_ang = kwargs.get("sigma_ang", 0.01)
+        self.sigma_d = kwargs.get("sigma_d", 0.5)
+        self.max_dist = kwargs.get("max_dist", 10)
+        self.num_bvc_per_dir = kwargs.get("num_bvc_per_dir", 50)
+        self.num_place_cells = kwargs.get("num_place_cells", 500)
+        self.n_hd = kwargs.get("n_hd", 8)
+        self.save_trial_data = kwargs.get("save_trial_data", False)
+        self.trial_name = kwargs.get("trial_name", "none")
+        self.run_multiple_trials = False  # Always false internally
+        self.enable_ojas = kwargs.get("enable_ojas", None)
+        self.enable_stdp = kwargs.get("enable_stdp", None)
+        self.world_name = kwargs.get("world_name", None)
+        
+        # Store grid cell parameters (from DriverGrid)
+        self.num_grid_cells = kwargs.get("num_grid_cells", 400)
+        self.grid_influence = kwargs.get("grid_influence", 0.5)
+        self.rotation_range = kwargs.get("rotation_range", (0, 90))
+        self.spread_range = kwargs.get("spread_range", (1.2, 1.2))
+        self.x_trans_range = kwargs.get("x_trans_range", (-1.0, 1.0))
+        self.y_trans_range = kwargs.get("y_trans_range", (-1.0, 1.0))
+        self.scale_multiplier = kwargs.get("scale_multiplier", 5.0)
+        self.frequency_divisor = kwargs.get("frequency_divisor", 1.0)
+        
+        # Call initialization to set up sensors, actuators, and networks
+        self.initialization()
+
+    def initialization(self):
+        """Initialize the robot, neural layers, and history maps with grid cell integration."""
+        # Get the robot node
+        self.robot = self.getFromDef("agent")
+        # Set device and dtype
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.dtype = torch.float32
         self.step_count = 0
 
-    def initialization(
-        self,
-        mode: RobotMode,
-        run_time_hours: int = 2,
-        randomize_start_loc: bool = True,
-        start_loc: Optional[List[float]] = None,
-        enable_ojas: Optional[bool] = None,
-        enable_stdp: Optional[bool] = None,
-        world_name: Optional[str] = None,
-        goal_location: Optional[List[float]] = None,
-        max_dist: float = 10,
-        show_bvc_activation: bool = False,
-        num_place_cells: int = 500,
-        num_grid_cells: int = 1000,
-        grid_influence: float = 0.5,
-    ):
-        """Initialize the robot, neural layers, and history maps with grid cell integration.
+        self.show_bvc_activation = False
 
-        Args:
-            mode (RobotMode): Operating mode for the robot.
-            run_time_hours (int): Total simulation run time in hours.
-            randomize_start_loc (bool): Whether to randomize the robot's starting location.
-            start_loc (Optional[List[float]]): Specific starting location [x, y].
-            enable_ojas (Optional[bool]): Enable Oja's learning rule.
-            enable_stdp (Optional[bool]): Enable Spike-Timing-Dependent Plasticity.
-            world_name (Optional[str]): Name of the simulation world.
-            goal_location (Optional[List[float]]): Target [x, y] coordinates.
-            max_dist (float): Maximum distance for boundary detection.
-            show_bvc_activation (bool): Whether to visualize BVC activations.
-            num_place_cells (int): Number of place cells.
-            num_modules (int): Number of grid cell modules.
-            grid_spacings (List[float]): Spatial scales for grid modules.
-            num_cells_per_module (int): Number of grid cells per module.
-        """
-        self.robot_mode = mode
-        self.show_bvc_activation = show_bvc_activation
-
-        # Set world name and directories (unchanged from driver.py)
-        if world_name is None:
+        # Determine world name if not provided
+        if self.world_name is None:
             world_path = self.getWorldPath()
-            world_name = os.path.splitext(os.path.basename(world_path))[0]
-        self.world_name = world_name
+            self.world_name = os.path.splitext(os.path.basename(world_path))[0]
+
+        # Set directory paths for saving data
         self.hmap_dir = os.path.join("pkl", self.world_name, "hmaps")
         self.network_dir = os.path.join("pkl", self.world_name, "networks")
         os.makedirs(self.hmap_dir, exist_ok=True)
         os.makedirs(self.network_dir, exist_ok=True)
 
-        # Model parameters (unchanged, except num_place_cells is now a parameter)
-        self.num_place_cells = num_place_cells
-        self.num_bvc_per_dir = 50
-        self.sigma_r = 1.0
-        self.sigma_theta = 1
-        self.n_hd = 8
+        # Model parameters
         self.timestep = 32 * 3
-        self.tau_w = 5
+        self.tau_w = 5  # time constant for the window function
 
-        # Robot parameters (unchanged from driver.py)
+        # Robot parameters
         self.max_speed = 16
-        self.max_dist = max_dist
         self.left_speed = self.max_speed
         self.right_speed = self.max_speed
         self.wheel_radius = 0.031
         self.axle_length = 0.271756
-        self.run_time_minutes = run_time_hours * 60
+        self.run_time_minutes = self.max_runtime_hours * 60
         self.step_count = 0
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
         self.goal_r = {"explore": 0.3, "exploit": 0.5}
 
-        if goal_location is not None:
-            self.goal_location = goal_location
-        else:
-            self.goal_location = [-3, 3]
-
-        # Set starting location (unchanged from driver.py, but use np.random)
-        if randomize_start_loc:
+        # Set starting position
+        if self.randomize_start_loc:
             while True:
                 INITIAL = [np.random.uniform(-2.3, 2.3), 0, np.random.uniform(-2.3, 2.3)]
                 dist_to_goal = np.sqrt(
@@ -126,10 +136,10 @@ class DriverGrid(Supervisor):
             self.robot.getField("translation").setSFVec3f(INITIAL)
             self.robot.resetPhysics()
         else:
-            self.robot.getField("translation").setSFVec3f([start_loc[0], 0, start_loc[1]])
+            self.robot.getField("translation").setSFVec3f([self.start_loc[0], 0, self.start_loc[1]])
             self.robot.resetPhysics()
 
-        # Initialize sensors and motors (unchanged from driver.py)
+        # Initialize sensors and actuators
         self.keyboard = self.getKeyboard()
         self.keyboard.enable(self.timestep)
         self.compass = self.getDevice("compass")
@@ -149,25 +159,25 @@ class DriverGrid(Supervisor):
         self.right_position_sensor = self.getDevice("right wheel sensor")
         self.right_position_sensor.enable(self.timestep)
 
-        # Initialize boundaries (unchanged from driver.py)
+        # Initialize boundaries
         self.lidar_resolution = 720
         self.boundaries = torch.zeros((self.lidar_resolution, 1), device=self.device)
 
-        # Initialize layers
+        # In LEARN_OJAS mode, clear any previous network files
         if self.robot_mode == RobotMode.LEARN_OJAS:
             self.clear()
 
-        # Initialize head direction layer (unchanged, but ensure device consistency)
+        # Initialize head direction layer
         self.head_direction_layer = HeadDirectionLayer(
             num_cells=self.n_hd, device=self.device
         )
 
-        # Initialize BVC layer (unchanged from driver.py)
+        # Initialize BVC layer
         bvc = BoundaryVectorCellLayer(
             n_res=self.lidar_resolution,
             n_hd=self.n_hd,
-            sigma_theta=self.sigma_theta,
-            sigma_r=self.sigma_r,
+            sigma_theta=self.sigma_ang,
+            sigma_r=self.sigma_d,
             max_dist=self.max_dist,
             num_bvc_per_dir=self.num_bvc_per_dir,
             device=self.device,
@@ -175,25 +185,32 @@ class DriverGrid(Supervisor):
 
         # Initialize grid cell layer (new for grid integration)
         self.gcn = GridCellLayer(
-            num_cells=num_grid_cells,
+            num_cells=self.num_grid_cells,
+            rotation_range=self.rotation_range,
+            spread_range=self.spread_range,
+            x_trans_range=self.x_trans_range,
+            y_trans_range=self.y_trans_range,
+            scale_multiplier=self.scale_multiplier,
+            frequency_divisor=self.frequency_divisor,
+            device=self.device
         )
 
-        # Load or initialize place cell network with grid inputs (modified)
+        # Load or initialize place cell network with grid inputs
         self.load_pcn(
             bvc_layer=bvc,
-            num_place_cells=num_place_cells,
-            num_grid_cells=num_grid_cells,
+            num_place_cells=self.num_place_cells,
+            num_grid_cells=self.num_grid_cells,
             timestep=self.timestep,
             n_hd=self.n_hd,
-            enable_ojas=enable_ojas,
-            enable_stdp=enable_stdp,
-            grid_influence = grid_influence,
+            enable_ojas=self.enable_ojas,
+            enable_stdp=self.enable_stdp,
+            grid_influence=self.grid_influence,
             device=self.device,
         )
 
-        # Load or initialize reward cell network (unchanged from driver.py)
+        # Load or initialize reward cell network
         self.load_rcn(
-            num_place_cells=num_place_cells,
+            num_place_cells=self.num_place_cells,
             num_replay=3,
             learning_rate=0.1,
             device=self.device,
@@ -202,7 +219,7 @@ class DriverGrid(Supervisor):
         # Initialize history maps (added hmap_gcn for grid cells)
         self.hmap_loc = np.zeros((self.num_steps, 3))
         self.hmap_pcn = torch.zeros(
-            (self.num_steps, num_place_cells), device=self.device, dtype=self.dtype
+            (self.num_steps, self.num_place_cells), device=self.device, dtype=self.dtype
         )
         self.hmap_bvc = torch.zeros(
             (self.num_steps, bvc.num_bvc), device=self.device, dtype=self.dtype
@@ -211,10 +228,10 @@ class DriverGrid(Supervisor):
             (self.num_steps, self.n_hd), device=self.device, dtype=self.dtype
         )
         self.hmap_gcn = torch.zeros(
-            (self.num_steps, self.gcn.total_grid_cells), device=self.device, dtype=self.dtype
+            (self.num_steps, self.num_grid_cells), device=self.device, dtype=self.dtype
         )
 
-        # Additional setup (unchanged from driver.py)
+        # Additional setup
         self.directional_reward_estimates = torch.zeros(self.n_hd, device=self.device)
         self.step(self.timestep)
         self.step_count += 1
@@ -234,20 +251,9 @@ class DriverGrid(Supervisor):
         enable_stdp: Optional[bool] = None,
         grid_influence: float = 0.5,
     ):
-        """Load or initialize the place cell network with grid inputs.
-
-        Args:
-            bvc_layer (BoundaryVectorCellLayer): BVC layer instance.
-            num_place_cells (int): Number of place cells.
-            num_grid_cells (int): Number of grid cells.
-            timestep (int): Simulation timestep in ms.
-            n_hd (int): Number of head direction cells.
-            device (torch.device): Computation device.
-            enable_ojas (Optional[bool]): Enable Oja's rule.
-            enable_stdp (Optional[bool]): Enable STDP.
-        """
+        """Load or initialize the place cell network with grid inputs."""
         try:
-            network_path = os.path.join(self.network_dir, "pcn_with_grid.pkl")
+            network_path = os.path.join(self.network_dir, "pcn.pkl")
             with open(network_path, "rb") as f:
                 self.pcn = pickle.load(f)
                 self.pcn.reset_activations()
@@ -280,7 +286,6 @@ class DriverGrid(Supervisor):
                 RobotMode.EXPLOIT,
             )
 
-    # load_rcn method (unchanged from driver.py)
     def load_rcn(
         self,
         num_place_cells: int,
@@ -288,6 +293,7 @@ class DriverGrid(Supervisor):
         learning_rate: float,
         device: torch.device,
     ):
+        """Load or initialize the reward cell network."""
         try:
             network_path = os.path.join(self.network_dir, "rcn.pkl")
             with open(network_path, "rb") as f:
@@ -304,42 +310,215 @@ class DriverGrid(Supervisor):
             print("Initialized new RCN")
         return self.rcn
 
-    ########################################### RUN LOOP ###########################################
-
     def run(self):
-        """Runs the main control loop of the robot.
-
-        The method manages the robot's behavior based on its current mode:
-        - MANUAL_CONTROL: Allows user keyboard control
-        - LEARN_OJAS/LEARN_HEBB/DMTP/PLOTTING: Runs exploration behavior
-        - EXPLOIT: Runs goal-directed navigation
-        - RECORDING: Records sensor data
-        """
-
+        """Main control loop for the robot."""
+        if not hasattr(self, 'trial_start_time'):
+            self.trial_start_time = self.getTime()
+        self.trial_finished = False
+        
         print(f"Starting robot in {self.robot_mode}")
         print(f"Goal at {self.goal_location}")
-
-        while True:
+        
+        while not self.trial_finished:
             if self.robot_mode == RobotMode.MANUAL_CONTROL:
                 self.manual_control()
-
-            elif (
-                self.robot_mode == RobotMode.LEARN_OJAS
-                or self.robot_mode == RobotMode.LEARN_HEBB
-                or self.robot_mode == RobotMode.DMTP
-                or self.robot_mode == RobotMode.PLOTTING
-            ):
+            elif self.robot_mode in (RobotMode.LEARN_OJAS, RobotMode.LEARN_HEBB,
+                                     RobotMode.DMTP, RobotMode.PLOTTING):
                 self.explore()
-
             elif self.robot_mode == RobotMode.EXPLOIT:
                 self.exploit()
-
             elif self.robot_mode == RobotMode.RECORDING:
                 self.recording()
-
             else:
                 print("Unknown state. Exiting...")
                 break
+                
+        # When the trial ends, pause the simulation
+        self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
+    
+    def trial_setup(self, trial_params: dict):
+        """Update instance parameters and reset simulation state for a new trial."""
+        # Update standard parameters from the trial dictionary
+        self.environment_label = trial_params.get("environment_label", self.environment_label)
+        self.max_runtime_hours = trial_params.get("max_runtime_hours", self.max_runtime_hours)
+        self.randomize_start_loc = trial_params.get("randomize_start_loc", self.randomize_start_loc)
+        self.start_loc = trial_params.get("start_loc", self.start_loc)
+        self.goal_location = trial_params.get("goal_location", self.goal_location)
+        self.robot_mode = trial_params.get("mode", self.robot_mode)
+        self.movement_method = trial_params.get("movement_method", self.movement_method)
+        self.sigma_ang = trial_params.get("sigma_ang", self.sigma_ang)
+        self.sigma_d = trial_params.get("sigma_d", self.sigma_d)
+        self.max_dist = trial_params.get("max_dist", self.max_dist)
+        self.num_bvc_per_dir = trial_params.get("num_bvc_per_dir", self.num_bvc_per_dir)
+        self.num_place_cells = trial_params.get("num_place_cells", self.num_place_cells)
+        self.n_hd = trial_params.get("n_hd", self.n_hd)
+        self.save_trial_data = trial_params.get("save_trial_data", self.save_trial_data)
+        self.trial_name = trial_params.get("trial_name", self.trial_name)
+        self.enable_ojas = trial_params.get("enable_ojas", self.enable_ojas)
+        self.enable_stdp = trial_params.get("enable_stdp", self.enable_stdp)
+        
+        # Update grid cell parameters
+        self.num_grid_cells = trial_params.get("num_grid_cells", self.num_grid_cells)
+        self.grid_influence = trial_params.get("grid_influence", self.grid_influence)
+        self.rotation_range = trial_params.get("rotation_range", self.rotation_range)
+        self.spread_range = trial_params.get("spread_range", self.spread_range)
+        self.x_trans_range = trial_params.get("x_trans_range", self.x_trans_range)
+        self.y_trans_range = trial_params.get("y_trans_range", self.y_trans_range)
+        self.scale_multiplier = trial_params.get("scale_multiplier", self.scale_multiplier)
+        self.frequency_divisor = trial_params.get("frequency_divisor", self.frequency_divisor)
+        
+        # Reset the robot's position
+        if self.randomize_start_loc:
+            while True:
+                INITIAL = [np.random.uniform(-2.3, 2.3), 0, np.random.uniform(-2.3, 2.3)]
+                dist_to_goal = np.sqrt(
+                    (INITIAL[0] - self.goal_location[0]) ** 2
+                    + (INITIAL[2] - self.goal_location[1]) ** 2
+                )
+                if dist_to_goal >= 1.0:
+                    break
+            self.robot.getField("translation").setSFVec3f(INITIAL)
+            self.robot.resetPhysics()
+        else:
+            self.robot.getField("translation").setSFVec3f([self.start_loc[0], 0, self.start_loc[1]])
+            self.robot.resetPhysics()
+        
+        # Reset internal simulation timing and history maps
+        self.run_time_minutes = self.max_runtime_hours * 60
+        self.step_count = 0
+        self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
+        
+        # Reset history maps
+        self.hmap_loc = np.zeros((self.num_steps, 3))
+        self.hmap_pcn = torch.zeros(
+            (self.num_steps, self.num_place_cells), device=self.device, dtype=self.dtype
+        )
+        self.hmap_bvc = torch.zeros(
+            (self.num_steps, self.num_bvc_per_dir * self.n_hd), device=self.device, dtype=self.dtype
+        )
+        self.hmap_hdn = torch.zeros(
+            (self.num_steps, self.n_hd), device=self.device, dtype=self.dtype
+        )
+        self.hmap_gcn = torch.zeros(
+            (self.num_steps, self.num_grid_cells), device=self.device, dtype=self.dtype
+        )
+        
+        # Clear saved networks
+        pcn_path = os.path.join(self.network_dir, "pcn.pkl")
+        rcn_path = os.path.join(self.network_dir, "rcn.pkl")
+        if os.path.exists(pcn_path):
+            os.remove(pcn_path)
+        if os.path.exists(rcn_path):
+            os.remove(rcn_path)
+        
+        # Clear any saved files
+        self.clear()
+        
+        # Re-initialize BVC layer
+        bvc = BoundaryVectorCellLayer(
+            n_res=self.lidar_resolution,
+            n_hd=self.n_hd,
+            sigma_theta=self.sigma_ang,
+            sigma_r=self.sigma_d,
+            max_dist=self.max_dist,
+            num_bvc_per_dir=self.num_bvc_per_dir,
+            device=self.device,
+        )
+        
+        # Re-initialize grid cell layer
+        self.gcn = GridCellLayer(
+            num_cells=self.num_grid_cells,
+            rotation_range=self.rotation_range,
+            spread_range=self.spread_range,
+            x_trans_range=self.x_trans_range,
+            y_trans_range=self.y_trans_range,
+            scale_multiplier=self.scale_multiplier,
+            frequency_divisor=self.frequency_divisor,
+            device=self.device
+        )
+        
+        # Reload networks with new parameters
+        self.load_pcn(
+            bvc_layer=bvc,
+            num_place_cells=self.num_place_cells,
+            num_grid_cells=self.num_grid_cells,
+            timestep=self.timestep,
+            n_hd=self.n_hd,
+            enable_ojas=self.enable_ojas,
+            enable_stdp=self.enable_stdp,
+            grid_influence=self.grid_influence,
+            device=self.device,
+        )
+        self.load_rcn(
+            num_place_cells=self.num_place_cells,
+            num_replay=3,
+            learning_rate=0.1,
+            device=self.device,
+        )
+        
+        self.trial_finished = False
+        self.saved_once = False
+
+    def run_trial(self):
+        """Run a single trial until the trial_finished flag is set."""
+        print(f"Starting trial: {self.trial_name}, runtime: {self.max_runtime_hours} hours")
+        
+        while not self.trial_finished:
+            if self.robot_mode == RobotMode.MANUAL_CONTROL:
+                self.manual_control()
+            elif self.robot_mode in (RobotMode.LEARN_OJAS, RobotMode.LEARN_HEBB,
+                                     RobotMode.DMTP, RobotMode.PLOTTING):
+                self.explore()
+            elif self.robot_mode == RobotMode.EXPLOIT:
+                self.exploit()
+            elif self.robot_mode == RobotMode.RECORDING:
+                self.recording()
+            else:
+                print("Unknown state. Exiting trial...")
+                break
+                
+        print(f"Trial {self.trial_name} finished.")
+
+    def run_trials(trial_list):
+        """
+        Run multiple trials in sequence, using the provided trial configurations.
+        """
+        if not trial_list:
+            print("No trials to run - empty trial list")
+            return
+            
+        # Default params with hard-coded disable_save_popup
+        default_params = trial_list[0].copy()
+        default_params["disable_save_popup"] = True  # Hard-coded to disable popups
+        
+        # Create a single driver instance that will be reused for all trials
+        print(f"Creating driver with default parameters from first trial")
+        bot = DriverGridMT(**default_params)
+        
+        # Run each trial in sequence
+        for i, trial_params in enumerate(trial_list):
+            print(f"\nRunning trial {i+1} of {len(trial_list)}: {trial_params.get('trial_name', f'Trial_{i+1}')}")
+            
+            # Hard-code disable_save_popup to always be True
+            trial_params["disable_save_popup"] = True
+            
+            # Set up the robot and environment for this trial
+            bot.trial_setup(trial_params)
+            
+            # Record the trial's start time for proper duration tracking
+            bot.trial_start_time = bot.getTime()
+            
+            # Execute the trial until completion
+            bot.run_trial()
+            
+            # Just set to FAST mode between trials but don't pause - exactly as in alex_controller
+            bot.simulationSetMode(bot.SIMULATION_MODE_FAST)
+            
+            print(f"Trial {i+1} completed")
+        
+        # Only pause after ALL trials are complete
+        print("\nAll trials have been completed. Pausing simulation.")
+        bot.simulationSetMode(bot.SIMULATION_MODE_PAUSE)
 
     ########################################### EXPLORE ###########################################
 
@@ -544,18 +723,18 @@ class DriverGrid(Supervisor):
         If reached and in the correct mode, call auto_pilot() and save logs.
         """
         curr_pos = self.robot.getField("translation").getSFVec3f()
-
-        if (
-            self.robot_mode
-            in (RobotMode.LEARN_OJAS, RobotMode.LEARN_HEBB, RobotMode.PLOTTING)
-            and self.getTime() >= 60 * self.run_time_minutes
-        ):
+        elapsed = self.getTime() - self.trial_start_time  # Relative trial time in seconds
+        trial_duration = 60 * self.run_time_minutes
+        
+        if self.robot_mode in (RobotMode.LEARN_OJAS, RobotMode.LEARN_HEBB, RobotMode.PLOTTING) and elapsed >= trial_duration:
             self.stop()
-            self.save(
-                include_pcn=self.robot_mode != RobotMode.PLOTTING,
-                include_rcn=self.robot_mode != RobotMode.PLOTTING,
-                include_hmaps=True,
-            )
+            # Set to real-time but DON'T pause
+            self.simulationSetMode(self.SIMULATION_MODE_REAL_TIME)
+            if not self.saved_once:
+                # Original alex_driver behavior - directly check disable_save_popup attribute
+                self.save(show_popup=(not getattr(self, "disable_save_popup", True)))
+                self.saved_once = True
+            self.trial_finished = True
 
         elif self.robot_mode == RobotMode.DMTP and torch.allclose(
             torch.tensor(self.goal_location, dtype=self.dtype, device=self.device),
@@ -836,42 +1015,43 @@ class DriverGrid(Supervisor):
         else:
             return 0.0
 
-    def save(
-        self,
-        include_pcn: bool = False,
-        include_rcn: bool = False,
-        include_hmaps: bool = False,
-    ):
+    def save(self, show_popup: bool = True, include_pcn: bool = True, include_rcn: bool = True, include_hmaps: bool = True):
         """
-        Saves the state of the PCN (Place Cell Network), RCN (Reward Cell Network), and optionally
-        the maps that store the agent's movement and activations.
+        Saves the state of the PCN, RCN, and hmap data.
+        
+        First saves to the standard pkl directories (hmap_dir and network_dir).
+        Then, if save_trial_data is True, archives a copy to the trial_data folder.
+        
+        Args:
+            show_popup: Whether to show a confirmation popup
+            include_pcn: Whether to save the Place Cell Network
+            include_rcn: Whether to save the Reward Cell Network
+            include_hmaps: Whether to save the history maps
         """
         files_saved = []
-
-        # Ensure directories exist
         os.makedirs(self.hmap_dir, exist_ok=True)
         os.makedirs(self.network_dir, exist_ok=True)
-
-        # Save the Place Cell Network (PCN)
+        
+        # Save the Place Cell Network
         if include_pcn:
-            pcn_path = os.path.join(self.network_dir, "pcn.pkl")
+            pcn_path = os.path.join(self.network_dir, "pcn_with_grid.pkl")
             with open(pcn_path, "wb") as output:
                 pickle.dump(self.pcn, output)
                 files_saved.append(pcn_path)
-            # Save Grid Cell Network (GCN)
+            # Save Grid Cell Network
             gcn_path = os.path.join(self.network_dir, "gcn.pkl")
             with open(gcn_path, "wb") as output:
                 pickle.dump(self.gcn, output)
                 files_saved.append(gcn_path)
 
-        # Save the Reward Cell Network (RCN)
+        # Save the Reward Cell Network
         if include_rcn:
             rcn_path = os.path.join(self.network_dir, "rcn.pkl")
             with open(rcn_path, "wb") as output:
                 pickle.dump(self.rcn, output)
                 files_saved.append(rcn_path)
 
-        # Save the history maps if specified
+        # Save the history maps
         if include_hmaps:
             hmap_loc_path = os.path.join(self.hmap_dir, "hmap_loc.pkl")
             with open(hmap_loc_path, "wb") as output:
@@ -886,7 +1066,8 @@ class DriverGrid(Supervisor):
 
             hmap_hdn_path = os.path.join(self.hmap_dir, "hmap_hdn.pkl")
             with open(hmap_hdn_path, "wb") as output:
-                pickle.dump(self.hmap_hdn[: self.step_count], output)
+                hdn_cpu = self.hmap_hdn[: self.step_count].cpu().numpy()
+                pickle.dump(hdn_cpu, output)
                 files_saved.append(hmap_hdn_path)
 
             hmap_bvc_path = os.path.join(self.hmap_dir, "hmap_bvc.pkl")
@@ -894,6 +1075,7 @@ class DriverGrid(Supervisor):
                 bvc_cpu = self.hmap_bvc[: self.step_count].cpu().numpy()
                 pickle.dump(bvc_cpu, output)
                 files_saved.append(hmap_bvc_path)
+                
             # Save grid cell history map
             hmap_gcn_path = os.path.join(self.hmap_dir, "hmap_gcn.pkl")
             with open(hmap_gcn_path, "wb") as output:
@@ -901,24 +1083,55 @@ class DriverGrid(Supervisor):
                 pickle.dump(gcn_cpu, output)
                 files_saved.append(hmap_gcn_path)
 
-        # Show a message box to confirm saving
-        root = tk.Tk()
-        root.withdraw()  # Hide the main window
-        root.attributes("-topmost", True)  # Always keep the window on top
-        root.update()
-        messagebox.showinfo("Information", "Press OK to save data")
-        root.destroy()  # Destroy the main window
-
-        self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
+        # Show a message box to confirm saving if requested
+        if show_popup:
+            root = tk.Tk()
+            root.withdraw()  # Hide the main window
+            root.attributes("-topmost", True)  # Always keep the window on top
+            root.update()
+            messagebox.showinfo("Information", "Press OK to save data")
+            root.destroy()  # Destroy the main window
+            self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
 
         print(f"Files Saved: {files_saved}")
         print("Saving Done!")
+        
+        # Archive the trial data if requested
+        # This *copies* the data (doesn't move it), so original files stay in place
+        if self.save_trial_data:
+            trial_params = {
+                "environment_label": self.environment_label,
+                "max_runtime_hours": self.max_runtime_hours,
+                "randomize_start_loc": self.randomize_start_loc,
+                "start_loc": self.start_loc,
+                "goal_location": self.goal_location,
+                "mode": str(self.robot_mode),
+                "movement_method": self.movement_method,
+                "sigma_ang": self.sigma_ang,
+                "sigma_d": self.sigma_d,
+                "max_dist": self.max_dist,
+                "num_bvc_per_dir": self.num_bvc_per_dir,
+                "num_place_cells": self.num_place_cells,
+                "n_hd": self.n_hd,
+                "num_grid_cells": self.num_grid_cells,
+                "grid_influence": self.grid_influence,
+                "scale_multiplier": self.scale_multiplier,
+                "rotation_range": str(self.rotation_range),  # Convert tuple to string for JSON
+                "spread_range": str(self.spread_range),
+                "x_trans_range": str(self.x_trans_range),
+                "y_trans_range": str(self.y_trans_range),
+                "frequency_divisor": self.frequency_divisor,
+                "trial_name": self.trial_name
+            }
+            
+            print("Archiving trial data...")
+            archive_trial_data(trial_params,
+                            pkl_base_dir=os.path.join("pkl", self.world_name),
+                            controller_base_dir=os.path.join(os.path.dirname(__file__), "trial_data"))
+            print(f"Trial data archived for: {self.trial_name}")
 
     def clear(self):
-        """
-        Clears the saved state files for the Place Cell Network (PCN), Reward Cell Network (RCN),
-        and the history maps by removing their corresponding pickle files from the appropriate directories.
-        """
+        """Clears saved network and history files."""
         # Network files in network_dir
         network_files = [
             os.path.join(self.network_dir, "pcn.pkl"),

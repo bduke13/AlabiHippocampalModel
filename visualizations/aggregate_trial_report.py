@@ -23,8 +23,8 @@ import matplotlib.pyplot as plt
 # Set this to the root folder of your project.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent  
 # You can change the following paths if needed.
-TRIAL_DATA_ROOT = PROJECT_ROOT / "webots" / "controllers" / "alex_controller" / "trial_data"
-OUTPUT_DIR = PROJECT_ROOT / "webots" / "controllers" / "alex_controller" / "trial_report"
+TRIAL_DATA_ROOT = PROJECT_ROOT / "webots" / "controllers" / "create3_grid_v1" / "trial_data"
+OUTPUT_DIR = PROJECT_ROOT / "webots" / "controllers" / "create3_grid_v1" / "trial_report"
 
 sys.path.append(str(PROJECT_ROOT))
 
@@ -236,7 +236,7 @@ def aggregate_trials(trial_data_root, output_dir):
                 hmap_pcn=hmap_pcn,
                 hmap_x=hmap_x,
                 hmap_z=hmap_z,
-                gridsize=80,
+                gridsize=120,
                 num_cells_to_sample=None,
                 save_path=str(image_path)
             )
@@ -263,6 +263,6 @@ def aggregate_trials(trial_data_root, output_dir):
 
 if __name__ == "__main__":
     # Define target directories using the configurable variables.
-    trial_data_root = os.path.join("webots", "controllers", "alex_controller", "trial_data")
-    output_dir = os.path.join("webots", "controllers", "alex_controller", "trial_report")
+    trial_data_root = os.path.join("webots", "controllers", "create3_grid_v1", "trial_data")
+    output_dir = os.path.join("webots", "controllers", "create3_grid_v1", "trial_report")
     aggregate_trials(trial_data_root, output_dir)

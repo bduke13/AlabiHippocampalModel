@@ -4,7 +4,7 @@ import numpy as np
 class GridCellLayer:
     def __init__(
         self,
-        num_cells: int = 3000,  # Total number of grid cells
+        num_cells: int = 400,  # Total number of grid cells
         size_range: tuple = (0.5, 0.5),  # Range for the grid scale parameter
         rotation_range: tuple = (0, 90),  # Range for rotation angles (in degrees)
         spread_range: tuple = (1.2, 1.2),  # Range for the spread parameter

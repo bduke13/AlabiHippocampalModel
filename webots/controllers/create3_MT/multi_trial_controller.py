@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.append(str(PROJECT_ROOT))
 
 from core.robot.robot_mode import RobotMode
-from alex_driver import AlexDriver
+from driver_multi_tiral import MultiTrialDriver
 
 def generate_trial_list(grid_params, fixed_params, name_func=None):
     """
@@ -91,7 +91,7 @@ print(f"Total trials generated: {len(trial_list)}")
 
 
 def run_trials(trial_list):
-    # default_params provides a baseline configuration to create the initial AlexDriver instance.
+    # default_params provides a baseline configuration to create the initial Driver instance.
     # Since only one Robot instance is allowed per controller process, we create a single driver.
     # Then, before each trial, we call bot.trial_setup(trial_params) to update its parameters and reset its state.
     default_params = {
@@ -113,7 +113,7 @@ def run_trials(trial_list):
         "run_multiple_trials": False,  # Always false internally.
         "disable_save_popup": True
     }
-    bot = AlexDriver(**default_params)
+    bot = MultiTrialDriver(**default_params)
     
     for trial_params in trial_list:
         print(f"Starting trial with parameters: {trial_params}")

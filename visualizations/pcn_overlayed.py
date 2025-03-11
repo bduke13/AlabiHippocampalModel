@@ -38,7 +38,7 @@ def plot_overlayed_cells(
     hmap_pcn: np.ndarray,
     hmap_x: np.ndarray,
     hmap_y: np.ndarray,
-    gridsize: int = 100,
+    gridsize: int = 50,
     num_cells_to_sample: Optional[int] = None,
     show_plot: bool = True,
     save_path: Optional[str] = None,

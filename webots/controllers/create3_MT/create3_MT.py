@@ -1,4 +1,4 @@
-""""alex_controller for iCreate controller."""
+""""create3_MT for iCreate controller."""
 import sys
 from pathlib import Path
 
@@ -7,7 +7,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.append(str(PROJECT_ROOT))
 
 from core.robot.robot_mode import RobotMode
-from alex_driver import AlexDriver
+from driver_multi_tiral import MultiTrialDriver
 
 # ----- Global flag to choose multi-trial mode -----
 MULTI_TRIAL_MODE = False  # Set to True to run multiple trials
@@ -39,5 +39,5 @@ else:
         "trial_name": "10x10_Test",  # if "none", a trial folder name will be auto-generated
         "run_multiple_trials": False  # always false in single-trial mode
     }
-    bot = AlexDriver(**trial_params)
+    bot = MultiTrialDriver(**trial_params)
     bot.run()  # run the single trial as before

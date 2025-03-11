@@ -1,5 +1,5 @@
 """
-alex_driver.py
+driver_multi_trial.py
 
 Controls robot navigation and learning using neural network layers for place and reward cells.
 This updated version supports multi-trial operation via new trial_setup() and run_trial() methods.
@@ -37,9 +37,9 @@ from data_manager import archive_trial_data
 np.set_printoptions(precision=2)
 
 
-class AlexDriver(Supervisor):
+class MultiTrialDriver(Supervisor):
     """
-    AlexDriver controls robot navigation and learning using neural network layers
+    MultiTrialDriver controls robot navigation and learning using neural network layers
     for place and reward cells. This version accepts a range of parameters to ease
     trial configuration and supports multi-trial operation via trial_setup() and run_trial().
     """
