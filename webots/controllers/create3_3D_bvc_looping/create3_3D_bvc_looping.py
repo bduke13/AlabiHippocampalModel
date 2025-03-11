@@ -48,9 +48,16 @@ for index, model in enumerate(model_names):
     phi_vert_preferred = experimental_phi_vert_preferred[index]
     num_bvc_per_dir = experimental_num_bvc_per_dir[index]
     sigma_rs = [0.5] * len(phi_vert_preferred)
-    sigma_thetas = [0.02] * len(phi_vert_preferred)
-    sigma_phis = [0.02] * len(phi_vert_preferred)
-    scaling_factors = [1.0, 0.9, 0.8, 0.7]
+    sigma_thetas = [np.radians(1)] * len(phi_vert_preferred)
+    sigma_phis = [np.radians(1)] * len(phi_vert_preferred)
+    scaling_factors = [1.0, 0.8, 0.6, 0.4][0 : len(phi_vert_preferred)]
+
+    print(f"Model: {model}")
+    print(f"vertical layers {phi_vert_preferred}")
+    print(f"sigma_rs {sigma_rs}")
+    print(f"sigma_thetas {sigma_thetas}")
+    print(f"sigma_phis {sigma_phis}")
+    print(f"scaling factors {scaling_factors}")
 
     bot.initialization(
         mode=RobotMode.LEARN_OJAS,
