@@ -5,7 +5,36 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib import rcParams
+import pandas as pd
+import hashlib
 
+CSV_PATH = "webots/controllers/create3_3D_bvc/visualizations_3D_bvc/outputs/cosine_similarities.csv"
+df = pd.read_csv(CSV_PATH)
+
+# Group by (model, environment) and extract just the columns of interest
+group_data_dict = {}
+for (model, env), group_df in df.groupby(["model", "environment"]):
+    # Sort by (x, y) so the order is consistent
+    subset = group_df[["x", "y", "cosine_similarity_sum"]].sort_values(["x", "y"])
+    # Convert to bytes
+    subset_bytes = subset.to_numpy().tobytes()
+    # Create a hash of each group’s data
+    subset_hash = hashlib.md5(subset_bytes).hexdigest()
+    group_data_dict[(model, env)] = subset_hash
+
+# Compare all pairs of groups to see if their data is identical
+keys = sorted(group_data_dict.keys())
+for i in range(len(keys)):
+    for j in range(i + 1, len(keys)):
+        group_i = keys[i]
+        group_j = keys[j]
+        if group_data_dict[group_i] == group_data_dict[group_j]:
+            print(
+                f"Group {group_i} and {group_j} have identical (x, y, similarity) data."
+            )
+
+
+# %%
 if __name__ == "__main__":
     # Set global font to Times New Roman
     plt.rcParams["font.family"] = "Times New Roman"
@@ -24,6 +53,7 @@ if __name__ == "__main__":
 
     # Define name mappings for model numbers
     MODEL_NAMES = {
+        "model1": "Model 1",
         "model2": "Model 2",
         "model3": "Model 3",
         "model4": "Model 4",
@@ -39,10 +69,12 @@ if __name__ == "__main__":
 
     # Desired model/environment order
     MODEL_ORDER = [
+        "model1",
         "model2",
         "model3",
         "model4",
     ]
+
     ENV_ORDER = [
         "env1",
         "env2",

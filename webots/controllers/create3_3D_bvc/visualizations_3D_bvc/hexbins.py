@@ -6,6 +6,7 @@ from scipy.sparse import data
 from sklearn.cluster import DBSCAN
 from collections import defaultdict
 from numpy.linalg import norm
+import torch
 
 
 # -------------- Existing functions --------------
@@ -364,72 +365,130 @@ def stack_binned_data_by_location(list_of_binned_data):
     return stacked_dict
 
 
-def compute_cosine_similarity_sums(stacked_dict, distance_threshold=2.0):
+def compute_cosine_similarity_sums_torch(
+    stacked_dict, distance_threshold=2.0, device="cuda"
+):
     """
-    Compute the sum of cosine similarities between bins in the environment, considering
-    only bins that are more than a specified distance apart.
+    Compute the sum of cosine similarities between bins in the environment,
+    considering only bins that are more than a specified distance apart.
+
+    This replicates the same math as a double-loop with:
+        if distance > distance_threshold:
+            sum_of_cosines_for_bin_i += cos_sim(i, j)
 
     Args:
     - stacked_dict: Dictionary of binned data with keys as (x, y) coordinates.
+                    Each value is a list of activation values for that bin.
     - distance_threshold: Minimum distance (in meters) to consider for similarity calculation.
+    - device: Which device to use for tensors ('cuda' or 'cpu').
 
     Returns:
-    - similarity_sums: A dictionary with keys as (x, y) and values as the sum of cosine similarities.
+    - similarity_sums: A dictionary with keys as (x, y) and values as the sum of cosine similarities
+                       (with all bins that are > distance_threshold away).
     """
-    coords = np.array(list(stacked_dict.keys()))  # Extract all bin coordinates
+
+    # 1) Gather all bin coordinates in a consistent order
+    coords_list = list(stacked_dict.keys())  # Each element is (x, y)
+    # Sort them for reproducibility (optional)
+    # coords_list.sort(key=lambda c: (c[0], c[1]))
+
+    # 2) Figure out maximum vector length among bins
+    #    (since different bins may have different # of activations appended)
+    max_len = 0
+    for coord in coords_list:
+        max_len = max(max_len, len(stacked_dict[coord]))
+
+    # 3) Build torch tensors for coordinates and activations
+    #    -- We'll zero-pad the activation vectors so they all have length = max_len
+    N = len(coords_list)
+    coords_t = torch.zeros((N, 2), dtype=torch.float32, device=device)
+    activations_t = torch.zeros((N, max_len), dtype=torch.float32, device=device)
+
+    for i, (x, y) in enumerate(coords_list):
+        coords_t[i, 0] = x
+        coords_t[i, 1] = y
+        bin_acts = stacked_dict[(x, y)]
+        # Put bin_acts into row i (zero-padded)
+        activations_t[i, : len(bin_acts)] = torch.tensor(
+            bin_acts, dtype=torch.float32, device=device
+        )
+
+    # 4) Compute NxN distance matrix
+    #    cdist on coords_t gives pairwise Euclidean distances
+    dist_matrix = torch.cdist(coords_t, coords_t, p=2)  # shape: (N, N)
+
+    # 5) Compute NxN pairwise dot products
+    #    This is the numerator for cosine similarity
+    dot_matrix = activations_t @ activations_t.T  # shape: (N, N)
+
+    # 6) Compute norms for each row, then outer product for denominators
+    norms = torch.norm(activations_t, dim=1, keepdim=True)  # shape: (N, 1)
+    denom = norms @ norms.T  # shape: (N, N)
+
+    # To avoid division-by-zero, we can clamp or mask out those pairs
+    # but in the original code, if a bin vector is zero, cos_sim is effectively 0 anyway.
+    # We'll just do a safe division:
+    denom = torch.where(denom == 0, torch.tensor(1e-12, device=device), denom)
+
+    # 7) Cosine similarity matrix
+    cos_sim_matrix = dot_matrix / denom  # shape: (N, N)
+
+    # 8) Apply distance threshold: we only include cos_sim if distance > threshold
+    mask = dist_matrix > distance_threshold  # boolean shape: (N, N)
+    # Turn that into float so we can multiply
+    mask_f = mask.float()
+
+    # 9) Multiply cos_sim by mask, then sum row-wise
+    #    cos_sim_within_thresh = 0, cos_sim_outside_thresh = cos_sim
+    cos_masked = cos_sim_matrix * mask_f
+    similarity_sums_tensor = cos_masked.sum(dim=1)  # shape: (N,)
+
+    # 10) Store results back into a dict with the same (x, y) keys
     similarity_sums = {}
-
-    # Iterate over each bin
-    for i, (x_i, y_i) in enumerate(coords):
-        vec_i = np.array(stacked_dict[(x_i, y_i)])
-        sum_similarity = 0.0
-
-        # Compare to all other bins
-        for j, (x_j, y_j) in enumerate(coords):
-            if i == j:
-                continue
-
-            # Calculate Euclidean distance
-            distance = np.sqrt((x_i - x_j) ** 2 + (y_i - y_j) ** 2)
-            if distance > distance_threshold:
-                vec_j = np.array(stacked_dict[(x_j, y_j)])
-
-                # Compute cosine similarity
-                if norm(vec_i) > 0 and norm(vec_j) > 0:
-                    cos_sim = np.dot(vec_i, vec_j) / (norm(vec_i) * norm(vec_j))
-                    sum_similarity += cos_sim
-
-        # Store the sum of similarities for this bin
-        similarity_sums[(x_i, y_i)] = sum_similarity
+    for i, (x, y) in enumerate(coords_list):
+        similarity_sums[(x, y)] = similarity_sums_tensor[i].item()
 
     return similarity_sums
 
 
-def analyze_cosine_similarity(
+def analyze_cosine_similarity_torch(
     hmap_x,
     hmap_y,
     hmap_pcn,
     gridsize=50,
     filter_bottom_ratio=0.1,
     distance_threshold=2.0,
+    device="cuda",
 ):
     """
-    Full analysis pipeline for cosine similarity in discretized activation space.
+    Full analysis pipeline for cosine similarity in discretized activation space,
+    done in parallel on a PyTorch device (CPU or GPU).
+
+    This mirrors the exact math of the original 'analyze_cosine_similarity' but uses
+    `compute_cosine_similarity_sums_torch` for the pairwise computations.
 
     Args:
     - hmap_x, hmap_y, hmap_pcn: The coordinate and activation data.
-    - gridsize: The size of the hexbin grid.
-    - filter_bottom_ratio: Ratio for filtering low activations.
+    - gridsize: The size of the hexbin grid (unused here, we rely on create_hexbin’s gridsize=50).
+    - filter_bottom_ratio: Ratio for filtering low activations in create_hexbin.
     - distance_threshold: Minimum distance (in meters) to consider for similarity calculation.
+    - device: 'cuda' or 'cpu'.
 
     Returns:
     - similarity_sums: Dictionary of cosine similarity sums for each bin.
     """
-    all_binned_data = []
 
-    # Create hexbins for all cells
-    for cell_index in range(hmap_pcn.shape[1]):
-        _, _, _, binned_data = create_hexbin(
+    # --- 1) Gather all binned data for each place cell ---
+    all_binned_data = []
+    num_cells = hmap_pcn.shape[1]
+
+    # We'll reuse your create_hexbin function exactly as-is:
+    # from your second script or a local import.
+
+    for cell_index in range(num_cells):
+        # The create_hexbin function returns: fig, ax, hb, binned_data
+        #   where binned_data is [(x, y, activation), ...]
+        fig, ax, hb, binned_data = create_hexbin(
             cell_index=cell_index,
             hmap_x=hmap_x,
             hmap_y=hmap_y,
@@ -441,11 +500,13 @@ def analyze_cosine_similarity(
         )
         all_binned_data.append(binned_data)
 
-    # Stack binned data by location
+    # --- 2) Stack binned data by bin location (x, y) ---
     stacked_dict = stack_binned_data_by_location(all_binned_data)
 
-    # Compute cosine similarity sums
-    similarity_sums = compute_cosine_similarity_sums(stacked_dict, distance_threshold)
+    # --- 3) Now compute sums of cosines in parallel on GPU/CPU ---
+    similarity_sums = compute_cosine_similarity_sums_torch(
+        stacked_dict, distance_threshold=distance_threshold, device=device
+    )
 
     return similarity_sums
 
@@ -774,9 +835,7 @@ def plot_similarity_sums(
 # -------------- Usage Example --------------
 # %%
 if __name__ == "__main__":
-    from controllers.bek_controller.visualizations.analysis_utils import *
-
-    from vis_utils import (
+    from visualizations.vis_utils import (
         load_hmaps,
         convert_xzy_hmaps,
     )
@@ -802,13 +861,14 @@ if __name__ == "__main__":
     # %%
 
     # Perform cosine similarity analysis
-    similarity_sums = analyze_cosine_similarity(
+    similarity_sums = analyze_cosine_similarity_torch(
         hmap_x,
         hmap_y,
         hmap_pcn,
         gridsize=50,
         filter_bottom_ratio=0.1,
         distance_threshold=2.0,
+        device="cuda",
     )
 
     # %%
@@ -816,8 +876,8 @@ if __name__ == "__main__":
     fig, ax, total_sum = plot_similarity_sums(
         similarity_sums,
         title="My Cosine Similarity Plot",
-        output_path=data_path,
-        close_plot=True,
+        output_path=None,
+        close_plot=False,
     )
     fig.show()
 

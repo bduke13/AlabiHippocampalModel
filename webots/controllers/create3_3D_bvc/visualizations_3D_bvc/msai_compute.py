@@ -2,9 +2,6 @@
 import os
 import numpy as np
 import pandas as pd
-from multiprocessing import Pool, cpu_count
-from functools import partial
-
 from visualizations.vis_utils import *
 from webots.controllers.create3_3D_bvc.visualizations_3D_bvc.hexbins import *
 
@@ -43,9 +40,11 @@ def process_hmap(path):
     try:
         print(f"Processing: {path}")
         model_name, env_name = parse_path_for_model_and_env(path)
-
+        print(f"model name is {model_name} and env name is {env_name}")
         # Load data
-        hmap_loc, hmap_pcn = load_hmaps(hmap_names=["hmap_loc", "hmap_pcn"])
+        hmap_loc, hmap_pcn = load_hmaps_from_dir(
+            hmap_names=["hmap_loc", "hmap_pcn"], base_dir=path
+        )
         hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
 
         if hmap_pcn is None or not isinstance(hmap_pcn, np.ndarray):
@@ -55,25 +54,25 @@ def process_hmap(path):
         all_binned_data_for_env = []
 
         # Process all cells
-        for cell_index in range(num_cells):
-            _, _, _, binned_data = create_hexbin(
-                cell_index=cell_index,
-                hmap_x=hmap_x,
-                hmap_y=hmap_y,
-                hmap_pcn=hmap_pcn,
-                normalize=True,
-                filter_bottom_ratio=0.1,
-                analyze=True,
-                close_plot=True,
-            )
-            all_binned_data_for_env.append(binned_data)
+        # for cell_index in range(num_cells):
+        #    _, _, _, binned_data = create_hexbin(
+        #        cell_index=cell_index,
+        #        hmap_x=hmap_x,
+        #        hmap_y=hmap_y,
+        #        hmap_pcn=hmap_pcn,
+        #        normalize=True,
+        #        filter_bottom_ratio=0.1,
+        #        analyze=True,
+        #        close_plot=True,
+        #    )
+        #    all_binned_data_for_env.append(binned_data)
 
         # Stack binned data
-        stacked_dict = stack_binned_data_by_location(all_binned_data_for_env)
+        # stacked_dict = stack_binned_data_by_location(all_binned_data_for_env)
 
         # Compute cosine similarity sums
-        similarity_sums = compute_cosine_similarity_sums(
-            stacked_dict, distance_threshold=2.0
+        similarity_sums = analyze_cosine_similarity_torch(
+            hmap_x=hmap_x, hmap_y=hmap_y, hmap_pcn=hmap_pcn, distance_threshold=2.0
         )
 
         return {
@@ -112,14 +111,17 @@ if __name__ == "__main__":
     print(f"Total trials to process: {len(filtered_dirs)}")
 
     # %%
-    # Process all hmaps in parallel
-    num_processes = max(1, cpu_count() - 1)  # Leave at least one CPU free
-    with Pool(processes=num_processes) as pool:
-        results = pool.map(process_hmap, filtered_dirs)
+    # Process all hmaps sequentially
+    results = []
+    total_dirs = len(filtered_dirs)
 
-    # Filter out None results
-    results = [r for r in results if r is not None]
-    print(f"Processed {len(results)} hmaps using {num_processes} processes")
+    for i, path in enumerate(filtered_dirs):
+        print(f"Processing {i+1}/{total_dirs}: {path}")
+        result = process_hmap(path)
+        if result is not None:
+            results.append(result)
+
+    print(f"Processed {len(results)} hmaps sequentially")
 
     # Consolidate results
     all_env_data = {}
