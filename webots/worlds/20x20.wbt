@@ -43,7 +43,7 @@ Pose {
       }
       geometry Cylinder {
         height 0.002
-        radius 0.8
+        radius 0.5
       }
     }
   ]

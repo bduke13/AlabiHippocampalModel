@@ -704,6 +704,7 @@ class Driver(Supervisor):
                     include_hmaps=True)
             self.done = True
             self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
+            return
 
         elif self.robot_mode == RobotMode.DMTP and torch.allclose(
             torch.tensor(self.goal_location, dtype=self.dtype, device=self.device),
@@ -719,39 +720,45 @@ class Driver(Supervisor):
             self.save(include_pcn=True, include_rcn=True)
             self.done = True
             self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
-
-        elif self.robot_mode == RobotMode.EXPLOIT and (torch.allclose(
-            torch.tensor(self.goal_location, dtype=self.dtype, device=self.device),
-            torch.tensor([curr_pos[0], curr_pos[2]], dtype=self.dtype, device=self.device),
-            atol=self.goal_r["exploit"]
-        ) or self.getTime() >= 60 * time_limit):
-            if self.stats_collector:
-                # Update and save stats once
-                self.stats_collector.update_stat("trial_id", self.trial_id)
-                self.stats_collector.update_stat("start_location", self.start_loc)
-                self.stats_collector.update_stat("goal_location", self.goal_location)
-                self.stats_collector.update_stat("total_distance_traveled", round(self.compute_path_length(), 2))
-                self.stats_collector.update_stat("total_time_secs", round(self.getTime(), 2))
-                self.stats_collector.update_stat("success", self.getTime() <= time_limit * 60)
-                self.stats_collector.save_stats(self.trial_id)
-                
-                # Print stats
-                print(f"Trial {self.trial_id} completed.")
-                print(f"Start location: {self.start_loc}")
-                print(f"Goal location: {self.goal_location}")
-                print(f"Total distance traveled: {round(self.compute_path_length(), 2)} meters.")
-                print(f"Total time taken: {round(self.getTime(), 2)} seconds.")
-                print(f"Success: {self.getTime() <= time_limit * 60}")
-                
-                self.stop()
-                self.save(save_trajectory=True)
-                self.done = True
-                return
-            else:
-                self.stop()
-                self.save()
-                self.done = True
-                self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
+            return
+        elif self.robot_mode == RobotMode.EXPLOIT:
+            # Check if either goal reached or time expired
+            goal_reached = torch.allclose(
+                torch.tensor(self.goal_location, dtype=self.dtype, device=self.device),
+                torch.tensor([curr_pos[0], curr_pos[2]], dtype=self.dtype, device=self.device),
+                atol=self.goal_r["exploit"]
+            )
+            time_expired = self.getTime() >= 30 * time_limit
+            
+            if goal_reached or time_expired:
+                if self.stats_collector:
+                    # Update and save stats once
+                    self.stats_collector.update_stat("trial_id", self.trial_id)
+                    self.stats_collector.update_stat("start_location", self.start_loc)
+                    self.stats_collector.update_stat("goal_location", self.goal_location)
+                    self.stats_collector.update_stat("total_distance_traveled", round(self.compute_path_length(), 2))
+                    self.stats_collector.update_stat("total_time_secs", round(self.getTime(), 2))
+                    self.stats_collector.update_stat("success", self.getTime() <= time_limit * 60)
+                    self.stats_collector.save_stats(self.trial_id)
+                    
+                    # Print stats
+                    print(f"Trial {self.trial_id} completed.")
+                    print(f"Start location: {self.start_loc}")
+                    print(f"Goal location: {self.goal_location}")
+                    print(f"Total distance traveled: {round(self.compute_path_length(), 2)} meters.")
+                    print(f"Total time taken: {round(self.getTime(), 2)} seconds.")
+                    print(f"Success: {self.getTime() <= time_limit * 60}")
+                    
+                    self.stop()
+                    self.save(save_trajectory=True)
+                    self.done = True
+                    return
+                else:
+                    self.stop()
+                    self.save()
+                    self.done = True
+                    self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
+                    return
 
     ########################################### AUTO PILOT ###########################################
 

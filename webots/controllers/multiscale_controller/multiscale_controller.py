@@ -205,10 +205,13 @@ if __name__ == "__main__":
         "PLOTTING": RobotMode.PLOTTING  
     }
     
-    SELECTED_MODE = "EXPLOIT_SAVE"
+    SELECTED_MODE = "EXPLOIT"
     td_learning = False
     corners = [[8,-8]]
-    start_loc = corners[0]
+    dmtp_start = [-9,9]
+    exploit_start = corners[0]
+    
+    start_loc = exploit_start
     goal_location = [-7, 7]    
     randomize_start_loc = False
     use_prox_mod = False
@@ -296,7 +299,7 @@ if __name__ == "__main__":
             "enable_ojas": False,
             "enable_stdp": False,
             "run_time_hours": run_time_hours,
-            "num_loops": 5, 
+            "num_loops": 20, 
             "save_data": True,
         },
         "PLOTTING": {
