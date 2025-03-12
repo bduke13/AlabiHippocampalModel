@@ -43,6 +43,7 @@ def get_world_name(bot):
 
 SCALES_DEFS = {
     "small": {
+        "scale_index": 0,
         "name": "small",
         "num_pc": 2000,
         "sigma_r": 0.5,
@@ -50,6 +51,7 @@ SCALES_DEFS = {
         "rcn_learning_rate": 0.1,
     },
     "medium": {
+        "scale_index": 1,
         "name": "medium",
         "num_pc": 500,
         "sigma_r": 2,
@@ -57,6 +59,7 @@ SCALES_DEFS = {
         "rcn_learning_rate": 0.1,
     },
     "large": {
+        "scale_index": 2,
         "name": "large",
         "num_pc": 250,
         "sigma_r": 4,
@@ -64,6 +67,7 @@ SCALES_DEFS = {
         "rcn_learning_rate": 0.1,
     },
     "xlarge": {
+        "scale_index": 3,
         "name": "xlarge",
         "num_pc": 200,
         "sigma_r": 4,
@@ -206,12 +210,12 @@ if __name__ == "__main__":
     }
     
     SELECTED_MODE = "EXPLOIT"
-    td_learning = False
+    td_learning = True
     corners = [[8,-8]]
     dmtp_start = [-9,9]
     exploit_start = corners[0]
     
-    start_loc = exploit_start
+    start_loc = [8, 8]
     goal_location = [-7, 7]    
     randomize_start_loc = False
     use_prox_mod = False
@@ -222,7 +226,7 @@ if __name__ == "__main__":
     medium = ["medium"]
     large = ["large"]
     
-    scale_names = large
+    scale_names = medium
     run_time_hours = 4
     max_dist = 25
     plot_bvc = False
@@ -268,7 +272,7 @@ if __name__ == "__main__":
             "randomize_start_loc": randomize_start_loc,
             "scale_names": scale_names,
             "enable_ojas": False,
-            "enable_stdp": False,
+            "enable_stdp": True,
             "run_time_hours": run_time_hours,
             "num_loops": 1,
             "save_data": False,
@@ -281,8 +285,8 @@ if __name__ == "__main__":
             "max_dist": max_dist,
             "randomize_start_loc": randomize_start_loc,
             "scale_names": scale_names,
-            "enable_ojas": False,
-            "enable_stdp": False,
+            "enable_ojas": True,
+            "enable_stdp": True,
             "run_time_hours": run_time_hours,
             "num_loops": 1, 
             "save_data": False,

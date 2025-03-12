@@ -223,11 +223,13 @@ class Driver(Supervisor):
     ##########################################################################
     def load_pcns(self, enable_ojas: Optional[bool], enable_stdp: Optional[bool]):
         self.pcns = []
-        for i, scale_def in enumerate(self.scales):
-            fname = f"pcn_scale_{i}.pkl"
+        for scale_def in self.scales:
+            scale_idx = scale_def["scale_index"]
+            fname = f"pcn_scale_{scale_idx}.pkl"
             path = os.path.join(self.network_dir, fname)
             pcn = self._load_or_init_pcn_for_scale(path, scale_def, enable_ojas, enable_stdp)
             self.pcns.append(pcn)
+            print(f"[DRIVER] Using PCN: {path}")
 
     def _load_or_init_pcn_for_scale(self, path, scale_def, enable_ojas, enable_stdp):
         try:
@@ -258,16 +260,18 @@ class Driver(Supervisor):
         if enable_stdp is not None:
             pcn.enable_stdp = enable_stdp
         else:
-            pcn.enable_stdp = (self.robot_mode == RobotMode.LEARN_HEBB)
+            pcn.enable_stdp = (self.robot_mode == RobotMode.LEARN_HEBB or self.robot_mode == RobotMode.DMTP)
 
         return pcn
 
     def load_rcns(self):
         self.rcns = []
-        for i, scale_def in enumerate(self.scales):
-            fname = f"rcn_scale_{i}.pkl"
+        for scale_def in self.scales:
+            scale_idx = scale_def["scale_index"]
+            fname = f"rcn_scale_{scale_idx}.pkl"
             path = os.path.join(self.network_dir, fname)
-            rcn = self._load_or_init_rcn_for_scale(path, scale_def, self.rcn_learning_rates[i])
+            learning_rate = scale_def["rcn_learning_rate"]
+            rcn = self._load_or_init_rcn_for_scale(path, scale_def, learning_rate)
             self.rcns.append(rcn)
 
     def _load_or_init_rcn_for_scale(self, path, scale_def, learning_rate):
@@ -429,23 +433,21 @@ class Driver(Supervisor):
         #-------------------------------------------------------------------
         # 3) Compute potential rewards at multiple scales, skipping directions too close to a wall
         #-------------------------------------------------------------------
-        boundaries_rolled = torch.roll(self.boundaries, shifts=len(self.boundaries)//2)
+        boundaries_rolled = torch.roll(self.boundaries, shifts=len(self.boundaries) // 2)
         num_points_per_hd = len(boundaries_rolled) // self.n_hd
 
-        distances_per_hd = []
-        for hd_i in range(self.n_hd):
-            start_idx = hd_i * num_points_per_hd
-            end_idx   = (hd_i+1) * num_points_per_hd
-            min_dist  = torch.min(boundaries_rolled[start_idx:end_idx])
-            distances_per_hd.append(min_dist)
-        distances_per_hd = torch.tensor(distances_per_hd, device=self.device, dtype=self.dtype)
+        distances_per_hd = torch.tensor([
+            torch.min(boundaries_rolled[i * num_points_per_hd: (i + 1) * num_points_per_hd])
+            for i in range(self.n_hd)
+        ], device=self.device, dtype=self.dtype)
 
         pot_rew_scales = []
+        max_raw_reward = 0.0  # Track highest unnormalized reward
+
         for i, scale_def in enumerate(self.scales):
             pcn, rcn = self.pcns[i], self.rcns[i]
-
-            # Allocate potential rewards tensor
             pot_rew = torch.empty(self.n_hd, dtype=self.dtype, device=self.device)
+
             for d in range(self.n_hd):
                 if distances_per_hd[d] < 1.5:
                     pot_rew[d] = 0.0
@@ -454,12 +456,21 @@ class Driver(Supervisor):
                     rcn.update_reward_cell_activations(pcn_activations, visit=False)
                     pot_rew[d] = torch.max(torch.nan_to_num(rcn.reward_cell_activations))
 
+            # Track max unnormalized reward
+            max_raw_reward = max(max_raw_reward, pot_rew.max().item())
+
             pot_rew_scales.append(pot_rew)
-
-        if len(pot_rew_scales) == 0:
-            print("No valid scales selected. Defaulting to first available scale.")
-            pot_rew_scales.append(torch.zeros(self.n_hd, dtype=self.dtype, device=self.device))
-
+            
+        #-------------------------------------------------------------------
+        # 3.5) Check raw (pre-normalized) reward threshold
+        #-------------------------------------------------------------------
+        reward_threshold = 0.1  # Set based on raw (non-normalized) rewards
+        if max_raw_reward < reward_threshold:
+            print(f"Max raw reward ({max_raw_reward}) below {reward_threshold} => forcing exploration")
+            self.force_explore_count = 5
+            self.explore()
+            return
+        
         #-------------------------------------------------------------------
         # 4) Normalize and blend across scales
         #-------------------------------------------------------------------
@@ -750,12 +761,15 @@ class Driver(Supervisor):
                     print(f"Success: {self.getTime() <= time_limit * 60}")
                     
                     self.stop()
-                    self.save(save_trajectory=True)
+                    self.save()
                     self.done = True
                     return
                 else:
                     self.stop()
-                    self.save()
+                    self.save(
+                        include_pcn=True if self.td_learning else False,
+                        include_rcn=True if self.td_learning else False,
+                    )
                     self.done = True
                     self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
                     return
@@ -970,14 +984,17 @@ class Driver(Supervisor):
                     for act in self.pcn_activations_list
                 ]
 
-            # 4) Update place cell activations for each scale
-            if update_pcn:
-                for i, act in enumerate(self.pcn_activations_list):
-                    if self.hmap_pcn_activities[i].shape[1] != act.shape[0]:
-                        self.hmap_pcn_activities[i] = torch.zeros(
-                            (self.num_steps, act.shape[0]), device="cuda", dtype=torch.float32
-                        )
-                    self.hmap_pcn_activities[i][self.step_count] = act.clone().detach().cpu()
+        # 4) Update place cell activations for each scale
+        if update_pcn:
+            for scale_def, act in zip(self.scales, self.pcn_activations_list):
+                scale_idx = scale_def["scale_index"]
+                if self.hmap_pcn_activities[scale_idx].shape[1] != act.shape[0]:
+                    self.hmap_pcn_activities[scale_idx] = torch.zeros(
+                        (self.num_steps, act.shape[0]), device="cuda", dtype=torch.float32
+                    )
+
+                # Store activations at the correct scale index
+                self.hmap_pcn_activities[scale_idx][self.step_count] = act.clone().detach().cpu()
 
             # 5) Update scale priority
             if update_scale_priority and hasattr(self, 'scale_idx'):
@@ -1047,8 +1064,9 @@ class Driver(Supervisor):
         # 1) Save each scale's PCN (if requested)
         # ----------------------------------------------------------------------
         if include_pcn:
-            for i, pcn in enumerate(self.pcns):
-                pcn_path = os.path.join(self.network_dir, f"pcn_scale_{i}.pkl")
+            for scale_def, pcn in zip(self.scales, self.pcns):
+                scale_idx = scale_def["scale_index"]  # Get correct scale index
+                pcn_path = os.path.join(self.network_dir, f"pcn_scale_{scale_idx}.pkl")
                 with open(pcn_path, "wb") as f:
                     pickle.dump(pcn, f)
                 files_saved.append(pcn_path)
@@ -1057,8 +1075,9 @@ class Driver(Supervisor):
         # 2) Save each scale's RCN (if requested)
         # ----------------------------------------------------------------------
         if include_rcn:
-            for i, rcn in enumerate(self.rcns):
-                rcn_path = os.path.join(self.network_dir, f"rcn_scale_{i}.pkl")
+            for scale_def, rcn in zip(self.scales, self.rcns):
+                scale_idx = scale_def["scale_index"]
+                rcn_path = os.path.join(self.network_dir, f"rcn_scale_{scale_idx}.pkl")
                 with open(rcn_path, "wb") as f:
                     pickle.dump(rcn, f)
                 files_saved.append(rcn_path)
