@@ -985,16 +985,27 @@ class Driver(Supervisor):
                 ]
 
         # 4) Update place cell activations for each scale
+        # Create a mapping from scale_index to valid list index in hmap_pcn_activities
+        scale_idx_map = {scale_def["scale_index"]: i for i, scale_def in enumerate(self.scales)}
+
         if update_pcn:
             for scale_def, act in zip(self.scales, self.pcn_activations_list):
                 scale_idx = scale_def["scale_index"]
-                if self.hmap_pcn_activities[scale_idx].shape[1] != act.shape[0]:
-                    self.hmap_pcn_activities[scale_idx] = torch.zeros(
+
+                # Ensure the scale index exists in the mapping
+                if scale_idx not in scale_idx_map:
+                    continue
+
+                mapped_index = scale_idx_map[scale_idx]  # Convert scale index to valid list index
+
+                # Ensure correct shape
+                if self.hmap_pcn_activities[mapped_index].shape[1] != act.shape[0]:
+                    self.hmap_pcn_activities[mapped_index] = torch.zeros(
                         (self.num_steps, act.shape[0]), device="cuda", dtype=torch.float32
                     )
 
-                # Store activations at the correct scale index
-                self.hmap_pcn_activities[scale_idx][self.step_count] = act.clone().detach().cpu()
+                # Store activations at the correct list index
+                self.hmap_pcn_activities[mapped_index][self.step_count] = act.clone().detach().cpu()
 
             # 5) Update scale priority
             if update_scale_priority and hasattr(self, 'scale_idx'):
