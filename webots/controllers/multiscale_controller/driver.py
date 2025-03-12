@@ -227,16 +227,23 @@ class Driver(Supervisor):
             scale_idx = scale_def["scale_index"]
             fname = f"pcn_scale_{scale_idx}.pkl"
             path = os.path.join(self.network_dir, fname)
-            pcn = self._load_or_init_pcn_for_scale(path, scale_def, enable_ojas, enable_stdp)
+            pcn = self._load_or_init_pcn_for_scale(
+                path,
+                scale_def,
+                enable_ojas if enable_ojas else None,
+                enable_stdp if enable_stdp else None,
+            )
+
             self.pcns.append(pcn)
-            print(f"[DRIVER] Using PCN: {path}")
+
+        print(f"[DRIVER] Using PCNs: {[f'pcn_scale_{scale_def['scale_index']}.pkl' for scale_def in self.scales]}")
 
     def _load_or_init_pcn_for_scale(self, path, scale_def, enable_ojas, enable_stdp):
         try:
             with open(path, "rb") as f:
                 pcn = pickle.load(f)
             print(f"[DRIVER] Loaded existing PCN from {path}")
-        except:
+        except (FileNotFoundError, pickle.UnpicklingError):
             print(f"[DRIVER] Initializing new PCN for {path}")
             bvc = BoundaryVectorCellLayer(
                 max_dist=self.max_dist,
@@ -253,15 +260,6 @@ class Driver(Supervisor):
                 n_hd=self.n_hd,
                 device=self.device,
             )
-        if enable_ojas is not None:
-            pcn.enable_ojas = enable_ojas
-        else:
-            pcn.enable_ojas = (self.robot_mode == RobotMode.LEARN_OJAS)
-        if enable_stdp is not None:
-            pcn.enable_stdp = enable_stdp
-        else:
-            pcn.enable_stdp = (self.robot_mode == RobotMode.LEARN_HEBB or self.robot_mode == RobotMode.DMTP)
-
         return pcn
 
     def load_rcns(self):
@@ -273,6 +271,7 @@ class Driver(Supervisor):
             learning_rate = scale_def["rcn_learning_rate"]
             rcn = self._load_or_init_rcn_for_scale(path, scale_def, learning_rate)
             self.rcns.append(rcn)
+        print(f"[DRIVER] Using RCNs: {[f'rcn_scale_{scale_def['scale_index']}.pkl' for scale_def in self.scales]}")
 
     def _load_or_init_rcn_for_scale(self, path, scale_def, learning_rate):
         try:
@@ -362,8 +361,8 @@ class Driver(Supervisor):
     def exploit(self):
         """
         Follows the reward gradient to reach the goal location using multiscale place field navigation.
-        If self.use_vis_density_mod is True, then we apply additional mixing-weight modulation
-        based on self.prox, otherwise we skip it.
+        If a scale has insufficient reward information, it is temporarily removed from the decision-making 
+        while still allowing learning.
         """
         #-------------------------------------------------------------------
         # 1) Sense and compute: update heading, place/boundary cell activations
@@ -374,13 +373,6 @@ class Driver(Supervisor):
                           update_pcn=True,
                           update_scale_priority=True)
         self.check_goal_reached()
-
-        # Save old PCN activations for each scale
-        old_pcn_activations = []
-        for i, scale_def in enumerate(self.scales):
-            # Each scale has its own PCN; store its current activations
-            pcn = self.pcns[i]
-            old_pcn_activations.append(pcn.place_cell_activations.clone())
 
         if self.force_explore_count > 0:
             self.force_explore_count -= 1
@@ -400,14 +392,9 @@ class Driver(Supervisor):
         if not hasattr(self, 'last_heading_deg') or self.last_heading_deg is None:
             self.last_heading_deg = self.current_heading_deg
 
-        # Calculate heading difference
-        heading_diff = self.current_heading_deg - getattr(self, 'last_heading_deg', self.current_heading_deg)
+        heading_diff = self.current_heading_deg - self.last_heading_deg
         heading_diff = ((heading_diff + 180) % 360) - 180  # Normalize to [-180, 180]
-
-        # Update rotation accumulator
         self.rotation_accumulator += abs(heading_diff)
-
-        # Update last_heading_deg AFTER calculating the difference
         self.last_heading_deg = self.current_heading_deg
 
         if self.rotation_accumulator >= 360.0:
@@ -431,7 +418,7 @@ class Driver(Supervisor):
                 self.rotation_loop_count = 0
 
         #-------------------------------------------------------------------
-        # 3) Compute potential rewards at multiple scales, skipping directions too close to a wall
+        # 3) Compute potential rewards at multiple scales, skipping invalid directions
         #-------------------------------------------------------------------
         boundaries_rolled = torch.roll(self.boundaries, shifts=len(self.boundaries) // 2)
         num_points_per_hd = len(boundaries_rolled) // self.n_hd
@@ -442,7 +429,8 @@ class Driver(Supervisor):
         ], device=self.device, dtype=self.dtype)
 
         pot_rew_scales = []
-        max_raw_reward = 0.0  # Track highest unnormalized reward
+        valid_scale_indices = []
+        reward_threshold = 0.1  # Threshold for considering a scale valid
 
         for i, scale_def in enumerate(self.scales):
             pcn, rcn = self.pcns[i], self.rcns[i]
@@ -456,61 +444,47 @@ class Driver(Supervisor):
                     rcn.update_reward_cell_activations(pcn_activations, visit=False)
                     pot_rew[d] = torch.max(torch.nan_to_num(rcn.reward_cell_activations))
 
-            # Track max unnormalized reward
-            max_raw_reward = max(max_raw_reward, pot_rew.max().item())
+            # If this scale has a valid reward, keep it for action selection
+            if pot_rew.max().item() >= reward_threshold:
+                pot_rew_scales.append(pot_rew)
+                valid_scale_indices.append(i)
 
-            pot_rew_scales.append(pot_rew)
-            
         #-------------------------------------------------------------------
-        # 3.5) Check raw (pre-normalized) reward threshold
+        # 3.5) If NO valid scales remain, trigger exploration
         #-------------------------------------------------------------------
-        reward_threshold = 0.1  # Set based on raw (non-normalized) rewards
-        if max_raw_reward < reward_threshold:
-            print(f"Max raw reward ({max_raw_reward}) below {reward_threshold} => forcing exploration")
+        if len(valid_scale_indices) == 0:
+            print(f"All scales below reward threshold ({reward_threshold}), forcing exploration")
             self.force_explore_count = 5
             self.explore()
             return
-        
+
         #-------------------------------------------------------------------
-        # 4) Normalize and blend across scales
+        # 4) Normalize and blend across valid scales
         #-------------------------------------------------------------------
         pot_rew_scales = torch.stack(pot_rew_scales)
         pot_rew_scales /= (pot_rew_scales.max(dim=1, keepdim=True)[0] + 1e-6)  # Avoid div by zero
 
-        # Compute "gradients" for each scale
-        grads = torch.sum(torch.abs(torch.diff(pot_rew_scales, dim=1)), dim=1)  # shape: (num_scales,)
+        # Compute gradients only on valid scales
+        grads = torch.sum(torch.abs(torch.diff(pot_rew_scales, dim=1)), dim=1)
 
-        # Basic mixing weights
-        mixing_weights = grads / (grads.sum() + 1e-6)  # shape: (num_scales,)
+        # Compute mixing weights
+        mixing_weights = grads / (grads.sum() + 1e-6)
         mixing_weights = torch.clamp(mixing_weights, min=0.0, max=1.0)
         mixing_weights /= mixing_weights.sum()
-
-        # If we want to do "vis_density" or "proximity" modulation:
-        if self.use_prox_mod:  
-            # Example approach: smaller scale more heavily weighted if we are "close" to goal
-            prox_weight = self.prox  # self.prox is in [0, 1]
-            scale_biases = torch.tensor(
-                [1.0 / (i + 1) for i in range(len(self.scales))],
-                dtype=self.dtype, device=self.device
-            )
-            scale_biases /= scale_biases.sum()
-
-            # Blend mixing_weights with scale_biases based on prox_weight
-            mixing_weights = (1 - prox_weight) * mixing_weights + prox_weight * scale_biases
-            mixing_weights /= mixing_weights.sum()
 
         # Print which scale is being preferred
         if not hasattr(self, 'last_preferred_scale_index') or self.last_preferred_scale_index != torch.argmax(mixing_weights).item():
             self.last_preferred_scale_index = torch.argmax(mixing_weights).item()
             # print(f"Preferred scale: {self.last_preferred_scale_index}, Weight: {mixing_weights[self.last_preferred_scale_index].item()}")
 
-        # Weighted sum of the pot_rew_scales over "num_scales"
+        # Weighted sum of the potential rewards
         combined_pot_rew = torch.sum(mixing_weights[:, None] * pot_rew_scales, dim=0)
 
         # Store alpha as the portion of each scale's gradient
         self.alpha = grads / (grads.sum() + 1e-6)
 
-        self.scale_idx = torch.argmax(mixing_weights).item()
+        # Select preferred scale index from valid scales
+        self.scale_idx = valid_scale_indices[torch.argmax(mixing_weights).item()]
 
         #-------------------------------------------------------------------
         # 5) Compute action heading
@@ -525,7 +499,7 @@ class Driver(Supervisor):
         self.action_heading_deg = float(torch.rad2deg(action_angle).item())
 
         #-------------------------------------------------------------------
-        # 6) Execute movement with `tau_w` steps
+        # 6) Execute movement
         #-------------------------------------------------------------------
         angle_to_turn_deg = self.action_heading_deg - self.current_heading_deg
         angle_to_turn_deg = (angle_to_turn_deg + 180) % 360 - 180
