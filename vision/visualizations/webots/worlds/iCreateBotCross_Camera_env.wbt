@@ -1,0 +1,378 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/robots/irobot/create/protos/Create.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/Roughcast.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/apartment_structure/protos/Wall.proto"
+
+WorldInfo {
+  info [
+    "iRobot Create simulation"
+    "The vacuum cleaner robot goes randomly into the apartment while a supervisor tracks its position and alterates the ground texture."
+    "The robot can be stopped by the virtual walls emitting IR light."
+  ]
+  title "iRobot Create"
+  coordinateSystem "NUE"
+}
+Viewpoint {
+  orientation -0.09809642759893583 0.37372654061712557 0.9223370120138749 4.549320494344496
+  position 4.160197125304123 12.791674007909585 -1.8570805103765733
+  near 0.1
+  follow "Create"
+  followType "None"
+}
+TexturedBackground {
+}
+RectangleArena {
+  rotation 1 0 0 -1.5707953071795862
+  floorSize 10 10
+  floorAppearance NULL
+}
+DirectionalLight {
+  direction 0 -1 0
+}
+DEF agent Create {
+  hidden position_0_0 4020.964114722235
+  hidden position_0_1 3822.406992783013
+  hidden linearVelocity_0 0.008210906047676908 -0.0020121798308701836 -0.0006001939236197451
+  hidden angularVelocity_0 -0.0023269388603392362 -0.06304725640739967 -0.00279092051035184
+  hidden rotation_6 0 0.9999999999999999 0 6.061710543266531
+  hidden linearVelocity_6 0.010947403346003338 0.0006192468183163848 -0.02299897101119968
+  hidden angularVelocity_6 -7.985069073876814 -0.17194290683841285 0.5218596104491343
+  hidden rotation_7 0 -1 0 0.16060475374687366
+  hidden linearVelocity_7 0.006228839578869555 0.0005308775217090307 0.021957302305852782
+  hidden angularVelocity_7 7.98063847550198 -0.16543825731288408 -0.5255568862949545
+  hidden translation_11 0.000982107265680321 0.0011654921621340186 -3.0004905553729366e-05
+  hidden rotation_11 -0.8442481909488172 0.3789750873905948 0.37897608792236553 -1.7393139987214807
+  hidden linearVelocity_11 -0.0009078791564733347 -0.0019617284845290027 0.0030324399391987783
+  hidden angularVelocity_11 -0.002326937122131184 -0.06304714826877619 -0.0027909206436415486
+  hidden translation_12 0.0012739916783475747 -0.0008376577171747002 -1.585014166798071e-05
+  hidden rotation_12 -0.302541982852593 0.6739659713286748 0.6739719713034192 -2.5540290073836056
+  hidden linearVelocity_12 0.0035307236774540863 -0.0016533860180196849 -0.009253163905415156
+  hidden angularVelocity_12 -0.002326938306757587 -0.06304714826421548 -0.002790922172574345
+  translation -3.8031666945199936 0.041977016195332964 0.5929107385192639
+  rotation 0.6051374812551381 0.5674872601067918 0.5583608496274375 -2.0651791974693436
+  controller "create3_base"
+  supervisor TRUE
+  bodySlot [
+    Solid {
+      translation 0 0 0.08
+      children [
+        Display {
+          width 100
+          height 100
+        }
+        Compass {
+        }
+        DEF range-finder RangeFinder {
+          fieldOfView 6.28
+          width 720
+          height 1
+          projection "cylindrical"
+          maxRange 10
+        }
+        Camera {
+          translation 0 0 0.3
+          fieldOfView 1.5708
+          width 224
+          height 224
+        }
+        Shape {
+          appearance PBRAppearance {
+          }
+          geometry Cylinder {
+            height 0.04
+            radius 0.05
+          }
+        }
+      ]
+    }
+  ]
+}
+Wall {
+  translation 0 0 -5.08
+  size 10.3 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.686503 0.859983 0.879194
+    textureTransform TextureTransform {
+      scale 1 2.4
+    }
+  }
+}
+Solid {
+  translation -2 0.65 -4.76
+  rotation 1 0 0 0
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 1 0 0
+        metalness 0
+      }
+      geometry Plane {
+      }
+    }
+  ]
+}
+Solid {
+  translation 0 0.57 -4.73
+  rotation 1 0 0 0
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 1 0 0
+        metalness 0
+      }
+      geometry Cylinder {
+        height 0.01
+        radius 0.6
+      }
+    }
+  ]
+}
+Solid {
+  translation 2 0.65 -4.73
+  rotation 1 0 0 0
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 1 0 0
+        metalness 0
+      }
+      geometry IndexedFaceSet {
+        coord Coordinate {
+          point [
+            -0.5 -0.5 0
+            0.5 -0.5 0
+            0 0.5 0
+          ]
+        }
+        coordIndex [
+          0, 1, 2, -1
+        ]
+      }
+    }
+  ]
+}
+Wall {
+  translation -5.12 0 4.4061e-07
+  rotation 0 1 0 1.5708
+  name "wall(2)"
+  size 9.7 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.84332 0.537987 0.187396
+    textureTransform TextureTransform {
+      scale 1 2.4
+    }
+  }
+}
+Solid {
+  translation -4.81 0.5 -2
+  rotation 0 1 0 1.5708
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0 1 0
+        metalness 0
+      }
+      geometry Plane {
+      }
+    }
+  ]
+}
+Solid {
+  translation -4.82 0.45 7.41982e-06
+  rotation 0 1 0 1.5708
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0 1 0
+        metalness 0
+      }
+      geometry Cylinder {
+        height 0.01
+        radius 0.6
+      }
+    }
+  ]
+}
+Solid {
+  translation -4.81 0.45 2
+  rotation 0 1 0 1.5708
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0 1 0
+        metalness 0
+      }
+      geometry IndexedFaceSet {
+        coord Coordinate {
+          point [
+            -0.5 -0.5 0
+            0.5 -0.5 0
+            0.7 0.2 0
+            0 0.7 0
+            -0.7 0.2 0
+          ]
+        }
+        coordIndex [
+          0, 1, 2, 3, 4, -1
+        ]
+      }
+    }
+  ]
+}
+Wall {
+  translation 0 0 4.62
+  name "wall(3)"
+  size 10.3 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.666163 0.94345 0.679088
+    textureTransform TextureTransform {
+      scale 1 2.4
+    }
+  }
+}
+Solid {
+  translation -3.35 0.652576 4.61
+  rotation 1 0 0 3.14
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0 0 1
+        metalness 0
+      }
+      geometry IndexedFaceSet {
+        coord Coordinate {
+          point [
+            -0.6 -0.5 0
+            0.6 -0.5 0
+            0.4 0.5 0
+            -0.4 0.5 0
+          ]
+        }
+        coordIndex [
+          0, 1, 2, 3, -1
+        ]
+      }
+    }
+  ]
+}
+Solid {
+  translation 0 0.75256 4.6
+  rotation 1 0 0 3.14
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0 0 1
+        metalness 0
+      }
+      geometry IndexedFaceSet {
+        coord Coordinate {
+          point [
+            -0.5 -0.3 0
+            0.5 -0.3 0
+            0.7 0.2 0
+            0.5 0.7 0
+            -0.5 0.7 0
+            -0.7 0.2 0
+          ]
+        }
+        coordIndex [
+          0, 1, 2, 3, 4, 5, -1
+        ]
+      }
+    }
+  ]
+}
+Solid {
+  translation 2.95 0.65256 4.6
+  rotation 1 0 0 3.14
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0 0 1
+        metalness 0
+      }
+      geometry IndexedFaceSet {
+        coord Coordinate {
+          point [
+            -0.5 -0.5 0
+            0.5 -0.5 0
+            0 0.5 0
+          ]
+        }
+        coordIndex [
+          0, 1, 2, -1
+        ]
+      }
+    }
+  ]
+}
+Wall {
+  translation 4.8 0 7.34496e-07
+  rotation 0 1 0 1.5708
+  name "wall(4)"
+  size 9.7 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.84332 0.644434 0.829694
+    textureTransform TextureTransform {
+      scale 1 2.4
+    }
+  }
+}
+Solid {
+  translation 4.79 0.09 -2.50173
+  rotation 0 1 0 -1.57
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0 0 0
+        metalness 0
+      }
+      geometry Plane {
+      }
+    }
+  ]
+}
+Solid {
+  translation 4.79 0.05 -0.00166429
+  rotation 0 1 0 -1.57
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0 0 0
+        metalness 0
+      }
+      geometry Cylinder {
+        height 0.01
+        radius 0.6
+      }
+    }
+  ]
+}
+Solid {
+  translation 4.79 0.04 2.49827
+  rotation 0 1 0 -1.57
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0 0 0
+        metalness 0
+      }
+      geometry IndexedFaceSet {
+        coord Coordinate {
+          point [
+            -0.6 -0.4 0
+            0.4 -0.4 0
+            0.6 0.4 0
+            -0.4 0.4 0
+          ]
+        }
+        coordIndex [
+          0, 1, 2, 3, -1
+        ]
+      }
+    }
+  ]
+}

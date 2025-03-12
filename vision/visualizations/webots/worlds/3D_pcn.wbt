@@ -1,0 +1,205 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/BrushedAluminium.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/apartment_structure/protos/Wall.proto"
+
+WorldInfo {
+  info [
+    "iRobot Create simulation"
+    "The vacuum cleaner robot goes randomly into the apartment while a supervisor tracks its position and alterates the ground texture."
+    "The robot can be stopped by the virtual walls emitting IR light."
+  ]
+  title "flying_bot"
+  gravity 0
+  coordinateSystem "NUE"
+}
+Viewpoint {
+  orientation 0.6244389821021349 -0.6971677098947062 -0.35218339244123975 2.750994536413442
+  position 3.31650326645413 22.4040750419886 3.6357183526018564
+}
+TexturedBackground {
+}
+RectangleArena {
+  rotation 1 0 0 -1.5707953071795862
+  floorSize 5 5
+  floorAppearance NULL
+  wallAppearance BrushedAluminium {
+    colorOverride 0 1 1
+    IBLStrength 11
+  }
+}
+Pose {
+  translation -1 0.0001 1
+  rotation -1 0 0 1.5707963267948966
+  children [
+    Shape {
+      appearance Appearance {
+        material Material {
+          diffuseColor 1 0 0
+        }
+      }
+      geometry Cylinder {
+        height 0.0001
+        radius 0.0762
+      }
+    }
+  ]
+}
+DEF agent Robot {
+  translation 1.2022524484049812 1.700111044412953 0.3791151403455322
+  rotation 1 0 0 -1.5707953071795862
+  children [
+    DEF BODY Solid {
+      translation -3.4724261244178933e-08 -0.0002216774050303738 7.834140096640851e-07
+      rotation 0 -0.7091337498716456 -0.7050739853327297 3.194143916429362e-70
+      children [
+        TouchSensor {
+          translation 0 1.6653345369377348e-16 8.881784197001252e-16
+          rotation 0.5773502691896257 0.5773502691896258 0.5773502691896258 -2.094395102393195
+          name "touch_sensor"
+          boundingObject Pose {
+            rotation 0.5773502691896258 0.5773502691896258 0.5773502691896258 2.0943951023931957
+            children [
+              Sphere {
+                radius 0.18
+              }
+            ]
+          }
+          physics Physics {
+          }
+          linearVelocity -2.1847180300246136e-86 1.2325950676051546e-30 -6.162975338025773e-31
+          angularVelocity 9.350710434407085e-54 1.4400390426879355e-69 -1.44832772885069e-69
+        }
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0 0 1
+            roughness 1
+            metalness 0
+          }
+          geometry Sphere {
+            radius 0.15
+          }
+        }
+      ]
+      boundingObject Sphere {
+        radius 0.15
+      }
+      physics Physics {
+      }
+      linearVelocity -7.465055231621573e-87 -5.525408826498443e-38 2.7627044132492216e-38
+      angularVelocity 9.298588909512002e-54 1.4516595988028578e-69 -1.4600151714455847e-69
+    }
+    Display {
+      width 100
+      height 100
+    }
+    Compass {
+    }
+    DEF vertical-range-finder RangeFinder {
+      name "vertical-range-finder"
+      fieldOfView 6.28
+      width 180
+      height 90
+      projection "cylindrical"
+      maxRange 10
+    }
+  ]
+  controller "flying_3D_pcn"
+  supervisor TRUE
+}
+DirectionalLight {
+  direction 0.75 -1 0
+}
+Wall {
+  translation 0 2.9 0
+  rotation 1 0 0 -1.5708
+  name "Main_Ceiling"
+  size 10 10 0.1
+  appearance PBRAppearance {
+    baseColor 0.8 0.8 1
+    transparency 0.9    # Very transparent but not completely
+    roughness 0.5
+    metalness 0.2
+    emissiveColor 0.2 0.2 0.4
+  }
+}
+Solid {
+  translation 0 2.5 -2.5
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.8 0.8 0.8
+        roughness 0.5
+        metalness 0
+      }
+      geometry Box {
+        size 5 5 0.1
+      }
+    }
+  ]
+  name "wall_north"
+  boundingObject Box {
+    size 5 5 0.1
+  }
+}
+Solid {
+  translation 0 2.5 2.5
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.8 0.8 0.8
+        roughness 0.5
+        metalness 0
+      }
+      geometry Box {
+        size 5 5 0.1
+      }
+    }
+  ]
+  name "wall_south"
+  boundingObject Box {
+    size 5 5 0.1
+  }
+}
+Solid {
+  translation 2.5 2.5 0
+  rotation 0 1 0 1.5708
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.8 0.8 0.8
+        roughness 0.5
+        metalness 0
+      }
+      geometry Box {
+        size 5 5 0.1
+      }
+    }
+  ]
+  name "wall_east"
+  boundingObject Box {
+    size 5 5 0.1
+  }
+}
+Solid {
+  translation -2.5 2.5 0
+  rotation 0 1 0 1.5708
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.8 0.8 0.8
+        roughness 0.5
+        metalness 0
+      }
+      geometry Box {
+        size 5 5 0.1
+      }
+    }
+  ]
+  name "wall_west"
+  boundingObject Box {
+    size 5 5 0.1
+  }
+}
