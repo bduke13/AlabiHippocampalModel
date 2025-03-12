@@ -369,86 +369,58 @@ def compute_cosine_similarity_sums_torch(
     stacked_dict, distance_threshold=2.0, device="cuda"
 ):
     """
-    Compute the sum of cosine similarities between bins in the environment,
-    considering only bins that are more than a specified distance apart.
-
-    This replicates the same math as a double-loop with:
-        if distance > distance_threshold:
-            sum_of_cosines_for_bin_i += cos_sim(i, j)
+    Compute the mean spatial aliasing index (SAI) using cosine similarity sums.
 
     Args:
     - stacked_dict: Dictionary of binned data with keys as (x, y) coordinates.
                     Each value is a list of activation values for that bin.
     - distance_threshold: Minimum distance (in meters) to consider for similarity calculation.
-    - device: Which device to use for tensors ('cuda' or 'cpu').
+    - device: 'cuda' or 'cpu'.
 
     Returns:
-    - similarity_sums: A dictionary with keys as (x, y) and values as the sum of cosine similarities
-                       (with all bins that are > distance_threshold away).
+    - sai_scores: A dictionary with keys as (x, y) and values as SAI^{(i)}.
     """
 
-    # 1) Gather all bin coordinates in a consistent order
-    coords_list = list(stacked_dict.keys())  # Each element is (x, y)
-    # Sort them for reproducibility (optional)
-    # coords_list.sort(key=lambda c: (c[0], c[1]))
+    # 1) Gather all bin coordinates
+    coords_list = list(stacked_dict.keys())
+    N = len(coords_list)  # Total number of bins
 
-    # 2) Figure out maximum vector length among bins
-    #    (since different bins may have different # of activations appended)
-    max_len = 0
-    for coord in coords_list:
-        max_len = max(max_len, len(stacked_dict[coord]))
+    if N == 0:
+        return {}
 
-    # 3) Build torch tensors for coordinates and activations
-    #    -- We'll zero-pad the activation vectors so they all have length = max_len
-    N = len(coords_list)
-    coords_t = torch.zeros((N, 2), dtype=torch.float32, device=device)
+    # 2) Find maximum activation vector length for zero-padding
+    max_len = max(len(stacked_dict[coord]) for coord in coords_list)
+
+    # 3) Convert coordinates and activations into tensors
+    coords_t = torch.tensor(coords_list, dtype=torch.float32, device=device)
     activations_t = torch.zeros((N, max_len), dtype=torch.float32, device=device)
 
-    for i, (x, y) in enumerate(coords_list):
-        coords_t[i, 0] = x
-        coords_t[i, 1] = y
-        bin_acts = stacked_dict[(x, y)]
-        # Put bin_acts into row i (zero-padded)
-        activations_t[i, : len(bin_acts)] = torch.tensor(
-            bin_acts, dtype=torch.float32, device=device
+    for i, coord in enumerate(coords_list):
+        activations_t[i, : len(stacked_dict[coord])] = torch.tensor(
+            stacked_dict[coord], dtype=torch.float32, device=device
         )
 
-    # 4) Compute NxN distance matrix
-    #    cdist on coords_t gives pairwise Euclidean distances
-    dist_matrix = torch.cdist(coords_t, coords_t, p=2)  # shape: (N, N)
+    # 4) Compute Euclidean distance matrix
+    dist_matrix = torch.cdist(coords_t, coords_t, p=2)
 
-    # 5) Compute NxN pairwise dot products
-    #    This is the numerator for cosine similarity
-    dot_matrix = activations_t @ activations_t.T  # shape: (N, N)
-
-    # 6) Compute norms for each row, then outer product for denominators
-    norms = torch.norm(activations_t, dim=1, keepdim=True)  # shape: (N, 1)
-    denom = norms @ norms.T  # shape: (N, N)
-
-    # To avoid division-by-zero, we can clamp or mask out those pairs
-    # but in the original code, if a bin vector is zero, cos_sim is effectively 0 anyway.
-    # We'll just do a safe division:
+    # 5) Compute Cosine Similarity
+    dot_matrix = activations_t @ activations_t.T
+    norms = torch.norm(activations_t, dim=1, keepdim=True)
+    denom = norms @ norms.T
     denom = torch.where(denom == 0, torch.tensor(1e-12, device=device), denom)
+    cos_sim_matrix = dot_matrix / denom  # NxN matrix of CosSim(a_i, a_j)
 
-    # 7) Cosine similarity matrix
-    cos_sim_matrix = dot_matrix / denom  # shape: (N, N)
+    # 6) Apply distance threshold mask
+    mask = (dist_matrix > distance_threshold).float()
 
-    # 8) Apply distance threshold: we only include cos_sim if distance > threshold
-    mask = dist_matrix > distance_threshold  # boolean shape: (N, N)
-    # Turn that into float so we can multiply
-    mask_f = mask.float()
+    # 7) Compute SAI by summing masked similarities and normalizing by N
+    cos_masked = cos_sim_matrix * mask  # Mask out nearby bins
+    sai_values = cos_masked.sum(dim=1) / N  # Normalize by total number of bins
 
-    # 9) Multiply cos_sim by mask, then sum row-wise
-    #    cos_sim_within_thresh = 0, cos_sim_outside_thresh = cos_sim
-    cos_masked = cos_sim_matrix * mask_f
-    similarity_sums_tensor = cos_masked.sum(dim=1)  # shape: (N,)
+    # 8) Store results in a dictionary
+    sai_scores = {coords_list[i]: sai_values[i].item() for i in range(N)}
 
-    # 10) Store results back into a dict with the same (x, y) keys
-    similarity_sums = {}
-    for i, (x, y) in enumerate(coords_list):
-        similarity_sums[(x, y)] = similarity_sums_tensor[i].item()
-
-    return similarity_sums
+    return sai_scores
 
 
 def analyze_cosine_similarity_torch(

@@ -98,6 +98,29 @@ if __name__ == "__main__":
         ["3D_bvc_cross_rotated_4_no_vert_or_dist_scaling", "env4", "no_vert_dist"],
     ]
 
+    experiments_rotated = [
+        ["3D_bvc_cross_rotated_1_model0", "env1", "model0"],
+        ["3D_bvc_cross_rotated_1_model1", "env1", "model1"],
+        ["3D_bvc_cross_rotated_1_model2", "env1", "model2"],
+        ["3D_bvc_cross_rotated_1_model3", "env1", "model3"],
+        ["3D_bvc_cross_rotated_1_model4", "env1", "model4"],
+        ["3D_bvc_cross_rotated_2_model0", "env2", "model0"],
+        ["3D_bvc_cross_rotated_2_model1", "env2", "model1"],
+        ["3D_bvc_cross_rotated_2_model2", "env2", "model2"],
+        ["3D_bvc_cross_rotated_2_model3", "env2", "model3"],
+        ["3D_bvc_cross_rotated_2_model4", "env2", "model4"],
+        ["3D_bvc_cross_rotated_3_model0", "env3", "model0"],
+        ["3D_bvc_cross_rotated_3_model1", "env3", "model1"],
+        ["3D_bvc_cross_rotated_3_model2", "env3", "model2"],
+        ["3D_bvc_cross_rotated_3_model3", "env3", "model3"],
+        ["3D_bvc_cross_rotated_3_model4", "env3", "model4"],
+        ["3D_bvc_cross_rotated_4_model0", "env4", "model0"],
+        ["3D_bvc_cross_rotated_4_model1", "env4", "model1"],
+        ["3D_bvc_cross_rotated_4_model2", "env4", "model2"],
+        ["3D_bvc_cross_rotated_4_model3", "env4", "model3"],
+        ["3D_bvc_cross_rotated_4_model4", "env4", "model4"],
+    ]
+
     experiments = experiments_ceilings
 
     # Extract just the world names for filtering
