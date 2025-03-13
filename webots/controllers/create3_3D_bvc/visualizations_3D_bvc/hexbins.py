@@ -2,6 +2,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+from pandas import show_versions
 from scipy.sparse import data
 from sklearn.cluster import DBSCAN
 from collections import defaultdict
@@ -817,8 +818,21 @@ if __name__ == "__main__":
     hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
 
     # %%
+    stuff = plot_hexbin_clusters(
+        hmap_x=hmap_x,
+        hmap_y=hmap_y,
+        hmap_pcn=hmap_pcn,
+        cell_index=4,
+        eps=1,
+        min_samples=20,
+    )
+    fig = stuff[0]
+    fig.show()
+
+    # %%
     metrics = get_model_hexbin_metrics(hmap_x, hmap_y, hmap_pcn, verbose=False)
 
+    metrics
     # %%
     fig, ax, hb, binned_data = create_hexbin(
         cell_index=0,

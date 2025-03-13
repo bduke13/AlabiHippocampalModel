@@ -11,6 +11,7 @@ plt.rcParams["mathtext.fontset"] = "dejavuserif"  # For math text
 
 # Experiment folders mapping
 EXPERIMENTS = {
+    "base_experiment": "Base Experiment",
     "ceilings_experiment": "Ceilings Experiment",
     "different_models_scaling": "Different Models Scaling",
     "obstacles_experiment": "Obstacles Experiment",
@@ -19,9 +20,20 @@ EXPERIMENTS = {
 
 # Define name mappings for models and environments
 MAPPINGS = {
+    "base_experiment": {
+        "MODEL_NAMES": {
+            "base": "2D - 1 Layer",
+        },
+        "ENV_NAMES": {
+            "env1": "Open",
+            "env2": "Cross",
+        },
+        "MODEL_ORDER": ["base"],
+        "ENV_ORDER": ["env1", "env2"],
+    },
     "ceilings_experiment": {
         "MODEL_NAMES": {
-            "3D_bvc": "3D Boundary Vector Cells",
+            "3D_bvc": "3D - 4 Layer",
         },
         "ENV_NAMES": {
             "env1": "Control",
@@ -80,10 +92,12 @@ MAPPINGS = {
 OUTPUT_DIR = "webots/controllers/create3_3D_bvc/visualizations_3D_bvc/outputs"
 
 # Allow user to select an experiment
-print("Available experiments:")
-for key, value in EXPERIMENTS.items():
-    print(f"  {key}: {value}")
-selected_experiment = input("Enter the experiment folder name: ")
+# print("Available experiments:")
+# for key, value in EXPERIMENTS.items():
+#    print(f"  {key}: {value}")
+# selected_experiment = input("Enter the experiment folder name: ")
+
+selected_experiment = "base_experiment"
 
 if selected_experiment not in EXPERIMENTS:
     raise ValueError("Invalid experiment selection!")
@@ -100,22 +114,27 @@ csv_path = os.path.join(OUTPUT_DIR, selected_experiment, "cosine_similarities.cs
 df = pd.read_csv(csv_path)
 print(f"Loaded data from: {csv_path}")
 
+# Replace NaN values with 0.0 in the entire dataframe
+df = df.fillna(0.0)
+print("Replaced any NaN values with 0.0")
+
 # Compute global color range
 global_min = df["cosine_similarity_sum"].min()
 global_max = df["cosine_similarity_sum"].max()
 
-# Create subplots
-n_rows = len(MODEL_ORDER)
-n_cols = len(ENV_ORDER)
-fig, axes = plt.subplots(n_rows, n_cols, figsize=(2.5 * n_cols, 2.5 * n_rows))
+# Adjust figure size for better layout
+fig_size = (4 * len(ENV_ORDER), 4 * len(MODEL_ORDER))
+point_size = 10
+
+fig, axes = plt.subplots(len(MODEL_ORDER), len(ENV_ORDER), figsize=fig_size)
 scatter_obj = None
 
 for r, model_name in enumerate(MODEL_ORDER):
     for c, env_name in enumerate(ENV_ORDER):
-        ax = axes[r, c] if n_rows > 1 else axes[c]
+        ax = axes[r, c] if len(MODEL_ORDER) > 1 else axes[c]
         subset = df[(df["model"] == model_name) & (df["environment"] == env_name)]
 
-        if len(subset) > 0:
+        if not subset.empty:
             sc = ax.scatter(
                 subset["x"],
                 subset["y"],
@@ -123,11 +142,11 @@ for r, model_name in enumerate(MODEL_ORDER):
                 cmap="viridis",
                 vmin=global_min,
                 vmax=global_max,
-                s=3,
+                s=point_size,
             )
             scatter_obj = sc
         else:
-            ax.text(0.5, 0.5, "No data", ha="center", va="center", fontsize=18)
+            ax.text(0.5, 0.5, "No data", ha="center", va="center", fontsize=14)
 
         ax.set_xticks([])
         ax.set_yticks([])
@@ -136,30 +155,32 @@ for r, model_name in enumerate(MODEL_ORDER):
             spine.set_visible(False)
 
         if r == 0:
-            ax.set_title(ENV_NAMES.get(env_name, env_name), fontsize=15)
+            ax.set_title(ENV_NAMES.get(env_name, env_name), fontsize=12)
         if c == 0:
-            ax.set_ylabel(MODEL_NAMES.get(model_name, model_name), fontsize=15)
+            ax.set_ylabel(MODEL_NAMES.get(model_name, model_name), fontsize=12)
 
-plt.tight_layout()
+plt.subplots_adjust(left=0.05, right=0.85, top=0.9, bottom=0.1, wspace=0.3, hspace=0.3)
 fig.suptitle(
     f"Spatial Aliasing Heatmaps: {EXPERIMENTS[selected_experiment]}",
-    fontsize=18,
-    y=0.94,
+    fontsize=14,
+    y=0.98,
 )
 if scatter_obj:
-    plt.colorbar(scatter_obj, ax=axes.ravel().tolist(), fraction=0.04, pad=0.02)
+    cbar_ax = fig.add_axes([0.87, 0.3, 0.03, 0.5])  # Adjust colorbar position
+    plt.colorbar(scatter_obj, cax=cbar_ax)
+
 plt.show()
 
 # Create MSAI bar plot
-fig, ax = plt.subplots(figsize=(9, 4.5))
-fig.suptitle("Mean Spatial Aliasing Index by Environment", fontsize=18, y=0.94)
+fig, ax = plt.subplots(figsize=(10, 5))
+fig.suptitle("Mean Spatial Aliasing Index by Environment", fontsize=12, y=0.94)
 
 sum_data = []
 for env_name in ENV_ORDER:
     for model_name in MODEL_ORDER:
         model_data = df[(df["model"] == model_name) & (df["environment"] == env_name)]
         if not model_data.empty:
-            total_sum = model_data["cosine_similarity_sum"].sum()
+            total_sum = model_data["cosine_similarity_sum"].mean()
             sum_data.append(
                 {
                     "Environment": ENV_NAMES.get(env_name, env_name),
@@ -171,7 +192,20 @@ for env_name in ENV_ORDER:
 sum_df = pd.DataFrame(sum_data)
 sns.barplot(data=sum_df, x="Environment", y="Total Sum", hue="Model", ax=ax)
 ax.grid(axis="y", linestyle="-", linewidth=0.5, alpha=0.6)
-ax.set_ylabel("MSAI", fontsize=18)
-ax.legend(title="Model", fontsize=16, title_fontsize=16, loc="lower left")
+ax.set_ylabel("MSAI", fontsize=12)
+ax.legend(title="Model", fontsize=12, title_fontsize=16, loc="best")
 plt.tight_layout()
 plt.show()
+
+# Print the MSAI metrics to the terminal
+print("\nMean Spatial Aliasing Index (MSAI) Metrics:")
+print(sum_df.to_string(index=False))
+
+# Print summary statistics grouped by environment and model
+print("\nMSAI Summary Statistics:")
+msai_summary = (
+    sum_df.groupby(["Environment", "Model"])["Total Sum"]
+    .agg(["mean", "std", "min", "max"])
+    .reset_index()
+)
+print(msai_summary.to_string(index=False))

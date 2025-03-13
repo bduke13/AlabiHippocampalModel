@@ -2,13 +2,14 @@
 from visualizations.vis_utils import *
 from webots.controllers.create3_3D_bvc.visualizations_3D_bvc.hexbins import (
     get_model_hexbin_metrics,
-    analyze_cosine_similarity,
+    analyze_cosine_similarity_torch,
     plot_similarity_sums,
 )
 import pandas as pd
 import os
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np
 
 # Set global font to Times New Roman
 plt.rcParams["font.family"] = "serif"
@@ -21,16 +22,20 @@ pd.set_option("display.max_columns", None)
 pd.set_option("display.width", None)
 pd.set_option("display.max_colwidth", None)
 
-CONTROLLER_NAME = "create3_3D_bvc_looping"
+CONTROLLER_NAME = "create3_base"
 
 # Parameters
 root_path = os.path.join(CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl")
 trials = os.listdir(root_path)
-# Define experiments as [world, env_name, model_name]
+
+experiments_base = [
+    ["10x10_open", "Open", "2D - 1 Layer"],
+    ["10x10_cross", "Cross", "2D - 1 Layer"],
+]
 
 experiments_obstacles = [
-    ["3D_bvc_two_shapes_control", "env1", "3D_bvc"],
-    ["3D_bvc_two_shapes_test", "env2", "3D_bvc"],
+    ["3D_bvc_two_shapes_control", "Control", "3D_bvc"],
+    ["3D_bvc_two_shapes_test", "Test", "3D_bvc"],
 ]
 
 experiments_ceilings = [
@@ -68,8 +73,7 @@ experiments_rotated = [
     ["3D_bvc_cross_rotated_4_model4", "env4", "model4"],
 ]
 
-
-experiments = experiments_rotated
+experiments = experiments_base
 
 # Extract just the world names for filtering
 worlds = [world for world, _, _ in experiments]
@@ -93,60 +97,43 @@ for world_trials in world_trial_paths.values():
 
 print(f"Total trials to process: {len(filtered_dirs)}")
 
-
-# %%
-# MODEL_NAMES = {
-#    "2D_250": "2D Model",
-#    "3D_2L_250_1": "3D-2Layer (0.1 rad)",
-#    "3D_2L_250_2": "3D-2Layer (0.2 rad)",
-#    "3D_3L_250": "3D-3Layer",
-# }
-
-# ENV_NAMES = {
-#    "upright": "Upright",
-#    "inside_shallow": "30° Tilt",
-#    "inside_medium": "45° Tilt",
-#    "inside_steep": "60° Tilt",
-# }
-
-
-# root_path = "IJCNN"
-# directories = get_available_directories(root_path)
-
-# First filter for directories containing '250'
-# filtered_dirs = [d for d in directories if "250" in d]
-# Then filter for desired path ends
-# filtered_dirs = filter_directories(filtered_dirs, desired_path_ends)
-# Remove any paths containing 'html_assets'
-# filtered_dirs = [d for d in filtered_dirs if "html_assets" not in d]
-
-# Extract path information
-# path_info = []
-# for directory in filtered_dirs:
-#    parts = directory.rstrip("/").split("/")  # Remove trailing slash and split
-#    last_two = parts[-2:]  # Get last two parts
-#    path_info.append(
-#        {"parent_dir": last_two[0], "end_dir": last_two[1], "full_path": directory}
-#    )
-
-# Create DataFrame
-# df = pd.DataFrame(path_info)
-# print(df)
-
-print(filtered_dirs)
 # %%
 # Collect DBSCAN-based cluster metrics for each path
 metrics_list = []
+world_env_model_list = []
+
 for path in filtered_dirs:
     try:
         print("Processing:", path)
-        # hmap_loc, hmap_pcn = load_hmaps(
-        # )
+        # Extract world, env, and model from path
+        path_parts = path.split(os.sep)
+        trial_name = path_parts[-1]
+
+        # Find matching experiment
+        matching_exp = None
+        for world, env_name, model_name in experiments:
+            if world in trial_name:
+                matching_exp = (world, env_name, model_name)
+                break
+
+        if matching_exp:
+            world, env_name, model_name = matching_exp
+            world_env_model_list.append(
+                {"world": world, "env": env_name, "model": model_name}
+            )
+        else:
+            print(f"Warning: No matching experiment found for {trial_name}")
+            world_env_model_list.append(
+                {"world": "unknown", "env": "unknown", "model": "unknown"}
+            )
+
+        # Load the data
         hmap_loc, hmap_pcn = load_hmaps_from_dir(
             hmap_names=["hmap_loc", "hmap_pcn"], base_dir=path
         )
         hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
 
+        # Get the metrics
         metrics = get_model_hexbin_metrics(hmap_x, hmap_y, hmap_pcn, verbose=False)
         metrics_list.append(metrics)
         print(metrics)
@@ -161,23 +148,23 @@ for path in filtered_dirs:
                 "avg_clusters_per_non_zero_cell": None,
             }
         )
+        world_env_model_list.append(
+            {"world": "error", "env": "error", "model": "error"}
+        )
 
 # %%
-# Convert metrics to DataFrame, combine with df
+# Convert metrics to DataFrame
 metrics_df = pd.DataFrame(metrics_list)
-df = pd.concat([df, metrics_df], axis=1)
+world_env_model_df = pd.DataFrame(world_env_model_list)
+
+# Combine the dataframes
+df = pd.concat([world_env_model_df, metrics_df], axis=1)
 
 # Display DBSCAN metrics
 print("\nModel Analysis Results (DBSCAN):")
 print(df)
 
-# %%
-# Filter for allowed models
-allowed_models = ["2D_250", "3D_2L_250_1", "3D_2L_250_2", "3D_3L_250"]
-df = df[df["parent_dir"].isin(allowed_models)]
-
-# Desired order for environments
-order = ["upright", "inside_shallow", "inside_medium", "inside_steep"]
+# Plot the metrics
 
 # Set font family and sizes globally
 plt.rcParams.update(
@@ -193,87 +180,93 @@ plt.rcParams.update(
     }
 )
 
-# Create subplots in a single row with wider aspect ratio
-fig, axes = plt.subplots(1, 3, figsize=(24, 4))  # Made wider to achieve 1:2 ratio
+# Create subplots in a single row
+fig, axes = plt.subplots(1, 3, figsize=(24, 6))
 
-# Set the aspect ratio for each subplot to make the plotting area twice as wide as tall
-for ax in axes:
-    # Get the current position of the subplot
-    pos = ax.get_position()
-    # Calculate new position with 1:2 aspect ratio
-    ax.set_position([pos.x0, pos.y0, pos.width, pos.width * 0.5])
-
-#  proportion of non-zero cells
-df["norm_non_zero_cells"] = df["non_zero_cells"] / 250
-g1 = sns.barplot(
+# 1. Plot proportion of non-zero cells
+df["norm_non_zero_cells"] = df["non_zero_cells"] / 500  # Normalize by total cells
+sns.barplot(
     data=df,
-    x="end_dir",
+    x="env",
     y="norm_non_zero_cells",
-    hue="parent_dir",
+    hue="model",
     ax=axes[0],
-    order=order,
 )
-axes[0].set_title("", fontsize=18)
-axes[0].set_xticklabels([ENV_NAMES.get(env, env) for env in order], fontsize=18)
-axes[0].set_xlabel("", fontsize=18)
-axes[0].set_ylabel("Proportion", fontsize=18)
+axes[0].set_title("Proportion of Non-Zero Cells")
+axes[0].set_xlabel("Environment")
+axes[0].set_ylabel("Proportion")
+axes[0].legend(title="Model")
+axes[0].grid(axis="y", linestyle="-", linewidth=0.5, alpha=1.0)
 
-# Get handles and labels from the plot
-handles, _ = axes[0].get_legend_handles_labels()
-axes[0].legend(
-    handles=handles,
-    labels=[MODEL_NAMES[m] for m in allowed_models],
-    title="Model",
-    loc="lower left",
-)
-
-#  proportion of cells with multiple clusters
-df["norm_cells_multiple_clusters"] = df["cells_with_multiple_clusters"] / 250
-g2 = sns.barplot(
+# 2. Plot proportion of cells with multiple clusters
+df["norm_cells_multiple_clusters"] = df["cells_with_multiple_clusters"] / 500
+sns.barplot(
     data=df,
-    x="end_dir",
+    x="env",
     y="norm_cells_multiple_clusters",
-    hue="parent_dir",
+    hue="model",
     ax=axes[1],
-    order=order,
 )
-axes[1].set_title("", fontsize=18)
-axes[1].set_xticklabels([ENV_NAMES.get(env, env) for env in order], fontsize=18)
-axes[1].set_xlabel("", fontsize=18)
-axes[1].set_ylabel("Proportion", fontsize=18)
+axes[1].set_title("Proportion of Cells with Multiple Clusters")
+axes[1].set_xlabel("Environment")
+axes[1].set_ylabel("Proportion")
+axes[1].legend(title="Model")
+axes[1].grid(axis="y", linestyle="-", linewidth=0.5, alpha=1.0)
 
-# Get handles and labels from the plot
-handles, _ = axes[1].get_legend_handles_labels()
-axes[1].legend(
-    handles=handles,
-    labels=[MODEL_NAMES[m] for m in allowed_models],
-    title="Model",
-    loc="lower left",
-)
-
-#  average clusters per non-zero cell (already normalized, no need to divide)
-g3 = sns.barplot(
+# 3. Plot average clusters per non-zero cell
+sns.barplot(
     data=df,
-    x="end_dir",
+    x="env",
     y="avg_clusters_per_non_zero_cell",
-    hue="parent_dir",
+    hue="model",
     ax=axes[2],
-    order=order,
 )
-axes[2].set_title("", fontsize=18)
-axes[2].set_xticklabels([ENV_NAMES.get(env, env) for env in order], fontsize=18)
-axes[2].set_xlabel("", fontsize=18)
-axes[2].set_ylabel("Average Clusters", fontsize=18)
-
-# Get handles and labels from the plot
-handles, _ = axes[2].get_legend_handles_labels()
-axes[2].legend(
-    handles=handles,
-    labels=[MODEL_NAMES[m] for m in allowed_models],
-    title="Model",
-    loc="lower left",
-)
+axes[2].set_title("Average Clusters per Non-Zero Cell")
+axes[2].set_xlabel("Environment")
+axes[2].set_ylabel("Average Clusters")
+axes[2].legend(title="Model")
+axes[2].grid(axis="y", linestyle="-", linewidth=0.5, alpha=1.0)
 
 # Adjust layout
-plt.tight_layout(rect=[0, 0, 1, 0.95])
+plt.tight_layout()
 plt.show()
+
+# Print the dataframe to the terminal
+print("\nDataFrame used for plotting:")
+print(
+    df[
+        [
+            "world",
+            "env",
+            "model",
+            "non_zero_cells",
+            "norm_non_zero_cells",
+            "cells_with_multiple_clusters",
+            "norm_cells_multiple_clusters",
+            "avg_clusters_per_non_zero_cell",
+            "total_clusters",
+        ]
+    ].to_string()
+)
+
+# %%
+# Optional: Save the metrics to a CSV file
+# df.to_csv("dbscan_metrics_results.csv", index=False)
+
+# %%
+# Optional: Create a heatmap of the metrics by environment and model
+# pivot_df = df.pivot_table(
+#    index="model",
+#    columns="env",
+#    values=[
+#        "norm_non_zero_cells",
+#        "norm_cells_multiple_clusters",
+#        "avg_clusters_per_non_zero_cell",
+#    ],
+# )
+
+# plt.figure(figsize=(15, 10))
+# sns.heatmap(pivot_df, annot=True, cmap="viridis", fmt=".2f")
+# plt.title("DBSCAN Metrics by Model and Environment")
+# plt.tight_layout()
+# plt.show()
