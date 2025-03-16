@@ -1107,8 +1107,10 @@ class Driver(Supervisor):
             files_saved.append(hmap_hdn_path)
 
             # (c) Place-cell history maps for each scale
-            for i, pc_history in enumerate(self.hmap_pcn_activities):
-                hmap_scale_path = os.path.join(self.hmap_dir, f"hmap_pcn_scale_{i}.pkl")
+            for scale_def, pc_history in zip(self.scales, self.hmap_pcn_activities):
+                scale_idx = scale_def["scale_index"]  # Get correct scale index
+                hmap_scale_path = os.path.join(self.hmap_dir, f"hmap_pcn_scale_{scale_idx}.pkl")
+                
                 with open(hmap_scale_path, "wb") as f:
                     pc_data = pc_history[: self.step_count].cpu().numpy()
                     pickle.dump(pc_data, f)
