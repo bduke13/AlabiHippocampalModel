@@ -86,7 +86,7 @@ DEF agent Create {
           width 720
           height 1
           projection "cylindrical"
-          maxRange 10
+          maxRange 15
         }
         Shape {
           appearance PBRAppearance {
