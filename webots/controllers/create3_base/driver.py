@@ -125,9 +125,9 @@ class Driver(Supervisor):
         os.makedirs(self.network_dir, exist_ok=True)
 
         # Model parameters
-        self.num_place_cells = 3000
+        self.num_place_cells = 1000
         self.num_bvc_per_dir = 50
-        self.sigma_r = 4
+        self.sigma_r = 0.5
         self.sigma_theta = 1
         self.n_hd = 8
         self.timestep = 32 * 3
