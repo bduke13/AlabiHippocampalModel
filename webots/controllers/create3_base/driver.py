@@ -125,9 +125,9 @@ class Driver(Supervisor):
         os.makedirs(self.network_dir, exist_ok=True)
 
         # Model parameters
-        self.num_place_cells = 800
+        self.num_place_cells = 3000
         self.num_bvc_per_dir = 50
-        self.sigma_r = 0.5
+        self.sigma_r = 4
         self.sigma_theta = 1
         self.n_hd = 8
         self.timestep = 32 * 3
@@ -432,7 +432,7 @@ class Driver(Supervisor):
     ########################################### EXPLOIT ###########################################
     def exploit(self):
         """
-        Follows the reward gradient to reach the goal location.
+        Follows the reward gradient to reach the goal location, incorporating wall avoidance.
         """
         # -------------------------------------------------------------------
         # 1) Sense and compute: update heading, place/boundary cell activations
@@ -443,38 +443,55 @@ class Driver(Supervisor):
         self.check_goal_reached()
 
         # -------------------------------------------------------------------
-        # 2) Calculate potential reward for each possible head direction
+        # 2) Detect obstacles and compute valid directions
         # -------------------------------------------------------------------
+        min_safe_distance = 1.5  # Minimum distance to consider a direction safe
         num_steps_preplay = 1  # Number of future steps to "preplay"
         pot_rew = torch.empty(self.n_hd, dtype=self.dtype, device=self.device)
+        cancelled_angles = []  # Store blocked directions
 
-        # For each head direction index 'd', do a preplay and estimate reward
+        # Compute minimum distance in each head direction
+        boundaries_rolled = torch.roll(self.boundaries, shifts=len(self.boundaries) // 2)
+        num_points_per_hd = len(boundaries_rolled) // self.n_hd
+
+        distances_per_hd = torch.tensor([
+            torch.min(boundaries_rolled[i * num_points_per_hd: (i + 1) * num_points_per_hd])
+            for i in range(self.n_hd)
+        ], device=self.device, dtype=self.dtype)
+
+        # Evaluate reward potential for each valid direction
         for d in range(self.n_hd):
-            # Predicted place-cell activation for direction 'd'
-            pcn_activations = self.pcn.preplay(d, num_steps=num_steps_preplay)
+            if distances_per_hd[d] < min_safe_distance:
+                pot_rew[d] = 0.0  # Block direction if too close to a wall
+                cancelled_angles.append(d)
+            else:
+                # Predict place-cell activation for direction 'd'
+                pcn_activations = self.pcn.preplay(d, num_steps=num_steps_preplay)
 
-            # Update reward cell activations (may not need this if we don't want to save anything in EXPLOIT)
-            self.rcn.update_reward_cell_activations(pcn_activations, visit=False)
+                # Update reward cell activations (without saving to memory)
+                self.rcn.update_reward_cell_activations(pcn_activations, visit=False)
 
-            # Example: take the maximum activation in reward cells as the "reward estimate"
-            pot_rew[d] = torch.max(torch.nan_to_num(self.rcn.reward_cell_activations))
+                # Take the maximum activation in reward cells as the "reward estimate"
+                pot_rew[d] = torch.max(torch.nan_to_num(self.rcn.reward_cell_activations))
 
         # -------------------------------------------------------------------
-        # 3) Prepare angles for computing the circular mean (no debug prints)
+        # 3) Handle case where all directions are blocked
         # -------------------------------------------------------------------
-        angles = torch.linspace(
-            0,
-            2 * np.pi * (1 - 1 / self.n_hd),
-            self.n_hd,
-            device=self.device,
-            dtype=self.dtype,
-        )
+        if torch.all(pot_rew == 0.0):
+            print("All directions blocked. Initiating forced exploration.")
+            self.force_explore_count = 5
+            self.explore()
+            return
 
         # -------------------------------------------------------------------
         # 4) Compute circular mean of angles, weighted by the reward estimates
         # -------------------------------------------------------------------
-        angles_np = angles.cpu().numpy()
-        weights_np = pot_rew.cpu().numpy()
+        angles = torch.linspace(0, 2 * np.pi * (1 - 1 / self.n_hd), self.n_hd, device=self.device, dtype=self.dtype)
+        
+        # Exclude blocked directions from heading calculation
+        valid_mask = pot_rew > 0.0
+        angles_np = angles[valid_mask].cpu().numpy()
+        weights_np = pot_rew[valid_mask].cpu().numpy()
 
         sin_component = np.sum(np.sin(angles_np) * weights_np)
         cos_component = np.sum(np.cos(angles_np) * weights_np)
@@ -490,6 +507,9 @@ class Driver(Supervisor):
         angle_to_turn_deg = np.rad2deg(action_angle) - self.current_heading_deg
         angle_to_turn_deg = (angle_to_turn_deg + 180) % 360 - 180
         angle_to_turn = np.deg2rad(angle_to_turn_deg)
+
+        # Store cancelled angles for visualization/debugging
+        self.cancelled_angles_deg = [np.rad2deg(angles[d].cpu().item()) for d in cancelled_angles]
 
         # -------------------------------------------------------------------
         # 6) Execute the turn and optionally move forward
