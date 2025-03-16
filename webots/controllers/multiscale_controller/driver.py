@@ -170,6 +170,8 @@ class Driver(Supervisor):
         self.rcns = []
         self.load_pcns(enable_ojas, enable_stdp)
         self.load_rcns()
+        print(f"[DRIVER] Using PCNs: {[f'pcn_scale_{scale_def['scale_index']}.pkl' for scale_def in self.scales]}")
+        print(f"[DRIVER] Using RCNs: {[f'rcn_scale_{scale_def['scale_index']}.pkl' for scale_def in self.scales]}")
 
         # Head direction layer
         self.head_direction_layer = HeadDirectionLayer(num_cells=self.n_hd, device="cpu")
@@ -207,8 +209,8 @@ class Driver(Supervisor):
         self.done = False
         
         # Parameters for loop detection
-        self.LOOP_THRESHOLD = 3  # Number of loops before forcing exploration
-        self.MAX_STEPS_BETWEEN_LOOPS = 5  # Max steps between loops to count towards threshold
+        self.LOOP_THRESHOLD = 5  # Number of loops before forcing exploration
+        self.MAX_STEPS_BETWEEN_LOOPS = 10  # Max steps between loops to count towards threshold
         self.force_explore_count = 0 # Number of steps to force exploration (init to 0)
 
         # Optionally keep a single-scale reference
@@ -236,13 +238,20 @@ class Driver(Supervisor):
 
             self.pcns.append(pcn)
 
-        print(f"[DRIVER] Using PCNs: {[f'pcn_scale_{scale_def['scale_index']}.pkl' for scale_def in self.scales]}")
-
     def _load_or_init_pcn_for_scale(self, path, scale_def, enable_ojas, enable_stdp):
         try:
             with open(path, "rb") as f:
                 pcn = pickle.load(f)
             print(f"[DRIVER] Loaded existing PCN from {path}")
+            
+            # Overwrite enable_ojas and enable_stdp based on the provided values
+            if enable_ojas is not None:
+                pcn.enable_ojas = enable_ojas
+            if enable_stdp is not None:
+                pcn.enable_stdp = enable_stdp
+            
+            print(f"[DRIVER] Updated PCN for {path} - enable_ojas: {pcn.enable_ojas}, enable_stdp: {pcn.enable_stdp}")
+
         except (FileNotFoundError, pickle.UnpicklingError):
             print(f"[DRIVER] Initializing new PCN for {path}")
             bvc = BoundaryVectorCellLayer(
@@ -258,8 +267,11 @@ class Driver(Supervisor):
                 num_pc=scale_def["num_pc"],
                 timestep=self.timestep,
                 n_hd=self.n_hd,
+                enable_ojas=enable_ojas,
+                enable_stdp=enable_stdp,
                 device=self.device,
             )
+
         return pcn
 
     def load_rcns(self):
@@ -271,7 +283,6 @@ class Driver(Supervisor):
             learning_rate = scale_def["rcn_learning_rate"]
             rcn = self._load_or_init_rcn_for_scale(path, scale_def, learning_rate)
             self.rcns.append(rcn)
-        print(f"[DRIVER] Using RCNs: {[f'rcn_scale_{scale_def['scale_index']}.pkl' for scale_def in self.scales]}")
 
     def _load_or_init_rcn_for_scale(self, path, scale_def, learning_rate):
         try:
@@ -467,10 +478,25 @@ class Driver(Supervisor):
         # Compute gradients only on valid scales
         grads = torch.sum(torch.abs(torch.diff(pot_rew_scales, dim=1)), dim=1)
 
-        # Compute mixing weights
+        # Compute initial mixing weights based on gradients
         mixing_weights = grads / (grads.sum() + 1e-6)
         mixing_weights = torch.clamp(mixing_weights, min=0.0, max=1.0)
         mixing_weights /= mixing_weights.sum()
+
+        # If proximity modulation is enabled, adjust the weights
+        if self.use_prox_mod:
+            prox_weight = self.prox  # self.prox is in [0, 1]
+            print(f"Proximity weight: {prox_weight}")
+            # Bias smaller scales more heavily when close to the goal
+            scale_biases = torch.tensor(
+                [1.0 / (i + 1) for i in range(len(valid_scale_indices))],
+                dtype=self.dtype, device=self.device
+            )
+            scale_biases /= scale_biases.sum()
+
+            # Blend mixing_weights with scale_biases based on proximity weight
+            mixing_weights = (1 - prox_weight) * mixing_weights + prox_weight * scale_biases
+            mixing_weights /= mixing_weights.sum()
 
         # Print which scale is being preferred
         if not hasattr(self, 'last_preferred_scale_index') or self.last_preferred_scale_index != torch.argmax(mixing_weights).item():
@@ -480,11 +506,6 @@ class Driver(Supervisor):
         # Weighted sum of the potential rewards
         combined_pot_rew = torch.sum(mixing_weights[:, None] * pot_rew_scales, dim=0)
 
-        # Store alpha as the portion of each scale's gradient
-        self.alpha = grads / (grads.sum() + 1e-6)
-
-        # Select preferred scale index from valid scales
-        self.scale_idx = valid_scale_indices[torch.argmax(mixing_weights).item()]
 
         #-------------------------------------------------------------------
         # 5) Compute action heading
@@ -635,7 +656,7 @@ class Driver(Supervisor):
             float: The computed visual density, emphasizing proximity to walls.
         """
         # Threshold distance for influence (e.g., max effective wall influence)
-        max_influence_radius = 2  # Adjust based on environment size
+        max_influence_radius = 3  # Adjust based on environment size
 
         # Convert LiDAR data to a PyTorch tensor
         lidar_tensor = torch.tensor(boundaries, dtype=self.dtype, device=self.device)
@@ -667,7 +688,10 @@ class Driver(Supervisor):
                 collided=torch.any(self.collided),
             )
             if self.plot_bvc:
-                pcn.bvc_layer.plot_activation(self.boundaries.cpu())
+                pcn.bvc_layer.plot_activation(
+                    distances=self.boundaries.cpu().numpy(),
+                    angles=np.linspace(0, 2 * np.pi, 720),
+                )
             # Append activations to pcn_activations_list
             act = pcn.place_cell_activations.clone().detach()
             self.pcn_activations_list.append(act)
@@ -699,7 +723,6 @@ class Driver(Supervisor):
             self.auto_pilot()
             self.stop()
             for pcn, rcn in zip(self.pcns, self.rcns):
-                print(f"Replay called on {rcn}")
                 rcn.update_reward_cell_activations(pcn.place_cell_activations, visit=True)
                 rcn.replay(pcn=pcn)
             self.save(include_pcn=True, include_rcn=True)
@@ -735,7 +758,7 @@ class Driver(Supervisor):
                     print(f"Success: {self.getTime() <= time_limit * 60}")
                     
                     self.stop()
-                    self.save()
+                    self.save(save_trajectory=True)
                     self.done = True
                     return
                 else:
@@ -1132,6 +1155,14 @@ class Driver(Supervisor):
         # ----------------------------------------------------------------------
         # 5) Print saved files
         # ----------------------------------------------------------------------
+        if not self.stats_collector:
+             root = tk.Tk()
+             root.withdraw()
+             root.attributes("-topmost", True)
+             root.update()
+             messagebox.showinfo("Information", "Press OK to save data")
+             root.destroy()
+
         print(f"Files Saved: {files_saved}")
         print("Saving Done!")
 

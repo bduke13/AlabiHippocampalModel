@@ -14,8 +14,8 @@ WorldInfo {
   coordinateSystem "NUE"
 }
 Viewpoint {
-  orientation -0.7071058136150252 0.7071077487567397 9.48276955214967e-08 3.1415975292765808
-  position 0.6754288305783366 40.82651170506043 -0.004693901566911407
+  orientation -0.707105724661602 0.7071078377095833 6.843641895066626e-07 3.1415964651884867
+  position 0.6754329660282752 42.41753950724261 -0.004700888935690366
   near 0.1
   follow "Create"
   followType "None"
@@ -44,7 +44,7 @@ Pose {
       }
       geometry Cylinder {
         height 0.002
-        radius 0.8
+        radius 0.5
       }
     }
   ]
@@ -84,28 +84,22 @@ DEF agent Create {
   ]
 }
 Wall {
-  translation 6 0 2
+  translation -4 0 4
   rotation 0 1 0 2.3554
   name "wall1"
-  size 10 1 0.4
+  size 7 1 0.4
 }
 Wall {
-  translation -6 0 2
+  translation -5 0 -4
   rotation 0 1 0 2.3554
-  name "wall3"
-  size 10 1 0.4
+  name "wall2"
+  size 7 1 0.4
 }
 Wall {
-  translation 0 0 4
-  rotation 0 1 0 0.784603
-  name "wall3(1)"
-  size 3 1 0.4
-}
-Wall {
-  translation 0 0 -1
-  rotation 0 1 0 0.784603
-  name "wall3(2)"
-  size 3 1 0.4
+  translation 4.11547 0 4.88324
+  rotation 0 1 0 2.3554
+  name "wall2(1)"
+  size 7 1 0.4
 }
 DirectionalLight {
   direction 0.75 -1 0

@@ -183,7 +183,6 @@ def run_bot(mode, corners=None, save_data=False, **kwargs):
             )
 
             bot.trial_id = trial_id
-            print(f"[INFO] Using scales: {scale_names}")
             bot.run()
 
             # If in exploit mode, reload the world between runs
@@ -209,24 +208,24 @@ if __name__ == "__main__":
         "PLOTTING": RobotMode.PLOTTING  
     }
     
-    SELECTED_MODE = "EXPLOIT"
-    td_learning = True
+    SELECTED_MODE = "DMTP"
+    td_learning = False
     corners = [[8,-8]]
     dmtp_start = [-9,9]
     exploit_start = corners[0]
     
-    start_loc = [8, 8]
+    start_loc = dmtp_start
+    
     goal_location = [-7, 7]    
     randomize_start_loc = False
     use_prox_mod = False
 
-    # ["small", "medium", "large"]
     multiscale = ["small", "medium", "large"]
     small = ["small"]
     medium = ["medium"]
     large = ["large"]
     
-    scale_names = medium
+    scale_names = large
     run_time_hours = 4
     max_dist = 25
     plot_bvc = False
@@ -271,7 +270,7 @@ if __name__ == "__main__":
             "max_dist": max_dist,
             "randomize_start_loc": randomize_start_loc,
             "scale_names": scale_names,
-            "enable_ojas": False,
+            "enable_ojas": True,
             "enable_stdp": True,
             "run_time_hours": run_time_hours,
             "num_loops": 1,
@@ -285,13 +284,14 @@ if __name__ == "__main__":
             "max_dist": max_dist,
             "randomize_start_loc": randomize_start_loc,
             "scale_names": scale_names,
-            "enable_ojas": True,
-            "enable_stdp": True,
+            "enable_ojas": False,
+            "enable_stdp": False,
             "run_time_hours": run_time_hours,
             "num_loops": 1, 
             "save_data": False,
             "td_learning": td_learning,
             "use_prox_mod": use_prox_mod,
+            "plot_bvc": plot_bvc
         },
         "EXPLOIT_SAVE": {
             "corners": corners,
