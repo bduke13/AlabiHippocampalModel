@@ -12,8 +12,8 @@ project_root = Path(__file__).resolve().parent.parent  # Adjust this if needed
 sys.path.append(str(project_root))
 
 CONTROLLER_PATH_PREFIX = "webots/controllers/"
-CONTROLLER_NAME = "create3_grid"
-WORLD_NAME = "A_20x20_Maze"
+CONTROLLER_NAME = "create3_base"
+WORLD_NAME = "10x10"
 
 # Define output directories relative to project root
 OUTPUT_DIR = os.path.join(
