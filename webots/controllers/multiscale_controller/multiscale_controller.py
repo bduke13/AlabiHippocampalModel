@@ -47,7 +47,7 @@ SCALES_DEFS = {
         "name": "small",
         "num_pc": 2000,
         "sigma_r": 0.5,
-        "sigma_theta": 90,
+        "sigma_theta": 1,
         "rcn_learning_rate": 0.1,
     },
     "medium": {
@@ -55,7 +55,7 @@ SCALES_DEFS = {
         "name": "medium",
         "num_pc": 500,
         "sigma_r": 2,
-        "sigma_theta": 90,
+        "sigma_theta": 1,
         "rcn_learning_rate": 0.1,
     },
     "large": {
@@ -63,7 +63,7 @@ SCALES_DEFS = {
         "name": "large",
         "num_pc": 250,
         "sigma_r": 4,
-        "sigma_theta": 90,
+        "sigma_theta": 1,
         "rcn_learning_rate": 0.1,
     },
     "xlarge": {
@@ -208,13 +208,12 @@ if __name__ == "__main__":
         "PLOTTING": RobotMode.PLOTTING  
     }
     
-    SELECTED_MODE = "DMTP"
+    SELECTED_MODE = "EXPLOIT_SAVE"
     td_learning = False
     corners = [[8,-8]]
     dmtp_start = [-9,9]
     exploit_start = corners[0]
-    
-    start_loc = dmtp_start
+    start_loc = corners[0]
     
     goal_location = [-7, 7]    
     randomize_start_loc = False
@@ -225,7 +224,7 @@ if __name__ == "__main__":
     medium = ["medium"]
     large = ["large"]
     
-    scale_names = large
+    scale_names = multiscale
     run_time_hours = 4
     max_dist = 25
     plot_bvc = False
