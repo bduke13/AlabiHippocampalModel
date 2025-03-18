@@ -205,15 +205,16 @@ if __name__ == "__main__":
         "DMTP": RobotMode.DMTP,
         "EXPLOIT": RobotMode.EXPLOIT,
         "EXPLOIT_SAVE": RobotMode.EXPLOIT,
+        "LEARNING_SAVE": RobotMode.EXPLOIT,
         "PLOTTING": RobotMode.PLOTTING  
     }
     
-    SELECTED_MODE = "EXPLOIT_SAVE"
+    SELECTED_MODE = "PLOTTING"
     td_learning = False
     corners = [[8,-8]]
     dmtp_start = [-9,9]
     exploit_start = corners[0]
-    start_loc = corners[0]
+    start_loc = exploit_start
     
     goal_location = [-7, 7]    
     randomize_start_loc = False
@@ -283,8 +284,8 @@ if __name__ == "__main__":
             "max_dist": max_dist,
             "randomize_start_loc": randomize_start_loc,
             "scale_names": scale_names,
-            "enable_ojas": False,
-            "enable_stdp": False,
+            "enable_ojas": True,
+            "enable_stdp": True,
             "run_time_hours": run_time_hours,
             "num_loops": 1, 
             "save_data": False,
@@ -304,6 +305,20 @@ if __name__ == "__main__":
             "run_time_hours": run_time_hours,
             "num_loops": 20, 
             "save_data": True,
+        },
+        "LEARNING_SAVE": {
+            "corners": corners,
+            "start_loc": start_loc,
+            "goal_location": goal_location,
+            "max_dist": max_dist,
+            "randomize_start_loc": randomize_start_loc,
+            "scale_names": scale_names,
+            "enable_ojas": True,
+            "enable_stdp": True,
+            "run_time_hours": run_time_hours,
+            "num_loops": 21, 
+            "save_data": True,
+            "td_learning": td_learning,
         },
         "PLOTTING": {
             "corners": corners,
