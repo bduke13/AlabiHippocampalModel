@@ -216,6 +216,7 @@ class Driver(Supervisor):
         # Optionally keep a single-scale reference
         self.pcn = self.pcns[0] if self.pcns else None
         self.plot_bvc = plot_bvc
+        self.manual_explore = False
 
         # Step once
         self.step(self.timestep)
@@ -326,6 +327,7 @@ class Driver(Supervisor):
     def explore(self) -> None:
         """
         Handles exploration for multi-scale usage, calling compute_pcn_activations().
+        The robot moves forward unless it collides, in which case it turns away.
         """
         for _ in range(self.tau_w):
             if self.done:
@@ -334,43 +336,36 @@ class Driver(Supervisor):
             # 1) Sense environment
             self.sense()
 
-            # 4) compute pcn_activations => fill self.pcn_activations_list
+            # 2) Compute place cell activations
             self.compute_pcn_activations()
 
-            # 5) If DMTP or EXPOIT => reward updates
-            if self.robot_mode == RobotMode.DMTP or self.robot_mode == RobotMode.EXPLOIT:
+            # 3) If in DMTP or EXPLOIT mode, update reward cell activations
+            if self.robot_mode in {RobotMode.DMTP, RobotMode.EXPLOIT}:
                 actual_reward = self.get_actual_reward()
                 for pcn, rcn in zip(self.pcns, self.rcns):
                     rcn.update_reward_cell_activations(pcn.place_cell_activations)
-                    # rcn.td_update(pcn.place_cell_activations, next_reward=actual_reward)
-                # # Turn towards heading 225°
-                # desired_heading_deg = 90
-                # # Compute the minimal angular difference (normalized to [-180, 180])
-                # angle_to_turn_deg = desired_heading_deg - self.current_heading_deg
-                # angle_to_turn_deg = ((angle_to_turn_deg + 180) % 360) - 180
-                # angle_to_turn = np.deg2rad(angle_to_turn_deg)
-                # self.turn(angle_to_turn)
-                # self.check_goal_reached()
-                # self.update_hmaps()
-                # self.forward()        
-                # break 
 
-            # 6) If collisions => turn away
+            # 4) If a collision is detected, turn away and break
             if torch.any(self.collided):
                 random_angle = np.random.uniform(-np.pi, np.pi)
                 self.turn(random_angle)
                 break
-
-            # 7) Check goal, update hmaps, forward
+            
+            # 5) Check goal, update hmaps, move forward
             self.check_goal_reached()
-            self.update_hmaps(update_loc=True, 
-                              update_pcn=True,
-                              update_scale_priority=True if self.robot_mode == RobotMode.EXPLOIT else False, 
-                              update_prox=True if (self.use_prox_mod and self.robot_mode == RobotMode.LEARN_OJAS) else False)
+            self.update_hmaps(
+                update_loc=True, 
+                update_pcn=True,
+                update_scale_priority=self.robot_mode == RobotMode.EXPLOIT, 
+                update_prox=(self.use_prox_mod and self.robot_mode == RobotMode.LEARN_OJAS)
+            )
             self.forward()
 
-        # A small random turn at the end
-        self.turn(np.random.normal(0, np.deg2rad(30)))
+        # A small random turn at the end if enabled
+        if self.manual_explore:
+            self.manual_control()
+        else:
+            self.turn(np.random.normal(0, np.deg2rad(30)))
 
     ########################################### EXPLOIT ###########################################
     def exploit(self):
@@ -388,6 +383,17 @@ class Driver(Supervisor):
                           update_pcn=True,
                           update_scale_priority=True)
         self.check_goal_reached()
+
+        # Save old PCN activations for each scale
+        old_pcn_activations = []
+        for i, scale_def in enumerate(self.scales):
+            # Each scale has its own PCN; store its current activations
+            pcn = self.pcns[i]
+            old_pcn_activations.append(pcn.place_cell_activations.clone())
+
+        # Exploit can only being with at least 10 steps
+        if self.step_count <= self.tau_w:
+            return
 
         if self.force_explore_count > 0:
             self.force_explore_count -= 1
@@ -469,7 +475,6 @@ class Driver(Supervisor):
         #-------------------------------------------------------------------
         if len(valid_scale_indices) == 0:
             print(f"All scales below reward threshold ({reward_threshold}), forcing exploration")
-            self.force_explore_count = 5
             self.explore()
             return
 
@@ -482,7 +487,26 @@ class Driver(Supervisor):
         # Compute gradients only on valid scales
         grads = torch.sum(torch.abs(torch.diff(pot_rew_scales, dim=1)), dim=1)
 
-        # Compute initial mixing weights based on gradients
+        # Apply Gaussian smoothing
+        kernel_size = 3  # Adjust as needed (3, 5, or 7 are common choices)
+        sigma = 1.0  # Standard deviation for Gaussian smoothing
+
+        # Create Gaussian kernel
+        def gaussian_kernel(size: int, sigma: float, device):
+            x = torch.arange(size, dtype=self.dtype, device=device) - size // 2
+            kernel = torch.exp(-0.5 * (x / sigma) ** 2)
+            kernel /= kernel.sum()
+            return kernel.view(1, 1, -1)  # Shape for 1D convolution
+
+        gaussian = gaussian_kernel(kernel_size, sigma, self.device)
+
+        # Apply smoothing via 1D convolution
+        grads_unsq = grads.unsqueeze(0).unsqueeze(0)  # Add batch and channel dims
+        grads_smooth = F.conv1d(grads_unsq, gaussian, padding=kernel_size // 2).squeeze()
+
+        # Compute initial mixing weights based on smoothed gradients
+        mixing_weights = grads_smooth / (grads_smooth.sum() + 1e-6)
+
         mixing_weights = grads / (grads.sum() + 1e-6)
         mixing_weights = torch.clamp(mixing_weights, min=0.0, max=1.0)
         mixing_weights /= mixing_weights.sum()
@@ -503,15 +527,22 @@ class Driver(Supervisor):
             mixing_weights /= mixing_weights.sum()
 
         # Print which scale is being preferred
-        if not hasattr(self, 'last_preferred_scale_index') or self.last_preferred_scale_index != torch.argmax(mixing_weights).item():
-            self.last_preferred_scale_index = torch.argmax(mixing_weights).item()
-            print(f"Preferred scale: {self.last_preferred_scale_index}, Weight: {mixing_weights[self.last_preferred_scale_index].item()}")
+        if mixing_weights.numel() > 1:  # Ensure there are multiple elements in mixing_weights
+            preferred_scale_index = torch.argmax(mixing_weights).item()
+            self.last_preferred_scale_index = preferred_scale_index
+            print(f"Preferred scale: {preferred_scale_index}, Weight: {mixing_weights[preferred_scale_index].item()}")
+        else:
+            self.last_preferred_scale_index = 0  # Default to the only available scale
+            print(f"Only one valid scale available. Weight: {mixing_weights.item()}")
 
         # Update scale priority for logging
         self.scale_idx = valid_scale_indices[torch.argmax(mixing_weights).item()]
 
-        # Weighted sum of the potential rewards
-        combined_pot_rew = torch.sum(mixing_weights[:, None] * pot_rew_scales, dim=0)
+        if mixing_weights.numel() > 1:
+            combined_pot_rew = torch.sum(mixing_weights[:, None] * pot_rew_scales, dim=0)
+        else:
+            # Directly use the only valid reward scale
+            combined_pot_rew = pot_rew_scales.squeeze(0)  # Remove batch dim if needed
 
 
         #-------------------------------------------------------------------
@@ -555,13 +586,13 @@ class Driver(Supervisor):
         #--------------------------
         # 7) (Optional) TD Learning Step
         #--------------------------
-        # if self.td_learning:
-        #     for i, scale_def in enumerate(self.scales):
-        #         pcn, rcn = self.pcns[i], self.rcns[i]
-        #         new_pcn_activations = pcn.place_cell_activations
-        #         rcn.update_reward_cell_activations(new_pcn_activations, visit=False)
-        #         observed_reward = float(rcn.reward_cell_activations.item())
-        #         rcn.td_update(old_pcn_activations[i], observed_reward)
+        if self.td_learning:
+            for i, scale_def in enumerate(self.scales):
+                pcn, rcn = self.pcns[i], self.rcns[i]
+                new_pcn_activations = pcn.place_cell_activations
+                rcn.update_reward_cell_activations(new_pcn_activations, visit=False)
+                observed_reward = float(rcn.reward_cell_activations.item())
+                rcn.td_update(old_pcn_activations[i], observed_reward)
 
         return
 
@@ -774,7 +805,14 @@ class Driver(Supervisor):
                     print(f"Success: {self.getTime() <= time_limit * 60}")
                     
                     self.stop()
-                    self.save(save_trajectory=True)
+                    for pcn, rcn in zip(self.pcns, self.rcns):
+                        rcn.update_reward_cell_activations(pcn.place_cell_activations, visit=True)
+                        rcn.replay(pcn=pcn)
+                    self.save(
+                        include_pcn=True if self.td_learning else False,
+                        include_rcn=True if self.td_learning else False,
+                        save_trajectory=True
+                    )
                     self.done = True
                     return
                 else:
@@ -1034,6 +1072,8 @@ class Driver(Supervisor):
             # 6) Update proximity value if available
             if update_prox and hasattr(self, 'prox'):
                 self.hmap_prox[self.step_count] = self.prox
+
+        # Increment step count
         self.step_count += 1
 
     def get_actual_reward(self):
@@ -1163,16 +1203,21 @@ class Driver(Supervisor):
 
             # Trial ID-based filename
             trial_id = getattr(self, "trial_id", "default")
-            hmap_loc_file = os.path.join(hmaps_path_dir, f"{trial_id}_hmap_loc.pkl")
-            hmap_scale_priority_file = os.path.join(hmaps_path_dir, f"{trial_id}_hmap_scale_priority.pkl")
+            hmap_loc_path = os.path.join(hmaps_path_dir, f"{trial_id}_hmap_loc.pkl")
+            hmap_scale_priority_path = os.path.join(hmaps_path_dir, f"{trial_id}_hmap_scale_priority.pkl")
+            hmap_step_count_path = os.path.join(hmaps_path_dir, f"{trial_id}_hmap_step_count.pkl")
 
-            with open(hmap_loc_file, "wb") as f:
+            with open(hmap_loc_path, "wb") as f:
                 pickle.dump(self.hmap_loc[:self.step_count], f)
-                files_saved.append(hmap_loc_file)
+                files_saved.append(hmap_loc_path)
 
-            with open(hmap_scale_priority_file, "wb") as f:
+            with open(hmap_scale_priority_path, "wb") as f:
                 pickle.dump(self.hmap_scale_priority[: self.step_count].cpu().numpy(), f)
-                files_saved.append(hmap_scale_priority_file)
+                files_saved.append(hmap_scale_priority_path)
+            
+            with open(hmap_step_count_path, "wb") as f:
+                pickle.dump(self.step_count, f)
+                files_saved.append(hmap_step_count_path)
 
             print(f"Saved path data for trial {trial_id} in {scale_combination}.")
 
