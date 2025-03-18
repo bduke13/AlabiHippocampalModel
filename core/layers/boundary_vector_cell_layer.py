@@ -69,8 +69,11 @@ class BoundaryVectorCellLayer:
             -(angular_diff**2) / (2 * self.sigma_theta**2)
         ) / torch.sqrt(2 * PI * self.sigma_theta**2)
 
+        bvc_activations = torch.sum(distance_gaussian * angular_gaussian, dim=0)
+        bvc_activations = bvc_activations / self.num_bvc
+
         # Compute BVC activations
-        return torch.sum(distance_gaussian * angular_gaussian, dim=0)
+        return bvc_activations
 
     def plot_activation(
         self,
