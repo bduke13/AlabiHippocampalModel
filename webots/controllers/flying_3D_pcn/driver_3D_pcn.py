@@ -135,15 +135,10 @@ class DriverFlying(Supervisor):
         os.makedirs(self.network_dir, exist_ok=True)
 
         # Model parameters
-        self.timestep = 32 * 3
+        self.timestep = 32 * 6
         self.tau_w = 10
 
         # Robot parameters
-        self.max_speed = 16
-        self.left_speed = self.max_speed
-        self.right_speed = self.max_speed
-        self.wheel_radius = 0.031
-        self.axle_length = 0.271756
         self.run_time_minutes = run_time_hours * 60
 
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
@@ -201,9 +196,9 @@ class DriverFlying(Supervisor):
         self.expected_reward = 0
 
         # Define environment boundaries in Webots (x, y, z)
-        self.x_min, self.x_max = -2.3, 2.3
-        self.y_min, self.y_max = 0.1, 4.8
-        self.z_min, self.z_max = -2.3, 2.3
+        self.x_min, self.x_max = -2.4, 2.4
+        self.y_min, self.y_max = 0.1, 4.9
+        self.z_min, self.z_max = -2.4, 2.4
 
         # Initialize hmaps (history maps)
         self.hmap_loc = torch.zeros(
@@ -280,7 +275,7 @@ class DriverFlying(Supervisor):
                 num_pc=num_place_cells,
                 timestep=timestep,
                 n_hd=n_hd_hdn,
-                w_in_init_ratio=0.50,
+                w_in_init_ratio=0.25,
                 device=device,
             )
             print(
@@ -339,7 +334,7 @@ class DriverFlying(Supervisor):
         range_data = self.vertical_range_finder.getRangeImage()
         if range_data is not None:
             min_distance = min(range_data)
-            if min_distance < 0.2:
+            if min_distance < 0.1:
                 self.handle_collision(current_pos)
                 return
 
@@ -481,6 +476,7 @@ class DriverFlying(Supervisor):
         if self.visual_bvc:
             self.pcn.bvc_layer.plot_activation(self.vertical_boundaries)
             self.pcn.bvc_layer.plot_activation_distribution(self.vertical_boundaries)
+            self.pcn.bvc_layer.plot_kernel_heatmaps_3d(self.vertical_boundaries)
 
         self.step(self.timestep)
 

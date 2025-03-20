@@ -39,8 +39,8 @@ experiments_obstacles = [
 ]
 
 experiments_ceilings = [
-    ["3D_bvc_ceilings_control", "env1", "3D_bvc"],
-    ["3D_bvc_ceilings_test", "env2", "3D_bvc"],
+    ["3D_bvc_ceilings_control", "Control", "3D_bvc"],
+    ["3D_bvc_ceilings_test", "Test", "3D_bvc"],
 ]
 
 experiments_scaling = [
@@ -51,29 +51,30 @@ experiments_scaling = [
 ]
 
 experiments_rotated = [
-    ["3D_bvc_cross_rotated_1_model0", "env1", "model0"],
-    ["3D_bvc_cross_rotated_1_model1", "env1", "model1"],
-    ["3D_bvc_cross_rotated_1_model2", "env1", "model2"],
-    ["3D_bvc_cross_rotated_1_model3", "env1", "model3"],
-    ["3D_bvc_cross_rotated_1_model4", "env1", "model4"],
-    ["3D_bvc_cross_rotated_2_model0", "env2", "model0"],
-    ["3D_bvc_cross_rotated_2_model1", "env2", "model1"],
-    ["3D_bvc_cross_rotated_2_model2", "env2", "model2"],
-    ["3D_bvc_cross_rotated_2_model3", "env2", "model3"],
-    ["3D_bvc_cross_rotated_2_model4", "env2", "model4"],
-    ["3D_bvc_cross_rotated_3_model0", "env3", "model0"],
-    ["3D_bvc_cross_rotated_3_model1", "env3", "model1"],
-    ["3D_bvc_cross_rotated_3_model2", "env3", "model2"],
-    ["3D_bvc_cross_rotated_3_model3", "env3", "model3"],
-    ["3D_bvc_cross_rotated_3_model4", "env3", "model4"],
-    ["3D_bvc_cross_rotated_4_model0", "env4", "model0"],
-    ["3D_bvc_cross_rotated_4_model1", "env4", "model1"],
-    ["3D_bvc_cross_rotated_4_model2", "env4", "model2"],
-    ["3D_bvc_cross_rotated_4_model3", "env4", "model3"],
-    ["3D_bvc_cross_rotated_4_model4", "env4", "model4"],
+    ["3D_bvc_cross_rotated_1_model0", "Upright", "2D - 1 Layer"],
+    ["3D_bvc_cross_rotated_1_model1", "Upright", "3D - 1 Layer"],
+    ["3D_bvc_cross_rotated_1_model2", "Upright", "3D - 2 Layer"],
+    ["3D_bvc_cross_rotated_1_model3", "Upright", "3D - 3 Layer"],
+    ["3D_bvc_cross_rotated_1_model4", "Upright", "3D - 4 Layer"],
+    ["3D_bvc_cross_rotated_2_model0", "30° Tilt", "2D - 1 Layer"],
+    ["3D_bvc_cross_rotated_2_model1", "30° Tilt", "3D - 1 Layer"],
+    ["3D_bvc_cross_rotated_2_model2", "30° Tilt", "3D - 2 Layer"],
+    ["3D_bvc_cross_rotated_2_model3", "30° Tilt", "3D - 3 Layer"],
+    ["3D_bvc_cross_rotated_2_model4", "30° Tilt", "3D - 4 Layer"],
+    ["3D_bvc_cross_rotated_3_model0", "45° Tilt", "2D - 1 Layer"],
+    ["3D_bvc_cross_rotated_3_model1", "45° Tilt", "3D - 1 Layer"],
+    ["3D_bvc_cross_rotated_3_model2", "45° Tilt", "3D - 2 Layer"],
+    ["3D_bvc_cross_rotated_3_model3", "45° Tilt", "3D - 3 Layer"],
+    ["3D_bvc_cross_rotated_3_model4", "45° Tilt", "3D - 4 Layer"],
+    ["3D_bvc_cross_rotated_4_model0", "60° Tilt", "2D - 1 Layer"],
+    ["3D_bvc_cross_rotated_4_model1", "60° Tilt", "3D - 1 Layer"],
+    ["3D_bvc_cross_rotated_4_model2", "60° Tilt", "3D - 2 Layer"],
+    ["3D_bvc_cross_rotated_4_model3", "60° Tilt", "3D - 3 Layer"],
+    ["3D_bvc_cross_rotated_4_model4", "60° Tilt", "3D - 4 Layer"],
 ]
 
 experiments = experiments_base
+experiment_plot_name = "Baseline Experiment"
 
 # Extract just the world names for filtering
 worlds = [world for world, _, _ in experiments]
@@ -165,6 +166,7 @@ print("\nModel Analysis Results (DBSCAN):")
 print(df)
 
 # Plot the metrics
+bar_width = 0.4
 
 # Set font family and sizes globally
 plt.rcParams.update(
@@ -172,63 +174,67 @@ plt.rcParams.update(
         "font.family": "serif",
         "font.serif": ["Times New Roman"],
         "mathtext.fontset": "dejavuserif",
-        "font.size": 14,
-        "axes.labelsize": 14,
-        "axes.titlesize": 14,
+        "font.size": 18,
+        "axes.labelsize": 18,
+        "axes.titlesize": 18,
         "legend.fontsize": 14,
-        "legend.title_fontsize": 14,
+        "legend.title_fontsize": 16,
     }
 )
 
-# Create subplots in a single row
-fig, axes = plt.subplots(1, 3, figsize=(24, 6))
+# Calculate normalized metrics
+df["norm_non_zero_cells"] = df["non_zero_cells"] / 500  # Normalize by total cells
+df["norm_cells_multiple_clusters"] = df["cells_with_multiple_clusters"] / 500
 
 # 1. Plot proportion of non-zero cells
-df["norm_non_zero_cells"] = df["non_zero_cells"] / 500  # Normalize by total cells
-sns.barplot(
+plt.figure(figsize=(10, 5))
+ax1 = sns.barplot(
     data=df,
     x="env",
     y="norm_non_zero_cells",
     hue="model",
-    ax=axes[0],
+    width=bar_width,  # Set the width of the bars
 )
-axes[0].set_title("Proportion of Non-Zero Cells")
-axes[0].set_xlabel("Environment")
-axes[0].set_ylabel("Proportion")
-axes[0].legend(title="Model")
-axes[0].grid(axis="y", linestyle="-", linewidth=0.5, alpha=1.0)
+ax1.set_title(f"Proportion of Cells where MI > 0: {experiment_plot_name}", pad=20)
+ax1.set_xlabel("Environment")
+ax1.set_ylabel("Proportion")
+ax1.legend(title="Model", loc="lower left")
+ax1.grid(axis="y", linestyle="-", linewidth=0.5, alpha=1.0)
+plt.tight_layout(pad=2.0)
+plt.show()
 
 # 2. Plot proportion of cells with multiple clusters
-df["norm_cells_multiple_clusters"] = df["cells_with_multiple_clusters"] / 500
-sns.barplot(
+plt.figure(figsize=(10, 5))
+ax2 = sns.barplot(
     data=df,
     x="env",
     y="norm_cells_multiple_clusters",
     hue="model",
-    ax=axes[1],
+    width=bar_width,  # Set the width of the bars
 )
-axes[1].set_title("Proportion of Cells with Multiple Clusters")
-axes[1].set_xlabel("Environment")
-axes[1].set_ylabel("Proportion")
-axes[1].legend(title="Model")
-axes[1].grid(axis="y", linestyle="-", linewidth=0.5, alpha=1.0)
+ax2.set_title(f"Proportion of Cells where MI > 1: {experiment_plot_name}", pad=20)
+ax2.set_xlabel("Environment")
+ax2.set_ylabel("Proportion")
+ax2.legend(title="Model", loc="lower left")
+ax2.grid(axis="y", linestyle="-", linewidth=0.5, alpha=1.0)
+plt.tight_layout(pad=2.0)
+plt.show()
 
 # 3. Plot average clusters per non-zero cell
-sns.barplot(
+plt.figure(figsize=(10, 5))
+ax3 = sns.barplot(
     data=df,
     x="env",
     y="avg_clusters_per_non_zero_cell",
     hue="model",
-    ax=axes[2],
+    width=bar_width,  # Set the width of the bars
 )
-axes[2].set_title("Average Clusters per Non-Zero Cell")
-axes[2].set_xlabel("Environment")
-axes[2].set_ylabel("Average Clusters")
-axes[2].legend(title="Model")
-axes[2].grid(axis="y", linestyle="-", linewidth=0.5, alpha=1.0)
-
-# Adjust layout
-plt.tight_layout()
+ax3.set_title(f"Average MI of Cells when MI > 0: {experiment_plot_name}", pad=20)
+ax3.set_xlabel("Environment")
+ax3.set_ylabel("Average Clusters")
+ax3.legend(title="Model", loc="lower left")
+ax3.grid(axis="y", linestyle="-", linewidth=0.5, alpha=1.0)
+plt.tight_layout(pad=2.0)
 plt.show()
 
 # Print the dataframe to the terminal

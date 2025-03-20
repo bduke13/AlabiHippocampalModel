@@ -217,34 +217,28 @@ if __name__ == "__main__":
         CONTROLLER_NAME,
         WORLD_NAME,
     )
-    worlds = os.listdir('webots/controllers/flying_3D_pcn_looping/pkl/')
-
-    for world in worlds:
-        CONTROLLER_NAME = "flying_3D_pcn_looping"
-        WORLD_NAME = world
-        print(f'WORLD: {world}')
 
 
-
-        # Load hmap data from hardcoded world name
-        hmap_loc, hmap_pcn = load_hmaps(hmap_names=["hmap_loc", "hmap_pcn"])
-        hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
-        for cell_index in range(0, hmap_pcn.shape[1], 5):
-            plot_single_cell_activation_3d(
-                hmap_x=hmap_x,
-                hmap_z=hmap_z,
-                hmap_y=hmap_y,
-                hmap_pcn=hmap_pcn,
-                cell_index=cell_index,
-            )
-
-        plot_overlayed_cells_3d(
+    # Load hmap data from hardcoded world name
+    hmap_loc, hmap_pcn = load_hmaps(hmap_names=["hmap_loc", "hmap_pcn"])
+    hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
+    for cell_index in range(0, 200, 10):
+        plot_single_cell_activation_3d(
             hmap_x=hmap_x,
             hmap_z=hmap_z,
             hmap_y=hmap_y,
             hmap_pcn=hmap_pcn,
-            cell_indices=np.random.choice(hmap_pcn.shape[1], size = 100, replace=False),
+            cell_index=cell_index,
         )
+
+    # %% 
+    plot_overlayed_cells_3d(
+        hmap_x=hmap_x,
+        hmap_z=hmap_z,
+        hmap_y=hmap_y,
+        hmap_pcn=hmap_pcn,
+        cell_indices=np.random.choice(hmap_pcn.shape[1], size = 1000, replace=False),
+    )
 
 
     # %%
@@ -268,7 +262,7 @@ if __name__ == "__main__":
             hmap_z=hmap_z,
             hmap_y=hmap_y,
             hmap_pcn=hmap_pcn,
-            cell_indices=range(1000),
+            cell_indices=range(800),
         )
 
     if True:

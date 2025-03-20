@@ -97,7 +97,7 @@ OUTPUT_DIR = "webots/controllers/create3_3D_bvc/visualizations_3D_bvc/outputs"
 #    print(f"  {key}: {value}")
 # selected_experiment = input("Enter the experiment folder name: ")
 
-selected_experiment = "base_experiment"
+selected_experiment = "rotated_walls_experiment"
 
 if selected_experiment not in EXPERIMENTS:
     raise ValueError("Invalid experiment selection!")
@@ -173,7 +173,7 @@ plt.show()
 
 # Create MSAI bar plot
 fig, ax = plt.subplots(figsize=(10, 5))
-fig.suptitle("Mean Spatial Aliasing Index by Environment", fontsize=12, y=0.94)
+fig.suptitle("Mean Spatial Aliasing Index by Environment", fontsize=18, y=0.94)
 
 sum_data = []
 for env_name in ENV_ORDER:
@@ -190,10 +190,12 @@ for env_name in ENV_ORDER:
             )
 
 sum_df = pd.DataFrame(sum_data)
-sns.barplot(data=sum_df, x="Environment", y="Total Sum", hue="Model", ax=ax)
-ax.grid(axis="y", linestyle="-", linewidth=0.5, alpha=0.6)
-ax.set_ylabel("MSAI", fontsize=12)
-ax.legend(title="Model", fontsize=12, title_fontsize=16, loc="best")
+sns.barplot(data=sum_df, x="Environment", y="Total Sum", hue="Model", ax=ax, width=0.4)
+ax.grid(axis="y", linestyle="-", linewidth=0.5, alpha=1.0)
+ax.set_ylabel("MSAI", fontsize=18)
+ax.set_xlabel("Environment", fontsize=18)
+ax.tick_params(axis="both", which="major", labelsize=18)
+ax.legend(title="Model", fontsize=14, title_fontsize=16, loc="lower left")
 plt.tight_layout()
 plt.show()
 

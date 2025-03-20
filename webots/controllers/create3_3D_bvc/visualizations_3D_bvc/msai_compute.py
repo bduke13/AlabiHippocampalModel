@@ -74,7 +74,7 @@ def process_hmap(path):
 
 if __name__ == "__main__":
 
-    CONTROLLER_NAME = "create3_base"
+    CONTROLLER_NAME = "create3_3D_bvc"
 
     # Parameters
     root_path = os.path.join(CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl")
@@ -123,7 +123,7 @@ if __name__ == "__main__":
         ["3D_bvc_cross_rotated_4_model4", "env4", "model4"],
     ]
 
-    experiments = experiments_base
+    experiments = experiments_obstacles
 
     # Extract just the world names for filtering
     worlds = [world for world, _, _ in experiments]

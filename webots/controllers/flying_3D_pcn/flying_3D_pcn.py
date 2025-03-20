@@ -13,19 +13,19 @@ sys.path.append(str(PROJECT_ROOT))  # Add project root to sys.path
 from core.robot.robot_mode import RobotMode
 
 
-run_time_hours = 3
+run_time_hours = 5
 
-phi_vert_preferred = [np.radians(x) for x in [-90, -60, -30, 0, 30, 60, 90]]
-sigma_rs = [0.2] * len(phi_vert_preferred)
+phi_vert_preferred = [np.radians(x) for x in [-90, -45, 0, 45, 90]]
+sigma_rs = [0.4] * len(phi_vert_preferred)
 sigma_thetas = [np.radians(2)] * len(phi_vert_preferred)
 sigma_phis = [np.radians(2)] * len(phi_vert_preferred)
-scaling_factors = [1] * len(phi_vert_preferred)
+scaling_factors = [1.0] * len(phi_vert_preferred)
 visual_bvc = False
 visual_pcn = False
 n_hd_bvc = 8
 n_hd_hdn = 20
 
-num_place_cells = 1000
+num_place_cells = 2000
 num_bvc_per_dir = 50
 max_dist = 8
 
@@ -41,7 +41,7 @@ world_name = os.path.splitext(os.path.basename(world_path))[
     0
 ]  # Extract just the world name
 
-world_name += "0.2"
+world_name += "_0_4_final2"
 
 bot.initialization(
     mode=RobotMode.LEARN_OJAS,

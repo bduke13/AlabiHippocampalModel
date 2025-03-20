@@ -1,4 +1,5 @@
-"""my_controller_iCreate controller."""
+import numpy as np
+
 
 from driver_3D_bvc import Driver
 
@@ -14,17 +15,17 @@ from core.robot.robot_mode import RobotMode
 run_time_hours = 4
 
 n_hd = 8
-num_bvc_per_dir = 50
+num_bvc_per_dir = 39
 num_place_cells = 500
 
-phi_vert_preferred = [0.0, 0.3, 0.6, 1.3]
+phi_vert_preferred = [np.radians(x) for x in [0, 15, 30, 45]]
 sigma_rs = [0.5] * len(phi_vert_preferred)
-sigma_thetas = [0.02] * len(phi_vert_preferred)
-sigma_phis = [0.02] * len(phi_vert_preferred)
-scaling_factors = [1.0, 0.9, 0.8, 0.7]
+sigma_thetas = [np.radians(10)] * len(phi_vert_preferred)
+sigma_phis = [np.radians(1)] * len(phi_vert_preferred)
+scaling_factors = [1.0, 0.8, 0.6, 0.4]
 max_dist = 15
 
-start_location = [1, 1]
+start_location = [0, 0]
 goal_location = [-1, 1]
 
 show_bvc_activation_plot = False
@@ -40,6 +41,7 @@ bot = Driver()
 bot.initialization(
     mode=RobotMode.LEARN_OJAS,
     randomize_start_location=True,
+    start_location=start_location,
     run_time_hours=run_time_hours,
     phi_vert_preferred=phi_vert_preferred,
     sigma_rs=sigma_rs,

@@ -125,8 +125,8 @@ class Driver(Supervisor):
         os.makedirs(self.network_dir, exist_ok=True)
 
         # Model parameters
-        self.num_place_cells = 800
-        self.num_bvc_per_dir = 50
+        self.num_place_cells = 500
+        self.num_bvc_per_dir = 120
         self.sigma_r = 0.5
         self.sigma_theta = 1
         self.n_hd = 8
@@ -538,7 +538,6 @@ class Driver(Supervisor):
         # Check for collisions via bumpers
         self.collided[0] = int(self.left_bumper.getValue())
         self.collided[1] = int(self.right_bumper.getValue())
-
 
     def get_bearing_in_degrees(self, north: List[float]) -> float:
         """
