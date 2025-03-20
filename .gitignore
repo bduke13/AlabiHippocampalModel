@@ -17,7 +17,7 @@ main.py
 
 # Ignore hmap and pkl files
 *.hmap_*.pkl
-*.pkl
+*pkl
 *.wbproj
 *cell_names.txt
 *parameters.txt
@@ -38,3 +38,4 @@ main.py
 *archive*
 *analysis*
 *images*
+*outputs*
