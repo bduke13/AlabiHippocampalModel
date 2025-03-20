@@ -388,7 +388,7 @@ class Driver(Supervisor):
             return
 
         #-------------------------------------------------------------------
-        # 2) Forced Exploration Check
+        # 2) Forced Exploration Check & Cooldown Setup
         #-------------------------------------------------------------------
         if self.force_explore_count > 0:
             self.force_explore_count -= 1
@@ -400,16 +400,6 @@ class Driver(Supervisor):
                     torch.max(torch.nan_to_num(rcn.reward_cell_activations)).item()
                     for rcn in self.rcns
                 )
-
-                # # If a stronger reward gradient was found, move toward it
-                # if hasattr(self, "max_pre_explore_gradient"):
-                #     if self.max_post_explore_gradient > self.max_pre_explore_gradient:
-                #         print(f"Stronger reward detected ({self.max_post_explore_gradient:.3f} vs. {self.max_pre_explore_gradient:.3f}). Moving toward it.")
-                #         self.force_explore_count = 0
-                #         return  # Skip normal behavior, move directly toward stronger signal
-
-                # # Otherwise, continue normal exploit behavior
-                # print("No stronger reward found, resuming normal exploit behavior.")
 
             self.explore()
             return
@@ -443,13 +433,14 @@ class Driver(Supervisor):
                 self.steps_since_last_loop = 0
                 print(f"Detected {self.LOOP_THRESHOLD} consecutive loops within {self.MAX_STEPS_BETWEEN_LOOPS} steps. Initiating forced exploration.")
 
-                # Compute the max pre-explore reward gradient
-                self.max_pre_explore_gradient = max(
-                    torch.max(torch.nan_to_num(rcn.reward_cell_activations)).item()
-                    for rcn in self.rcns
-                )
+                # Store the preferred scale before entering forced exploration
+                if hasattr(self, "last_preferred_scale_index"):
+                    self.cooldown_scale_index = self.last_preferred_scale_index
+                    self.cooldown_steps_remaining = 20  # Cooldown for 10 steps
+                    print(f"[INFO] Cooling down scale {self.cooldown_scale_index} for 10 steps.")
 
-                self.force_explore_count = 5  # Start forced exploration
+                # Start forced exploration
+                self.force_explore_count = 5
                 self.explore()
                 return
         else:
@@ -457,40 +448,8 @@ class Driver(Supervisor):
             if self.steps_since_last_loop > self.MAX_STEPS_BETWEEN_LOOPS:
                 self.rotation_loop_count = 0
 
-        # #-------------------------------------------------------------------
-        # # 3) Compute potential rewards at multiple scales, skipping invalid directions
-        # #-------------------------------------------------------------------
-        # boundaries_rolled = torch.roll(self.boundaries, shifts=len(self.boundaries) // 2)
-        # num_points_per_hd = len(boundaries_rolled) // self.n_hd
-
-        # distances_per_hd = torch.tensor([
-        #     torch.min(boundaries_rolled[i * num_points_per_hd: (i + 1) * num_points_per_hd])
-        #     for i in range(self.n_hd)
-        # ], device=self.device, dtype=self.dtype)
-
-        # pot_rew_scales = []
-        # valid_scale_indices = []
-        # reward_threshold = 0.1  # Threshold for considering a scale valid
-
-        # for i, scale_def in enumerate(self.scales):
-        #     pcn, rcn = self.pcns[i], self.rcns[i]
-        #     pot_rew = torch.empty(self.n_hd, dtype=self.dtype, device=self.device)
-
-        #     for d in range(self.n_hd):
-        #         if distances_per_hd[d] < 1:
-        #             pot_rew[d] = 0.0
-        #         else:
-        #             pcn_activations = pcn.preplay(d)
-        #             rcn.update_reward_cell_activations(pcn_activations, visit=False)
-        #             pot_rew[d] = torch.max(torch.nan_to_num(rcn.reward_cell_activations))
-
-        #     # If this scale has a valid reward, keep it for action selection
-        #     if pot_rew.max().item() >= reward_threshold:
-        #         pot_rew_scales.append(pot_rew)
-        #         valid_scale_indices.append(i)
-
         #-------------------------------------------------------------------
-        # 3) Compute potential rewards at multiple scales, skipping invalid directions
+        # 4) Compute potential rewards at multiple scales, skipping invalid directions
         #-------------------------------------------------------------------
         boundaries_rolled = torch.roll(self.boundaries, shifts=len(self.boundaries) // 2)
         num_points_per_hd = len(boundaries_rolled) // self.n_hd
@@ -503,12 +462,16 @@ class Driver(Supervisor):
         pot_rew_scales = []
         valid_scale_indices = []
         reward_threshold = 0.1  # Threshold for considering a scale valid
-        reward_gradients = []  # Store reward gradients for each scale
 
         for i, scale_def in enumerate(self.scales):
+            if hasattr(self, "cooldown_steps_remaining") and self.cooldown_steps_remaining > 0:
+                if i == getattr(self, "cooldown_scale_index", -1):
+                    print(f"[INFO] Skipping scale {i} due to cooldown.")
+                    continue  # Skip the scale that is on cooldown
+
             pcn, rcn = self.pcns[i], self.rcns[i]
             pot_rew = torch.empty(self.n_hd, dtype=self.dtype, device=self.device)
-            current_pcn_activations = self.pcn_activations_list[i]  # Current activations
+            current_pcn_activations = pcn.place_cell_activations
 
             # Compute current reward at the agent's position
             rcn.update_reward_cell_activations(current_pcn_activations, visit=False)
@@ -518,19 +481,11 @@ class Driver(Supervisor):
                 if distances_per_hd[d] < 1:
                     pot_rew[d] = 0.0
                 else:
-                    # Compute expected (preplayed) reward
                     preplayed_pcn_activations = pcn.preplay(d)
                     rcn.update_reward_cell_activations(preplayed_pcn_activations, visit=False)
                     preplayed_reward = torch.max(torch.nan_to_num(rcn.reward_cell_activations))
+                    pot_rew[d] = preplayed_reward
 
-                    # Compute reward gradient (difference between preplayed and actual reward)
-                    reward_gradient = preplayed_reward - current_reward
-                    pot_rew[d] = preplayed_reward  # Keep using preplayed reward for decision-making
-
-                    # Store gradient for analysis
-                    reward_gradients.append(reward_gradient)
-
-            # If this scale has a valid reward, keep it for action selection
             if pot_rew.max().item() >= reward_threshold:
                 pot_rew_scales.append(pot_rew)
                 valid_scale_indices.append(i)
@@ -538,10 +493,18 @@ class Driver(Supervisor):
         #-------------------------------------------------------------------
         # 3.5) If NO valid scales remain, trigger exploration
         #-------------------------------------------------------------------
-        if len(valid_scale_indices) == 0:
-            print(f"All scales below reward threshold ({reward_threshold}), forcing exploration")
+        if len(pot_rew_scales) == 0:
+            print(f"[WARNING] No valid scales found (all below reward threshold {reward_threshold}), forcing exploration.")
             self.explore()
             return
+
+        #-------------------------------------------------------------------
+        # 4.5) Reduce cooldown step count
+        #-------------------------------------------------------------------
+        if hasattr(self, "cooldown_steps_remaining") and self.cooldown_steps_remaining > 0:
+            self.cooldown_steps_remaining -= 1
+            if self.cooldown_steps_remaining == 0:
+                print(f"[INFO] Cooldown complete for scale {self.cooldown_scale_index}. Scale re-enabled.")
 
         #-------------------------------------------------------------------
         # 4) Normalize and blend across valid scales

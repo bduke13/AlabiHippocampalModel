@@ -225,7 +225,7 @@ if __name__ == "__main__":
     medium = ["medium"]
     large = ["large"]
     
-    scale_names = medium 
+    scale_names = multiscale 
     run_time_hours = 3
     max_dist = 25
     plot_bvc = False
