@@ -1,0 +1,101 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/robots/irobot/create/protos/Create.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/apartment_structure/protos/Wall.proto"
+
+WorldInfo {
+  info [
+    "iRobot Create simulation"
+    "The vacuum cleaner robot goes randomly into the apartment while a supervisor tracks its position and alterates the ground texture."
+    "The robot can be stopped by the virtual walls emitting IR light."
+  ]
+  title "iRobot Create"
+  coordinateSystem "NUE"
+}
+Viewpoint {
+  orientation -0.7071057814660382 0.7071077809056435 5.551115123136879e-17 3.1415966524690035
+  position -1.1573460742774868e-05 36.83690037738606 1.1573493547599493e-05
+  near 0.1
+  follow "Create"
+  followType "None"
+}
+TexturedBackground {
+}
+RectangleArena {
+  rotation 1 0 0 -1.5707953071795862
+  floorSize 10 10
+  floorAppearance NULL
+  wallThickness 0.03
+  wallHeight 5
+}
+DirectionalLight {
+  direction 0 -1 0
+}
+DEF agent Create {
+  translation -0.6553074345904553 0.043706420392238446 -2.811231179540781
+  rotation 0.2710035833639696 0.6812963941332717 0.6799943243475562 -2.6183760630645887
+  controller "create3_base"
+  supervisor TRUE
+  bodySlot [
+    Solid {
+      children [
+        Display {
+          width 100
+          height 100
+        }
+        Compass {
+        }
+        DEF vertical-range-finder RangeFinder {
+          translation 0 0 0.1
+          name "vertical-range-finder"
+          fieldOfView 6.28
+          width 180
+          height 90
+          projection "cylindrical"
+          maxRange 10
+        }
+        DEF range-finder RangeFinder {
+          translation 0 0 0.1
+          fieldOfView 6.28
+          width 720
+          height 1
+          projection "cylindrical"
+          maxRange 10
+        }
+      ]
+    }
+  ]
+}
+Wall {
+  translation 0 5 0
+  rotation 1 0 0 -1.5708
+  name "Main_Ceiling"
+  size 10 10 0.1
+  appearance PBRAppearance {
+    transparency 0.8
+    roughness 1
+    metalness 0
+  }
+}
+Wall {
+  rotation 1 1.46647e-06 -7.94056e-08 -1.5707953071795862
+  name "NS_Wall"
+  size 0.1 7 5
+  appearance PBRAppearance {
+    baseColor 0.8 0.8 0.8
+    roughness 1
+    metalness 0
+  }
+}
+Wall {
+  rotation 0.57735126918836 -0.5773482691869614 -0.57735126918836 -2.094395307179586
+  name "EW_Wall"
+  size 0.1 7 5
+  appearance PBRAppearance {
+    baseColor 0.8 0.8 0.8
+    roughness 1
+    metalness 0
+  }
+}
