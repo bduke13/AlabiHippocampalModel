@@ -32,7 +32,7 @@ class RewardCellLayer:
         # Initialize weights with small random values (stddev=0.01)
         self.w_in = (
             torch.randn((1, num_place_cells), dtype=torch.float32, device=self.device)
-            * 0.01
+            * 0.0001
         )
         self.w_in_effective = self.w_in.clone()
 
