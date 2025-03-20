@@ -53,7 +53,7 @@ SCALES_DEFS = {
     "medium": {
         "scale_index": 1,
         "name": "medium",
-        "num_pc": 500,
+        "num_pc": 1000,
         "sigma_r": 2,
         "sigma_theta": 1,
         "rcn_learning_rate": 0.1,
@@ -209,8 +209,8 @@ if __name__ == "__main__":
         "PLOTTING": RobotMode.PLOTTING  
     }
     
-    SELECTED_MODE = "PLOTTING"
-    td_learning = False
+    SELECTED_MODE = "LEARNING_SAVE"
+    td_learning = True
     corners = [[8,-8]]
     dmtp_start = [-9,9]
     exploit_start = corners[0]
@@ -225,8 +225,8 @@ if __name__ == "__main__":
     medium = ["medium"]
     large = ["large"]
     
-    scale_names = multiscale
-    run_time_hours = 4
+    scale_names = medium 
+    run_time_hours = 3
     max_dist = 25
     plot_bvc = False
 
@@ -316,7 +316,7 @@ if __name__ == "__main__":
             "enable_ojas": True,
             "enable_stdp": True,
             "run_time_hours": run_time_hours,
-            "num_loops": 21, 
+            "num_loops": 51, 
             "save_data": True,
             "td_learning": td_learning,
         },
