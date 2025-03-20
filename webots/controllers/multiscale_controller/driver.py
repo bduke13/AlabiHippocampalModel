@@ -92,7 +92,7 @@ class Driver(Supervisor):
         self.num_steps = int(self.run_time_minutes * 60 // (2 * self.timestep / 1000))
 
         # Exploration/exploitation radius
-        self.goal_r = {"explore": 0.3, "exploit": 0.5}
+        self.goal_r = {"explore": 0.3, "exploit": 0.3}
         self.goal_location = goal_location if goal_location else [-3, 3]
         self.start_loc = start_loc
 
@@ -502,7 +502,7 @@ class Driver(Supervisor):
 
         pot_rew_scales = []
         valid_scale_indices = []
-        reward_threshold = 0.01  # Threshold for considering a scale valid
+        reward_threshold = 0.1  # Threshold for considering a scale valid
         reward_gradients = []  # Store reward gradients for each scale
 
         for i, scale_def in enumerate(self.scales):
@@ -591,14 +591,21 @@ class Driver(Supervisor):
             mixing_weights = (1 - prox_weight) * mixing_weights + prox_weight * scale_biases
             mixing_weights /= mixing_weights.sum()
 
-        # Print which scale is being preferred
-        if mixing_weights.numel() > 1:  # Ensure there are multiple elements in mixing_weights
+        # Determine the preferred scale
+        if mixing_weights.numel() > 1:  # Ensure multiple elements in mixing_weights
             preferred_scale_index = torch.argmax(mixing_weights).item()
-            self.last_preferred_scale_index = preferred_scale_index
             print(f"Preferred scale: {preferred_scale_index}, Weight: {mixing_weights[preferred_scale_index].item()}")
         else:
-            self.last_preferred_scale_index = 0  # Default to the only available scale
-            # print(f"Only one valid scale available. Weight: {mixing_weights.item()}")
+            preferred_scale_index = 0  # Default to the only available scale
+
+        # Apply hysteresis only if we have multiple scales to choose from
+        if hasattr(self, "last_preferred_scale_index") and self.last_preferred_scale_index is not None:
+            if mixing_weights.numel() > self.last_preferred_scale_index:  # Ensure valid index
+                if abs(mixing_weights[self.last_preferred_scale_index] - mixing_weights[preferred_scale_index]) < 0.1:
+                    preferred_scale_index = self.last_preferred_scale_index  # Stick with previous scale
+
+        # Now update the last preferred scale index
+        self.last_preferred_scale_index = preferred_scale_index
 
         # Update scale priority for logging
         self.scale_idx = valid_scale_indices[torch.argmax(mixing_weights).item()]
@@ -849,43 +856,42 @@ class Driver(Supervisor):
                 atol=self.goal_r["exploit"]
             )
             time_expired = self.getTime() >= 30 * time_limit
-            
+            if time_expired:
+                print("Time limit reached. Trial unsuccessful.")
+                self.stop()
+                self.done = True
+                return
+                
             if goal_reached:
                 if self.stats_collector:
-                    if time_expired:
-                        print("Time limit reached. Trial unsuccessful.")
-                        self.stop()
-                        self.done = True
-                        return
-                    else:
-                        # Update and save stats once
-                        self.stats_collector.update_stat("trial_id", self.trial_id)
-                        self.stats_collector.update_stat("start_location", self.start_loc)
-                        self.stats_collector.update_stat("goal_location", self.goal_location)
-                        self.stats_collector.update_stat("total_distance_traveled", round(self.compute_path_length(), 2))
-                        self.stats_collector.update_stat("total_time_secs", round(self.getTime(), 2))
-                        self.stats_collector.update_stat("success", self.getTime() <= time_limit * 60)
-                        self.stats_collector.save_stats(self.trial_id)
-                        
-                        # Print stats
-                        print(f"Trial {self.trial_id} completed.")
-                        print(f"Start location: {self.start_loc}")
-                        print(f"Goal location: {self.goal_location}")
-                        print(f"Total distance traveled: {round(self.compute_path_length(), 2)} meters.")
-                        print(f"Total time taken: {round(self.getTime(), 2)} seconds.")
-                        print(f"Success: {self.getTime() <= time_limit * 60}")
-                        
-                        self.stop()
-                        for pcn, rcn in zip(self.pcns, self.rcns):
-                            rcn.update_reward_cell_activations(pcn.place_cell_activations, visit=True)
-                            rcn.replay(pcn=pcn)
-                        self.save(
-                            include_pcn=True if self.td_learning else False,
-                            include_rcn=True if self.td_learning else False,
-                            save_trajectory=True
-                        )
-                        self.done = True
-                        return
+                    # Update and save stats once
+                    self.stats_collector.update_stat("trial_id", self.trial_id)
+                    self.stats_collector.update_stat("start_location", self.start_loc)
+                    self.stats_collector.update_stat("goal_location", self.goal_location)
+                    self.stats_collector.update_stat("total_distance_traveled", round(self.compute_path_length(), 2))
+                    self.stats_collector.update_stat("total_time_secs", round(self.getTime(), 2))
+                    self.stats_collector.update_stat("success", self.getTime() <= time_limit * 60)
+                    self.stats_collector.save_stats(self.trial_id)
+                    
+                    # Print stats
+                    print(f"Trial {self.trial_id} completed.")
+                    print(f"Start location: {self.start_loc}")
+                    print(f"Goal location: {self.goal_location}")
+                    print(f"Total distance traveled: {round(self.compute_path_length(), 2)} meters.")
+                    print(f"Total time taken: {round(self.getTime(), 2)} seconds.")
+                    print(f"Success: {self.getTime() <= time_limit * 60}")
+                    
+                    self.stop()
+                    for pcn, rcn in zip(self.pcns, self.rcns):
+                        rcn.update_reward_cell_activations(pcn.place_cell_activations, visit=True)
+                        rcn.replay(pcn=pcn)
+                    self.save(
+                        include_pcn=True if self.td_learning else False,
+                        include_rcn=True if self.td_learning else False,
+                        save_trajectory=True
+                    )
+                    self.done = True
+                    return
                 else:
                     self.stop()
                     for pcn, rcn in zip(self.pcns, self.rcns):
