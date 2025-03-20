@@ -1,0 +1,168 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/robots/irobot/create/protos/Create.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/apartment_structure/protos/Wall.proto"
+
+WorldInfo {
+  info [
+    "iRobot Create simulation"
+    "The vacuum cleaner robot goes randomly into the apartment while a supervisor tracks its position and alterates the ground texture."
+    "The robot can be stopped by the virtual walls emitting IR light."
+  ]
+  title "iRobot Create"
+  coordinateSystem "NUE"
+}
+Viewpoint {
+  orientation -0.4522057867026571 0.7066200964358892 0.5442407241153181 3.2158259050761697
+  position 24.32540797274092 27.33989535963501 15.926091504114002
+  near 0.1
+  follow "Create"
+  followType "None"
+}
+TexturedBackground {
+}
+RectangleArena {
+  rotation 1 0 0 -1.5707953071795862
+  floorSize 10 10
+  floorAppearance NULL
+  wallThickness 0.03
+  wallHeight 0.25
+}
+DirectionalLight {
+  direction 0 -1 0
+}
+DEF agent Create {
+  hidden position_0_0 59411.83179846639
+  hidden position_0_1 60384.65120287615
+  hidden linearVelocity_0 -0.0012497128047179572 0.004371074536715876 0.0011903626983570136
+  hidden angularVelocity_0 0.02542773004795871 0.0359120166961355 0.006843808459257832
+  hidden rotation_5 0 -1 0 1.9684662237815898
+  hidden linearVelocity_5 2.7349289215746924e-05 -0.00044519633933072424 0.0008240685311855069
+  hidden angularVelocity_5 0.0270597184321948 0.0012119591772848219 7.843248196144983e-05
+  hidden rotation_6 0 1 0 3.2404008803238664
+  hidden linearVelocity_6 -0.0027453235041911108 -0.0004965161323005272 0.0007441517647677192
+  hidden angularVelocity_6 0.024146704159309695 0.003513790094350733 0.012121352534379876
+  hidden translation_10 0.00010506670823584585 0.00012860359813782196 -1.0136607481121829e-05
+  hidden rotation_10 -0.8442481910912655 0.3789750875208511 0.37897608747477624 -1.7393140012635468
+  hidden linearVelocity_10 0.0020729769754024227 0.0019044358929188195 -0.0019791179789429084
+  hidden angularVelocity_10 0.025427731490980987 0.035912046881379805 0.0068438099357001686
+  hidden translation_11 0.00014085094231175432 -8.77863545212243e-05 -1.6094875152534993e-06
+  hidden rotation_11 -0.3025419854781861 0.6739659707295889 0.6739719707238871 -2.554029002288797
+  hidden linearVelocity_11 0.002320929956791303 0.0017213709414748328 0.004176732174001824
+  hidden angularVelocity_11 0.025427731625764827 0.03591204704201792 0.006843807822776533
+  translation -4.687900016809465 0.04364563511346272 2.9507941085959324
+  rotation -0.4877553244888215 -0.6184155695743668 -0.6161630683032019 2.2388118763802156
+  controller "create3_3D_bvc"
+  supervisor TRUE
+  bodySlot [
+    Solid {
+      children [
+        Display {
+          width 100
+          height 100
+        }
+        Compass {
+        }
+        DEF vertical-range-finder RangeFinder {
+          translation 0 0 0.1
+          name "vertical-range-finder"
+          fieldOfView 6.28
+          width 180
+          height 90
+          projection "cylindrical"
+          maxRange 10
+        }
+      ]
+    }
+  ]
+}
+Wall {
+  translation 0 2.9 0
+  rotation 1 0 0 -1.5708
+  name "Main_Ceiling"
+  size 10 10 0.1
+  appearance PBRAppearance {
+    transparency 0.8
+    roughness 1
+    metalness 0
+  }
+}
+Wall {
+  translation 0 1.10195e-05 3
+  rotation -1 0 0 1.5708
+  name "NS_Wall"
+  size 0.1 4 3
+  appearance PBRAppearance {
+    baseColor 0.8 0.8 0.8
+    roughness 1
+    metalness 0
+  }
+}
+Wall {
+  translation 5.08 1.10195e-05 3
+  rotation -1 0 0 1.5708
+  name "NS_Wall(5)"
+  size 0.1 4 3
+  appearance PBRAppearance {
+    baseColor 0.8 0.8 0.8
+    roughness 1
+    metalness 0
+  }
+}
+Wall {
+  translation -4.93 -1.10493e-07 -0.03
+  rotation -1 0 0 1.5708
+  name "NS_Wall(2)"
+  size 0.1 10 3
+  appearance PBRAppearance {
+    baseColor 0.8 0.8 0.8
+    roughness 1
+    metalness 0
+  }
+}
+Wall {
+  translation 0.08 -2.32166e-05 -5.01
+  rotation -0.5773509358554485 0.5773509358554485 0.5773489358556708 2.0944
+  name "NS_Wall(3)"
+  size 0.1 10 3
+  appearance PBRAppearance {
+    baseColor 0.8 0.8 0.8
+    roughness 1
+    metalness 0
+  }
+}
+Wall {
+  translation 0.0800182 2.83593e-05 5.03
+  rotation -0.5773509358554485 0.5773509358554485 0.5773489358556708 2.0944
+  name "NS_Wall(4)"
+  size 0.1 10 3
+  appearance PBRAppearance {
+    baseColor 0.8 0.8 0.8
+    roughness 1
+    metalness 0
+  }
+}
+Wall {
+  translation 0 -1.1093e-05 -3.02
+  rotation -1 0 0 1.5708
+  name "NS_Wall(1)"
+  size 0.1 4 3
+  appearance PBRAppearance {
+    baseColor 0.8 0.8 0.8
+    roughness 1
+    metalness 0
+  }
+}
+Wall {
+  translation 5.05 -1.1093e-05 -3.02
+  rotation -1 0 0 1.5708
+  name "NS_Wall(6)"
+  size 0.1 4 3
+  appearance PBRAppearance {
+    baseColor 0.8 0.8 0.8
+    roughness 1
+    metalness 0
+  }
+}

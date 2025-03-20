@@ -1,0 +1,151 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/robots/irobot/create/protos/Create.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/apartment_structure/protos/Wall.proto"
+
+WorldInfo {
+  info [
+    "iRobot Create simulation"
+    "The vacuum cleaner robot goes randomly into the apartment while a supervisor tracks its position and alterates the ground texture."
+    "The robot can be stopped by the virtual walls emitting IR light."
+  ]
+  title "iRobot Create"
+  coordinateSystem "NUE"
+}
+Viewpoint {
+  orientation -0.7195493206888761 0.6845855841767815 0.11658195843916634 2.650927552370144
+  position -4.094255105283638 23.0626927269802 12.485682896478298
+  near 0.1
+  follow "Create"
+  followType "None"
+}
+TexturedBackground {
+}
+RectangleArena {
+  rotation 1 0 0 -1.5707953071795862
+  floorSize 5 10
+  floorAppearance NULL
+  wallThickness 0.03
+  wallHeight 5
+}
+DirectionalLight {
+  direction 0 -1 0
+}
+DEF agent Create {
+  hidden position_0_0 103729.53664179027
+  hidden position_0_1 103398.07906230679
+  hidden linearVelocity_0 -0.0004399368874052503 0.004348027553806 -0.0020607314739945638
+  hidden angularVelocity_0 -0.022577754638297802 0.015011579709343269 0.016351909531628135
+  hidden rotation_5 0 -1 0 5.852779744703093
+  hidden linearVelocity_5 -0.0007692719879245235 -0.00042989487218287356 -0.00048192816113975194
+  hidden angularVelocity_5 -0.017382787863165813 -0.003475772867356715 0.023608125004508283
+  hidden rotation_6 0 1 0 1.9816473595127544
+  hidden linearVelocity_6 0.00031515742547043367 -0.00043695780549144554 -0.0032872165059394777
+  hidden angularVelocity_6 -0.027593542408170784 -0.003924562519317914 0.009347451095193911
+  hidden translation_10 9.671276632783332e-05 0.00011904872884149764 -6.129774753810269e-06
+  hidden rotation_10 0.8442481910080012 -0.37897508760376775 -0.37897608757734824 1.739314001360773
+  hidden linearVelocity_10 0.0002871313355310505 0.0016448656764473035 -0.00013631181921092906
+  hidden angularVelocity_10 -0.022577756647787633 0.015011609715966202 0.016351909661810687
+  hidden translation_11 0.00013004776727143508 -8.161444127063877e-05 -1.4106285496640059e-06
+  hidden rotation_11 -0.302541985379816 0.673965970757263 0.6739719707403707 -2.5540290024222436
+  hidden linearVelocity_11 -0.0023452634510433236 0.0016335819071081046 -0.0011207255925358068
+  hidden angularVelocity_11 -0.022577755202512595 0.015011609715358762 0.01635191106850664
+  translation -2.172387516569077 0.043653757498300125 -1.3906822724625767
+  rotation -0.33993548679205476 0.6641629558220591 0.6658313847613033 2.480364060604243
+  controller "create3_3D_bvc"
+  supervisor TRUE
+  bodySlot [
+    Solid {
+      children [
+        Display {
+          width 100
+          height 100
+        }
+        Compass {
+        }
+        DEF vertical-range-finder RangeFinder {
+          translation 0 0 0.1
+          name "vertical-range-finder"
+          fieldOfView 6.28
+          width 180
+          height 90
+          projection "cylindrical"
+          maxRange 10
+        }
+      ]
+    }
+  ]
+}
+Wall {
+  translation 0 5 -7.71365e-06
+  rotation 1 0 0 -1.5708
+  name "Main_Ceiling"
+  size 5 10 0.1
+  appearance PBRAppearance {
+    transparency 0.8
+    roughness 1
+    metalness 0
+  }
+}
+Wall {
+  translation 0.52 6.49868e-06 0.33
+  rotation -0.5773509358554485 0.5773509358554485 0.5773489358556708 2.0944
+  name "NS_Wall"
+  size 0.1 4 5
+  appearance PBRAppearance {
+    baseColor 0.8 0.8 0.8
+    roughness 1
+    metalness 0
+  }
+}
+Solid {
+  translation 0.000826545 1.5 -2.50093
+  rotation -0.9999998303872711 -0.0004020475872795383 -0.0004214061775865016 1.5708058750181915
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.2 0.6 0.8
+        roughness 0.3
+        metalness 0.2
+      }
+      geometry Cylinder {
+        height 3
+      }
+    }
+  ]
+  name "cylinder"
+  boundingObject Cylinder {
+    height 3
+  }
+  physics Physics {
+    density -1
+    mass 10
+  }
+}
+Solid {
+  translation -0.000489892 1.5 2.49962
+  rotation -0.9999999096129167 0.00030065100509951974 0.00030063787411420385 1.57079534483387
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.8 0.3 0.3
+        roughness 0.4
+        metalness 0.1
+      }
+      geometry Cone {
+        height 3
+        subdivision 24
+      }
+    }
+  ]
+  name "cone"
+  boundingObject Cylinder {
+    height 3
+  }
+  physics Physics {
+    density -1
+    mass 8
+  }
+}

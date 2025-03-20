@@ -16,8 +16,8 @@ WorldInfo {
   coordinateSystem "NUE"
 }
 Viewpoint {
-  orientation 0.6244389821021349 -0.6971677098947062 -0.35218339244123975 2.750994536413442
-  position 3.31650326645413 22.4040750419886 3.6357183526018564
+  orientation 0.5950088900825983 -0.7023627073703543 -0.39070583309961043 2.831479915214688
+  position 5.3922016546726805 20.292127053026768 4.883757868275579
 }
 TexturedBackground {
 }
@@ -25,8 +25,10 @@ RectangleArena {
   rotation 1 0 0 -1.5707953071795862
   floorSize 5 5
   floorAppearance NULL
+  wallThickness 0.03
+  wallHeight 5
   wallAppearance BrushedAluminium {
-    colorOverride 0 1 1
+    colorOverride 0.396078 0.396078 0.396078
     IBLStrength 11
   }
 }
@@ -113,93 +115,15 @@ DirectionalLight {
   direction 0.75 -1 0
 }
 Wall {
-  translation 0 2.9 0
+  translation 0 4.94 2.20392e-07
   rotation 1 0 0 -1.5708
   name "Main_Ceiling"
-  size 10 10 0.1
+  size 5 5 0.1
   appearance PBRAppearance {
     baseColor 0.8 0.8 1
-    transparency 0.9    # Very transparent but not completely
+    transparency 0.9
     roughness 0.5
     metalness 0.2
     emissiveColor 0.2 0.2 0.4
-  }
-}
-Solid {
-  translation 0 2.5 -2.5
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.8 0.8 0.8
-        roughness 0.5
-        metalness 0
-      }
-      geometry Box {
-        size 5 5 0.1
-      }
-    }
-  ]
-  name "wall_north"
-  boundingObject Box {
-    size 5 5 0.1
-  }
-}
-Solid {
-  translation 0 2.5 2.5
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.8 0.8 0.8
-        roughness 0.5
-        metalness 0
-      }
-      geometry Box {
-        size 5 5 0.1
-      }
-    }
-  ]
-  name "wall_south"
-  boundingObject Box {
-    size 5 5 0.1
-  }
-}
-Solid {
-  translation 2.5 2.5 0
-  rotation 0 1 0 1.5708
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.8 0.8 0.8
-        roughness 0.5
-        metalness 0
-      }
-      geometry Box {
-        size 5 5 0.1
-      }
-    }
-  ]
-  name "wall_east"
-  boundingObject Box {
-    size 5 5 0.1
-  }
-}
-Solid {
-  translation -2.5 2.5 0
-  rotation 0 1 0 1.5708
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.8 0.8 0.8
-        roughness 0.5
-        metalness 0
-      }
-      geometry Box {
-        size 5 5 0.1
-      }
-    }
-  ]
-  name "wall_west"
-  boundingObject Box {
-    size 5 5 0.1
   }
 }

@@ -1,0 +1,142 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/robots/irobot/create/protos/Create.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/apartment_structure/protos/Wall.proto"
+
+WorldInfo {
+  info [
+    "iRobot Create simulation"
+    "The vacuum cleaner robot goes randomly into the apartment while a supervisor tracks its position and alterates the ground texture."
+    "The robot can be stopped by the virtual walls emitting IR light."
+  ]
+  title "iRobot Create"
+  coordinateSystem "NUE"
+}
+Viewpoint {
+  orientation -0.5684100266426508 0.5848139298395009 -0.5787077924806098 2.117377419398207
+  position -0.6147205038249768 30.28287574582299 0.2961035191395198
+  near 0.1
+  follow "Create"
+  followType "None"
+}
+TexturedBackground {
+}
+RectangleArena {
+  rotation 1 0 0 -1.5707953071795862
+  floorSize 5 10
+  floorAppearance NULL
+  wallThickness 0.03
+  wallHeight 5
+}
+DirectionalLight {
+  direction 0 -1 0
+}
+DEF agent Create {
+  hidden linearVelocity_0 0.48720501371951747 0.00022378832364536942 -0.09144798559203339
+  hidden angularVelocity_0 -0.01376282550444031 0.019370575435671486 -0.00018681213164849133
+  hidden linearVelocity_5 0.48759176500067497 9.430142630082564e-06 -0.09124847793662776
+  hidden angularVelocity_5 -2.942554184790969 -0.0005419885727005626 -15.729834367943926
+  hidden linearVelocity_6 0.4876202805990348 -1.8153550064611048e-05 -0.09122058561868217
+  hidden angularVelocity_6 -2.944308970174673 -0.0005963391840858094 -15.729509031400493
+  hidden linearVelocity_10 0.485157146720162 -0.001206006414560559 -0.092991570072157
+  hidden angularVelocity_10 -0.013762821013788626 0.019370582299196484 -0.0001868144836520997
+  hidden linearVelocity_11 0.48844534207477114 0.0011254192874986608 -0.09364194851659749
+  hidden angularVelocity_11 -0.013762828110875393 0.019370573058933655 -0.0001868127493271192
+  translation -2.1912018096088626 0.044169419520294184 4.769704090708707
+  rotation -0.9915603360800307 0.09073069939420661 0.09260691173068594 1.5803355706746867
+  controller "create3_3D_bvc"
+  supervisor TRUE
+  bodySlot [
+    Solid {
+      children [
+        Display {
+          width 100
+          height 100
+        }
+        Compass {
+        }
+        DEF vertical-range-finder RangeFinder {
+          translation 0 0 0.1
+          name "vertical-range-finder"
+          fieldOfView 6.28
+          width 180
+          height 90
+          projection "cylindrical"
+          maxRange 10
+        }
+      ]
+    }
+  ]
+}
+Wall {
+  translation 0 5 -7.71365e-06
+  rotation 1 0 0 -1.5708
+  name "Main_Ceiling"
+  size 5 10 0.1
+  appearance PBRAppearance {
+    transparency 0.8
+    roughness 1
+    metalness 0
+  }
+}
+Wall {
+  translation 0.52 6.49868e-06 0.33
+  rotation -0.5773509358554485 0.5773509358554485 0.5773489358556708 2.0944
+  name "NS_Wall"
+  size 0.1 4 5
+  appearance PBRAppearance {
+    baseColor 0.8 0.8 0.8
+    roughness 1
+    metalness 0
+  }
+}
+Solid {
+  translation 0 1.49608 -2.5001
+  rotation -0.9999999404376223 0.000244074265113922 0.00024403382024359302 1.5707953457778097
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.2 0.6 0.8
+        roughness 0.3
+        metalness 0.2
+      }
+      geometry Cylinder {
+        height 3
+      }
+    }
+  ]
+  name "cylinder"
+  boundingObject Cylinder {
+    height 3
+  }
+  physics Physics {
+    density -1
+    mass 10
+  }
+}
+Solid {
+  translation 0 1.49608 2.5
+  rotation -0.9999999404376223 0.000244074265113922 0.00024403382024359302 1.5707953457778097
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.2 0.6 0.8
+        roughness 0.3
+        metalness 0.2
+      }
+      geometry Cylinder {
+        height 3
+      }
+    }
+  ]
+  name "cylinder(1)"
+  boundingObject Cylinder {
+    height 3
+  }
+  physics Physics {
+    density -1
+    mass 10
+  }
+}

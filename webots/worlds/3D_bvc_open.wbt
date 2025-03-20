@@ -15,8 +15,8 @@ WorldInfo {
   coordinateSystem "NUE"
 }
 Viewpoint {
-  orientation -0.7071057814660382 0.7071077809056435 5.551115123136879e-17 3.1415966524690035
-  position 4.0488804490869055e-16 58.35051674168152 1.9434626155617145e-14
+  orientation -0.5112894056976544 0.6709106821997317 0.5370865853208677 2.5297259879620517
+  position 18.855786673900624 20.842112011964144 48.76969043935132
   near 0.1
   follow "Create"
   followType "None"
@@ -25,10 +25,10 @@ TexturedBackground {
 }
 RectangleArena {
   rotation 1 0 0 -1.5707953071795862
-  floorSize 10 10
+  floorSize 5 5
   floorAppearance NULL
   wallThickness 0.03
-  wallHeight 3
+  wallHeight 5
 }
 DirectionalLight {
   direction 0 -1 0
@@ -79,10 +79,10 @@ DEF agent Create {
   ]
 }
 Wall {
-  translation 0 2.9 0
+  translation 0 4.9 0
   rotation 1 0 0 -1.5708
   name "Main_Ceiling"
-  size 10 10 0.1
+  size 5 5 0.1
   appearance PBRAppearance {
     transparency 0.8
     roughness 1
