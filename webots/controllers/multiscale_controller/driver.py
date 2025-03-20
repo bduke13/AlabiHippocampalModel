@@ -80,7 +80,7 @@ class Driver(Supervisor):
         self.tau_w = 10
 
         # Robot parameters
-        self.max_speed = 16 if mode != RobotMode.EXPLOIT else 8
+        self.max_speed = 16 if mode != RobotMode.EXPLOIT else 16
         self.max_dist = max_dist
         self.left_speed = self.max_speed
         self.right_speed = self.max_speed
@@ -233,8 +233,8 @@ class Driver(Supervisor):
             pcn = self._load_or_init_pcn_for_scale(
                 path,
                 scale_def,
-                enable_ojas if enable_ojas else None,
-                enable_stdp if enable_stdp else None,
+                enable_ojas if enable_ojas else False,
+                enable_stdp if enable_stdp else False,
             )
 
             self.pcns.append(pcn)
@@ -246,10 +246,8 @@ class Driver(Supervisor):
             print(f"[DRIVER] Loaded existing PCN from {path}")
             
             # Overwrite enable_ojas and enable_stdp based on the provided values
-            if enable_ojas is not None:
-                pcn.enable_ojas = enable_ojas
-            if enable_stdp is not None:
-                pcn.enable_stdp = enable_stdp
+            pcn.enable_ojas = enable_ojas
+            pcn.enable_stdp = enable_stdp
             
             print(f"[DRIVER] Updated PCN for {path} - enable_ojas: {pcn.enable_ojas}, enable_stdp: {pcn.enable_stdp}")
 
@@ -379,31 +377,45 @@ class Driver(Supervisor):
         #-------------------------------------------------------------------
         self.sense()
         self.compute_pcn_activations()
-        self.update_hmaps(update_loc=True,
-                          update_pcn=True,
-                          update_scale_priority=True)
+        self.update_hmaps(update_loc=True, update_pcn=True, update_scale_priority=True)
         self.check_goal_reached()
 
         # Save old PCN activations for each scale
-        old_pcn_activations = []
-        for i, scale_def in enumerate(self.scales):
-            # Each scale has its own PCN; store its current activations
-            pcn = self.pcns[i]
-            old_pcn_activations.append(pcn.place_cell_activations.clone())
+        old_pcn_activations = [pcn.place_cell_activations.clone() for pcn in self.pcns]
 
-        # Exploit can only being with at least 10 steps
+        # Exploit can only begin with at least 10 steps
         if self.step_count <= self.tau_w:
             return
 
+        #-------------------------------------------------------------------
+        # 2) Forced Exploration Check
+        #-------------------------------------------------------------------
         if self.force_explore_count > 0:
             self.force_explore_count -= 1
             if self.force_explore_count == 0:
-                print("Forced exploration complete. Resuming EXPLOIT.")
+                print("Forced exploration complete. Checking for improved reward signal...")
+
+                # Compute the max post-explore reward gradient
+                self.max_post_explore_gradient = max(
+                    torch.max(torch.nan_to_num(rcn.reward_cell_activations)).item()
+                    for rcn in self.rcns
+                )
+
+                # # If a stronger reward gradient was found, move toward it
+                # if hasattr(self, "max_pre_explore_gradient"):
+                #     if self.max_post_explore_gradient > self.max_pre_explore_gradient:
+                #         print(f"Stronger reward detected ({self.max_post_explore_gradient:.3f} vs. {self.max_pre_explore_gradient:.3f}). Moving toward it.")
+                #         self.force_explore_count = 0
+                #         return  # Skip normal behavior, move directly toward stronger signal
+
+                # # Otherwise, continue normal exploit behavior
+                # print("No stronger reward found, resuming normal exploit behavior.")
+
             self.explore()
             return
 
         #-------------------------------------------------------------------
-        # 2) Detect excessive rotation and enforce exploration if needed
+        # 3) Detect excessive rotation and enforce forced exploration if needed
         #-------------------------------------------------------------------
         if not hasattr(self, 'rotation_accumulator'):
             self.rotation_accumulator = 0.0
@@ -429,14 +441,53 @@ class Driver(Supervisor):
                 self.rotation_loop_count = 0
                 self.rotation_accumulator = 0.0
                 self.steps_since_last_loop = 0
-                print(f"Detected {self.LOOP_THRESHOLD} consecutive loops within {self.MAX_STEPS_BETWEEN_LOOPS} steps")
-                self.force_explore_count = 5
+                print(f"Detected {self.LOOP_THRESHOLD} consecutive loops within {self.MAX_STEPS_BETWEEN_LOOPS} steps. Initiating forced exploration.")
+
+                # Compute the max pre-explore reward gradient
+                self.max_pre_explore_gradient = max(
+                    torch.max(torch.nan_to_num(rcn.reward_cell_activations)).item()
+                    for rcn in self.rcns
+                )
+
+                self.force_explore_count = 5  # Start forced exploration
                 self.explore()
                 return
         else:
             self.steps_since_last_loop += 1
             if self.steps_since_last_loop > self.MAX_STEPS_BETWEEN_LOOPS:
                 self.rotation_loop_count = 0
+
+        # #-------------------------------------------------------------------
+        # # 3) Compute potential rewards at multiple scales, skipping invalid directions
+        # #-------------------------------------------------------------------
+        # boundaries_rolled = torch.roll(self.boundaries, shifts=len(self.boundaries) // 2)
+        # num_points_per_hd = len(boundaries_rolled) // self.n_hd
+
+        # distances_per_hd = torch.tensor([
+        #     torch.min(boundaries_rolled[i * num_points_per_hd: (i + 1) * num_points_per_hd])
+        #     for i in range(self.n_hd)
+        # ], device=self.device, dtype=self.dtype)
+
+        # pot_rew_scales = []
+        # valid_scale_indices = []
+        # reward_threshold = 0.1  # Threshold for considering a scale valid
+
+        # for i, scale_def in enumerate(self.scales):
+        #     pcn, rcn = self.pcns[i], self.rcns[i]
+        #     pot_rew = torch.empty(self.n_hd, dtype=self.dtype, device=self.device)
+
+        #     for d in range(self.n_hd):
+        #         if distances_per_hd[d] < 1:
+        #             pot_rew[d] = 0.0
+        #         else:
+        #             pcn_activations = pcn.preplay(d)
+        #             rcn.update_reward_cell_activations(pcn_activations, visit=False)
+        #             pot_rew[d] = torch.max(torch.nan_to_num(rcn.reward_cell_activations))
+
+        #     # If this scale has a valid reward, keep it for action selection
+        #     if pot_rew.max().item() >= reward_threshold:
+        #         pot_rew_scales.append(pot_rew)
+        #         valid_scale_indices.append(i)
 
         #-------------------------------------------------------------------
         # 3) Compute potential rewards at multiple scales, skipping invalid directions
@@ -452,18 +503,32 @@ class Driver(Supervisor):
         pot_rew_scales = []
         valid_scale_indices = []
         reward_threshold = 0.01  # Threshold for considering a scale valid
+        reward_gradients = []  # Store reward gradients for each scale
 
         for i, scale_def in enumerate(self.scales):
             pcn, rcn = self.pcns[i], self.rcns[i]
             pot_rew = torch.empty(self.n_hd, dtype=self.dtype, device=self.device)
+            current_pcn_activations = self.pcn_activations_list[i]  # Current activations
+
+            # Compute current reward at the agent's position
+            rcn.update_reward_cell_activations(current_pcn_activations, visit=False)
+            current_reward = torch.max(torch.nan_to_num(rcn.reward_cell_activations))
 
             for d in range(self.n_hd):
                 if distances_per_hd[d] < 1:
                     pot_rew[d] = 0.0
                 else:
-                    pcn_activations = pcn.preplay(d)
-                    rcn.update_reward_cell_activations(pcn_activations, visit=False)
-                    pot_rew[d] = torch.max(torch.nan_to_num(rcn.reward_cell_activations))
+                    # Compute expected (preplayed) reward
+                    preplayed_pcn_activations = pcn.preplay(d)
+                    rcn.update_reward_cell_activations(preplayed_pcn_activations, visit=False)
+                    preplayed_reward = torch.max(torch.nan_to_num(rcn.reward_cell_activations))
+
+                    # Compute reward gradient (difference between preplayed and actual reward)
+                    reward_gradient = preplayed_reward - current_reward
+                    pot_rew[d] = preplayed_reward  # Keep using preplayed reward for decision-making
+
+                    # Store gradient for analysis
+                    reward_gradients.append(reward_gradient)
 
             # If this scale has a valid reward, keep it for action selection
             if pot_rew.max().item() >= reward_threshold:
@@ -489,7 +554,7 @@ class Driver(Supervisor):
 
         # Apply Gaussian smoothing
         kernel_size = 3  # Adjust as needed (3, 5, or 7 are common choices)
-        sigma = 1.0  # Standard deviation for Gaussian smoothing
+        sigma = 3.0  # Standard deviation for Gaussian smoothing
 
         # Create Gaussian kernel
         def gaussian_kernel(size: int, sigma: float, device):
@@ -533,7 +598,7 @@ class Driver(Supervisor):
             print(f"Preferred scale: {preferred_scale_index}, Weight: {mixing_weights[preferred_scale_index].item()}")
         else:
             self.last_preferred_scale_index = 0  # Default to the only available scale
-            print(f"Only one valid scale available. Weight: {mixing_weights.item()}")
+            # print(f"Only one valid scale available. Weight: {mixing_weights.item()}")
 
         # Update scale priority for logging
         self.scale_idx = valid_scale_indices[torch.argmax(mixing_weights).item()]
@@ -785,36 +850,42 @@ class Driver(Supervisor):
             )
             time_expired = self.getTime() >= 30 * time_limit
             
-            if goal_reached or time_expired:
+            if goal_reached:
                 if self.stats_collector:
-                    # Update and save stats once
-                    self.stats_collector.update_stat("trial_id", self.trial_id)
-                    self.stats_collector.update_stat("start_location", self.start_loc)
-                    self.stats_collector.update_stat("goal_location", self.goal_location)
-                    self.stats_collector.update_stat("total_distance_traveled", round(self.compute_path_length(), 2))
-                    self.stats_collector.update_stat("total_time_secs", round(self.getTime(), 2))
-                    self.stats_collector.update_stat("success", self.getTime() <= time_limit * 60)
-                    self.stats_collector.save_stats(self.trial_id)
-                    
-                    # Print stats
-                    print(f"Trial {self.trial_id} completed.")
-                    print(f"Start location: {self.start_loc}")
-                    print(f"Goal location: {self.goal_location}")
-                    print(f"Total distance traveled: {round(self.compute_path_length(), 2)} meters.")
-                    print(f"Total time taken: {round(self.getTime(), 2)} seconds.")
-                    print(f"Success: {self.getTime() <= time_limit * 60}")
-                    
-                    self.stop()
-                    for pcn, rcn in zip(self.pcns, self.rcns):
-                        rcn.update_reward_cell_activations(pcn.place_cell_activations, visit=True)
-                        rcn.replay(pcn=pcn)
-                    self.save(
-                        include_pcn=True if self.td_learning else False,
-                        include_rcn=True if self.td_learning else False,
-                        save_trajectory=True
-                    )
-                    self.done = True
-                    return
+                    if time_expired:
+                        print("Time limit reached. Trial unsuccessful.")
+                        self.stop()
+                        self.done = True
+                        return
+                    else:
+                        # Update and save stats once
+                        self.stats_collector.update_stat("trial_id", self.trial_id)
+                        self.stats_collector.update_stat("start_location", self.start_loc)
+                        self.stats_collector.update_stat("goal_location", self.goal_location)
+                        self.stats_collector.update_stat("total_distance_traveled", round(self.compute_path_length(), 2))
+                        self.stats_collector.update_stat("total_time_secs", round(self.getTime(), 2))
+                        self.stats_collector.update_stat("success", self.getTime() <= time_limit * 60)
+                        self.stats_collector.save_stats(self.trial_id)
+                        
+                        # Print stats
+                        print(f"Trial {self.trial_id} completed.")
+                        print(f"Start location: {self.start_loc}")
+                        print(f"Goal location: {self.goal_location}")
+                        print(f"Total distance traveled: {round(self.compute_path_length(), 2)} meters.")
+                        print(f"Total time taken: {round(self.getTime(), 2)} seconds.")
+                        print(f"Success: {self.getTime() <= time_limit * 60}")
+                        
+                        self.stop()
+                        for pcn, rcn in zip(self.pcns, self.rcns):
+                            rcn.update_reward_cell_activations(pcn.place_cell_activations, visit=True)
+                            rcn.replay(pcn=pcn)
+                        self.save(
+                            include_pcn=True if self.td_learning else False,
+                            include_rcn=True if self.td_learning else False,
+                            save_trajectory=True
+                        )
+                        self.done = True
+                        return
                 else:
                     self.stop()
                     for pcn, rcn in zip(self.pcns, self.rcns):
