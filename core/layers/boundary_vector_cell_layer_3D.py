@@ -30,7 +30,7 @@ class BoundaryVectorCellLayer3D:
         input_cols: int = 180,
         top_cutoff_percentage: float = 0.0,
         bottom_cutoff_percentage: float = 0.5,
-        scaling_max_dist: float = 1.0,
+        scaling_max_dist: float = 5,
         dtype: torch.dtype = torch.float32,
         device: torch.device = torch.device("cpu"),
     ) -> None:
@@ -188,7 +188,7 @@ class BoundaryVectorCellLayer3D:
         )
 
     def get_bvc_activation(
-        self, distances: torch.Tensor, prioritize_far_points: bool = True
+        self, distances: torch.Tensor, prioritize_far_points: bool = False
     ) -> torch.Tensor:
         """
         Given a 3D scan (distance array) of shape (input_rows, input_cols), compute
@@ -372,17 +372,22 @@ class BoundaryVectorCellLayer3D:
 
         # Size them by activation
         sizes = activations_norm * 100.0  # scale factor for marker size
-        # For color, let's just use one color or you can map them
-        ax.scatter(
+        # Color them by activation using a colormap
+        bvc_scatter = ax.scatter(
             x_bvc,
             y_bvc,
             z_bvc,
             s=sizes,
-            c="r",
-            alpha=0.4,
+            c=activations,  # Use activation values for coloring
+            cmap="hot",  # Use a colormap that goes from dark to bright
+            alpha=0.6,
             edgecolor="black",
             label="BVC Centers",
         )
+
+        # Add a colorbar for BVC activations
+        bvc_cbar = plt.colorbar(bvc_scatter, ax=ax, pad=0.1)
+        bvc_cbar.set_label("BVC Activation")
 
         # Set labels and adjust aspect ratio
         ax.set_xlabel("X (m)")
@@ -436,3 +441,65 @@ class BoundaryVectorCellLayer3D:
                 f.write(name + "\n")
 
         print(f"Cell names saved to {output_file}")
+
+    def plot_kernel_heatmaps_3d(self, distances: np.ndarray) -> None:
+        """
+        Visualizes the kernels used for the 3D BVC activation:
+          1. The precomputed angular (horizontal & vertical) Gaussian matrix.
+          2. The distance Gaussian matrix computed from the current scan.
+          3. Their element-wise product (the combined pre-sum activations).
+
+        Args:
+            distances: A numpy array of shape (input_rows, input_cols) representing the 3D scan.
+        """
+        # Convert distances to a tensor
+        distances_t = torch.tensor(distances, dtype=self.dtype, device=self.device)
+
+        # Flatten and slice the distances (only using rows between top_idx and bottom_idx)
+        dist_flat = distances_t.view(-1)
+        dist_slice = dist_flat[self.top_idx : self.bottom_idx].unsqueeze(
+            1
+        )  # (N_points, 1)
+        # Expand d_i to (1, M) for broadcasting
+        d_i_2d = self.d_i.unsqueeze(0)  # (1, M)
+
+        # Compute the distance Gaussian matrix (N_points, M)
+        distance_gaussian_matrix = (
+            torch.exp(-((dist_slice - d_i_2d) ** 2) / self.two_sigma_r_squared)
+            / self.sqrt_2pi_sigma_r
+        )
+
+        # The precomputed angular kernel is already (N_points, M)
+        angular_matrix = self.point_gaussian_precomputed  # (N_points, M)
+
+        # Combined activation matrix: element-wise product
+        combined_activation = angular_matrix * distance_gaussian_matrix
+
+        # Convert all to numpy arrays for plotting
+        angular_np = angular_matrix.detach().cpu().numpy()
+        distance_np = distance_gaussian_matrix.detach().cpu().numpy()
+        combined_np = combined_activation.detach().cpu().numpy()
+
+        # Create the heatmaps
+        fig, axes = plt.subplots(3, 1, figsize=(12, 18))
+
+        im0 = axes[0].imshow(angular_np, aspect="auto", cmap="viridis")
+        axes[0].set_title("Angular (Horizontal & Vertical) Gaussian Matrix")
+        axes[0].set_xlabel("BVC Index")
+        axes[0].set_ylabel("Scan Point Index")
+        fig.colorbar(im0, ax=axes[0], label="Angular Tuning")
+
+        im1 = axes[1].imshow(distance_np, aspect="auto", cmap="plasma")
+        axes[1].set_title("Distance Gaussian Matrix")
+        axes[1].set_xlabel("BVC Index")
+        axes[1].set_ylabel("Scan Point Index")
+        fig.colorbar(im1, ax=axes[1], label="Distance Tuning")
+
+        im2 = axes[2].imshow(combined_np, aspect="auto", cmap="inferno")
+        axes[2].set_title("Combined Pre-Sum Activations (Angular × Distance)")
+        axes[2].set_xlabel("BVC Index")
+        axes[2].set_ylabel("Scan Point Index")
+        fig.colorbar(im2, ax=axes[2], label="Activation")
+
+        plt.tight_layout()
+        plt.show()
