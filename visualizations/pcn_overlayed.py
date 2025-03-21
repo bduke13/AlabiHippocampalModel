@@ -6,8 +6,8 @@ import pickle
 from typing import Optional
 
 # Hardcoded world name
-WORLD_NAME = "20x20"
-
+WORLD_NAME = "20x20_1obstacle_learning_0"
+CONTROLLER = "multiscale_controller"
 
 def load_pickle(file_path):
     """Load a pickle file from the given path."""
@@ -17,7 +17,7 @@ def load_pickle(file_path):
 
 def load_hmaps_from_world():
     """Load hmap data based on the hardcoded world name."""
-    base_path = f"webots/controllers/create3_base/pkl/{WORLD_NAME}/hmaps"
+    base_path = f"webots/controllers/{CONTROLLER}/pkl/{WORLD_NAME}/hmaps"
     hmap_loc = load_pickle(os.path.join(base_path, "hmap_loc.pkl"))
     hmap_pcn = load_pickle(os.path.join(base_path, "hmap_pcn.pkl"))
     return hmap_loc, hmap_pcn
@@ -139,9 +139,9 @@ def plot_overlayed_cells(
     plt.figure(figsize=(8, 8))
     extent = [xmin, xmax, ymin, ymax]
     plt.imshow(image, extent=extent, origin="lower")
-    plt.xlabel("X Coordinate")
-    plt.ylabel("Y Coordinate")
-    plt.title(f"Overlay of {num_cells_to_plot} Place Cells with Fading Colors")
+    plt.xlabel("X")
+    plt.ylabel("Y")
+    # plt.title(f"Overlay of {num_cells_to_plot} Place Cells with orFading Cols")
 
     # Save the plot if a save path is provided
     if save_path is not None:
@@ -171,7 +171,7 @@ if __name__ == "__main__":
         hmap_pcn=hmap_pcn,
         hmap_x=hmap_x,
         hmap_y=hmap_y,
-        gridsize=120,
+        gridsize=100,
         num_cells_to_sample=None,  # Use all cells with non-zero activation
         show_plot=True,
         save_path=None,

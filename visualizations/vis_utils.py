@@ -12,8 +12,8 @@ project_root = Path(__file__).resolve().parent.parent  # Adjust this if needed
 sys.path.append(str(project_root))
 
 CONTROLLER_PATH_PREFIX = "webots/controllers/"
-CONTROLLER_NAME = "create3_base"
-WORLD_NAME = "20x20"
+CONTROLLER_NAME = "multiscale_controller"
+WORLD_NAME = "20x20_1obstacle_learning_0"
 
 # Define output directories relative to project root
 OUTPUT_DIR = os.path.join(
@@ -49,7 +49,7 @@ def load_layer_pkl(layer_name: str = ""):
 
 
 def load_hmaps(
-    hmap_names: List[str] = ["hmap_loc", "hmap_pcn"],
+    hmap_names: List[str] = ["hmap_loc", "hmap_pcn_scale_2"],
 ) -> List[np.ndarray]:
     """
     Load history map (hmap) data from pickle files.

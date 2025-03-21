@@ -209,7 +209,7 @@ if __name__ == "__main__":
         "PLOTTING": RobotMode.PLOTTING  
     }
     
-    SELECTED_MODE = "LEARNING_SAVE"
+    SELECTED_MODE = "LEARN_HEBB"
     td_learning = True
     corners = [[8,-8]]
     dmtp_start = [-9,9]

@@ -14,8 +14,8 @@ WorldInfo {
   coordinateSystem "NUE"
 }
 Viewpoint {
-  orientation -0.7071057812499464 0.7071077811207609 1.173580412787816e-06 3.14159439218791
-  position 0.6754288305783365 40.82651170506043 -0.004693901566913183
+  orientation -0.707105724661602 0.7071078377095833 6.843641895066626e-07 3.1415964651884867
+  position 0.6754329660282752 42.41753950724261 -0.004700888935690366
   near 0.1
   follow "Create"
   followType "None"
@@ -33,7 +33,7 @@ RectangleArena {
   }
 }
 Pose {
-  translation -2 0 2
+  translation -7 0 7
   rotation 1 0 0 -1.5708
   children [
     Shape {
@@ -50,7 +50,7 @@ Pose {
   ]
 }
 DEF agent Create {
-  translation 0 0 0
+  translation 0 0.0441865 0
   rotation -0.6607352787486408 0.5303053028717288 0.5312298722427797 1.9727887896457816
   controller "multiscale_controller"
   supervisor TRUE
@@ -84,10 +84,22 @@ DEF agent Create {
   ]
 }
 Wall {
-  translation 0 0.5 0
+  translation -4 0 4
   rotation 0 1 0 2.3554
   name "wall1"
-  size 9 1 0.4
+  size 7 1 0.4
+}
+Wall {
+  translation -5 0 -4
+  rotation 0 1 0 2.3554
+  name "wall2"
+  size 7 1 0.4
+}
+Wall {
+  translation 4.11547 0 4.88324
+  rotation 0 1 0 2.3554
+  name "wall2(1)"
+  size 7 1 0.4
 }
 DirectionalLight {
   direction 0.75 -1 0

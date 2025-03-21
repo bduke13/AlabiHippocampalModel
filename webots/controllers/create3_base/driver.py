@@ -18,9 +18,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[3]  # Moves two levels up
 sys.path.append(str(PROJECT_ROOT))  # Add project root to sys.path
 
-from core.layers.boundary_vector_cell_layer import BoundaryVectorCellLayer
+from core.layers.multiscale_bvc import BoundaryVectorCellLayer
 from core.layers.head_direction_layer import HeadDirectionLayer
-from core.layers.place_cell_layer import PlaceCellLayer
+from core.layers.multiscale_pcn import PlaceCellLayer
 from core.layers.reward_cell_layer import RewardCellLayer
 from core.robot.robot_mode import RobotMode
 
@@ -130,7 +130,7 @@ class Driver(Supervisor):
         self.num_place_cells = 500
         self.num_bvc_per_dir = 50
         self.sigma_r = 0.5
-        self.sigma_theta = 5
+        self.sigma_theta = 1
         self.n_hd = 8
         self.timestep = 32 * 3
         self.tau_w = 5  # time constant for the window function

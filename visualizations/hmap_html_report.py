@@ -258,7 +258,7 @@ if __name__ == "__main__":
     )
 
     # Load hmap data from hardcoded world name
-    hmap_loc, hmap_pcn = load_hmaps(hmap_names=["hmap_loc", "hmap_pcn"])
+    hmap_loc, hmap_pcn = load_hmaps(hmap_names=["hmap_loc", "hmap_bvc"])
     hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
 
     # %%
