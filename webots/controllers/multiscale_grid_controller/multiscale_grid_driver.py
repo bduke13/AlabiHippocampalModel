@@ -516,65 +516,146 @@ class MultiscaleDriverWithGrid(Supervisor):
     ########################################### EXPLOIT ###########################################
     def exploit(self):
         """
-        Follows the reward gradient to reach the goal location, incorporating wall avoidance.
+        Follows the reward gradient to reach the goal location, incorporating all scales
+        and proper scale weighting from the original multiscale implementation.
         """
         # -------------------------------------------------------------------
-        # 1) Sense and compute: update heading, place/boundary cell activations
+        # 1) Sense and compute: update heading, place/boundary/grid cell activations
         # -------------------------------------------------------------------
         self.sense()
         self.compute_pcn_activations()
-        self.update_hmaps()
         self.check_goal_reached()
 
-        # We will use the primary scale for navigation in this example
-        # In a more sophisticated approach, you might want to use a combination of scales
-        # based on their reliability or context
-        primary_pcn = self.pcns[0]
-        primary_rcn = self.rcns[0]
+        # Get the current position
+        curr_pos = self.robot.getField("translation").getSFVec3f()
+        current_pos = torch.tensor([curr_pos[0], curr_pos[2]], device=self.device, dtype=self.dtype)
+        
+        # Calculate distance to goal
+        goal_pos = torch.tensor(self.goal_location, device=self.device, dtype=self.dtype)
+        distance_to_goal = torch.norm(current_pos - goal_pos)
+        
+        # -------------------------------------------------------------------
+        # 2) Determine scale prioritization based on distance to goal
+        # -------------------------------------------------------------------
+        # Initialize the scale priority tensor if it's not already done
+        if not hasattr(self, 'scale_priority') or self.scale_priority is None:
+            self.scale_priority = torch.zeros(len(self.scales), device=self.device, dtype=self.dtype)
+        
+        # Logic for scale prioritization (from original multiscale_driver)
+        # Small scale (index 0) has higher priority when close to goal
+        # Large scale (index 2) has higher priority when far from goal
+        # Scale prioritization (handles scales 0, 1, 2)
+        small_scale_idx = 0
+        medium_scale_idx = 1
+        large_scale_idx = min(2, len(self.scales) - 1)  # Ensure index is valid
 
+        # Calculate scale prioritization
+        self.scale_priority[small_scale_idx] = 1.0 / (1.0 + distance_to_goal)  # Higher when close to goal
+        self.scale_priority[medium_scale_idx] = 1.0 - self.scale_priority[small_scale_idx]
+
+        if len(self.scales) > 2:
+            self.scale_priority[large_scale_idx] = distance_to_goal / (5.0 + distance_to_goal)  # Higher when far from goal
+            # Normalize
+            self.scale_priority = self.scale_priority / torch.sum(self.scale_priority)
+        
+        # Store the dominant scale index for logging
+        self.scale_idx = torch.argmax(self.scale_priority).item()
+        
         # -------------------------------------------------------------------
-        # 2) Detect obstacles and compute valid directions
+        # 3) Calculate potential reward for each possible head direction
         # -------------------------------------------------------------------
-        min_safe_distance = 1.5  # Minimum distance to consider a direction safe
         num_steps_preplay = 1  # Number of future steps to "preplay"
-        pot_rew = torch.empty(self.n_hd, dtype=self.dtype, device=self.device)
+        pot_rew = torch.zeros(self.n_hd, dtype=self.dtype, device=self.device)
         cancelled_angles = []  # Store blocked directions
-
-        # Compute minimum distance in each head direction
+        
+        # Detect obstacles using LiDAR
+        min_safe_distance = 1.5  # Minimum distance to consider a direction safe
         boundaries_rolled = torch.roll(self.boundaries, shifts=len(self.boundaries) // 2)
         num_points_per_hd = len(boundaries_rolled) // self.n_hd
-
+        
+        # Calculate minimum distance in each direction
         distances_per_hd = torch.tensor([
             torch.min(boundaries_rolled[i * num_points_per_hd: (i + 1) * num_points_per_hd])
             for i in range(self.n_hd)
         ], device=self.device, dtype=self.dtype)
-
-        # Evaluate reward potential for each valid direction
+        
+        # Evaluate rewards from all scales for each direction
         for d in range(self.n_hd):
             if distances_per_hd[d] < min_safe_distance:
                 pot_rew[d] = 0.0  # Block direction if too close to a wall
                 cancelled_angles.append(d)
             else:
-                # Predict place-cell activation for direction 'd'
-                pcn_activations = primary_pcn.preplay(d, num_steps=num_steps_preplay)
-
-                # Update reward cell activations (without saving to memory)
-                primary_rcn.update_reward_cell_activations(pcn_activations, visit=False)
-
-                # Take the maximum activation in reward cells as the "reward estimate"
-                pot_rew[d] = torch.max(torch.nan_to_num(primary_rcn.reward_cell_activations))
-
+                # Initialize reward for this direction
+                direction_reward = 0.0
+                
+                # Compute weighted reward prediction from all scales
+                for i, (pcn, rcn) in enumerate(zip(self.pcns, self.rcns)):
+                    # Skip if this scale doesn't have enough weight
+                    if self.scale_priority[i] < 0.01:  # Threshold to ignore negligible scales
+                        continue
+                        
+                    # Predict place cell activations for direction 'd'
+                    pcn_activations = pcn.preplay(d, num_steps=num_steps_preplay)
+                    
+                    # Update reward cell activations (without saving to memory)
+                    rcn.update_reward_cell_activations(pcn_activations, visit=False)
+                    
+                    # Get maximum reward prediction for this scale
+                    scale_reward = torch.max(torch.nan_to_num(rcn.reward_cell_activations))
+                    
+                    # Add weighted contribution from this scale
+                    direction_reward += self.scale_priority[i] * scale_reward
+                
+                # Store the combined reward prediction for this direction
+                pot_rew[d] = direction_reward
+        
         # -------------------------------------------------------------------
-        # 3) Handle case where all directions are blocked
+        # 4) Handle case where all directions are blocked
         # -------------------------------------------------------------------
         if torch.all(pot_rew == 0.0):
             print("All directions blocked. Initiating forced exploration.")
             self.force_explore_count = 5
             self.explore()
             return
-
+        
         # -------------------------------------------------------------------
-        # 4) Compute circular mean of angles, weighted by the reward estimates
+        # 5) Check for excessive looping and force exploration if needed
+        # -------------------------------------------------------------------
+        # Track heading changes to detect loops
+        if self.last_heading_deg is not None:
+            heading_change = abs(self.current_heading_deg - self.last_heading_deg)
+            heading_change = min(heading_change, 360 - heading_change)  # Shortest angular distance
+            
+            # Detect rapid turning (potential sign of being stuck)
+            if heading_change > 30:  # Significant heading change
+                self.rotation_accumulator += heading_change
+                self.steps_since_last_loop = 0
+                
+                # Check if we've made approximately a full loop
+                if self.rotation_accumulator >= 300:  # ~Full circle of rotation
+                    self.rotation_loop_count += 1
+                    self.rotation_accumulator = 0
+                    
+                    # If too many loops detected, force exploration
+                    if self.rotation_loop_count >= self.LOOP_THRESHOLD:
+                        print(f"Detected excessive looping ({self.rotation_loop_count} loops). Forcing exploration.")
+                        self.rotation_loop_count = 0
+                        self.force_explore_count = 10
+                        self.explore()
+                        return
+            else:
+                self.steps_since_last_loop += 1
+                
+                # Reset loop detection if no significant turns for a while
+                if self.steps_since_last_loop > self.MAX_STEPS_BETWEEN_LOOPS:
+                    self.rotation_accumulator = 0
+                    self.rotation_loop_count = 0
+        
+        # Update last heading for next iteration
+        self.last_heading_deg = self.current_heading_deg
+        
+        # -------------------------------------------------------------------
+        # 6) Compute circular mean of angles, weighted by the reward estimates
         # -------------------------------------------------------------------
         angles = torch.linspace(0, 2 * np.pi * (1 - 1 / self.n_hd), self.n_hd, device=self.device, dtype=self.dtype)
         
@@ -582,36 +663,40 @@ class MultiscaleDriverWithGrid(Supervisor):
         valid_mask = pot_rew > 0.0
         angles_np = angles[valid_mask].cpu().numpy()
         weights_np = pot_rew[valid_mask].cpu().numpy()
-
+        
         sin_component = np.sum(np.sin(angles_np) * weights_np)
         cos_component = np.sum(np.cos(angles_np) * weights_np)
         action_angle = np.arctan2(sin_component, cos_component)
-
+        
         # Normalize angle to [0, 2π)
         if action_angle < 0:
             action_angle += 2 * np.pi
-
+        
         # -------------------------------------------------------------------
-        # 5) Convert action angle to a turn relative to the current global heading
+        # 7) Convert action angle to a turn relative to the current global heading
         # -------------------------------------------------------------------
         angle_to_turn_deg = np.rad2deg(action_angle) - self.current_heading_deg
         angle_to_turn_deg = (angle_to_turn_deg + 180) % 360 - 180
         angle_to_turn = np.deg2rad(angle_to_turn_deg)
-
+        
         # Store cancelled angles for visualization/debugging
         self.cancelled_angles_deg = [np.rad2deg(angles[d].cpu().item()) for d in cancelled_angles]
-
+        
         # -------------------------------------------------------------------
-        # 6) Execute the turn and optionally move forward
+        # 8) Execute the turn and move forward
         # -------------------------------------------------------------------
         self.turn(angle_to_turn)
         self.forward()
-
-        # (Optional) Re-sense and compute after movement
+        
+        # -------------------------------------------------------------------
+        # 9) Re-sense and update logs
+        # -------------------------------------------------------------------
         self.sense()
         self.compute_pcn_activations()
-        self.update_hmaps()
-
+        self.update_hmaps(update_loc=True,
+                        update_pcn=True,
+                        update_gcn=True,
+                        update_scale_priority=True)
     ########################################### SENSE ###########################################
     def sense(self):
         """
@@ -1043,8 +1128,32 @@ class MultiscaleDriverWithGrid(Supervisor):
         Returns:
             float: The actual reward value (1.0 if at goal, 0.0 otherwise)
         """
-        # Implementation remains same as in original driver
-        pass
+        # Get current position from the robot node
+        curr_pos = self.robot.getField("translation").getSFVec3f()
+
+        # Distance from current position to goal location
+        distance_to_goal = torch.norm(
+            torch.tensor(
+                [
+                    curr_pos[0] - self.goal_location[0],
+                    curr_pos[2] - self.goal_location[1],
+                ],
+                dtype=self.dtype,
+                device=self.device,
+            )
+        )
+
+        # Determine the correct goal radius based on the current mode
+        if self.robot_mode == RobotMode.EXPLOIT:
+            goal_radius = self.goal_r["exploit"]
+        else:  # Default to "explore" goal radius for all other modes
+            goal_radius = self.goal_r["explore"]
+
+        # Return 1.0 reward if within goal radius, else 0.0
+        if distance_to_goal <= goal_radius:
+            return 1.0  # Goal reached
+        else:
+            return 0.0
 
     def save(
         self,

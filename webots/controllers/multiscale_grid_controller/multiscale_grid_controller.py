@@ -54,9 +54,9 @@ SCALES_DEFS = {
         # Grid cell parameters
         "grid_influence": 0.3,  # 30% grid, 70% BVC
         "gamma_pg": 0.3,
-        "num_grid_cells": 400,
-        "rotation_range": (0, 90),
-        "spread_range": (1.2, 1.2),
+        "num_grid_cells": 800,
+        "rotation_range": (0, 360),
+        "spread_range": (1.0, 1.0),
         "translation_factor": 100.0,
         "frequency_divisor": 0.2,  # Smallest grid scale (high frequency)
     },
@@ -72,9 +72,9 @@ SCALES_DEFS = {
         # Grid cell parameters
         "grid_influence": 0.4,  # 40% grid, 60% BVC
         "gamma_pg": 0.3,
-        "num_grid_cells": 300,
-        "rotation_range": (0, 90),
-        "spread_range": (1.2, 1.2),
+        "num_grid_cells": 600,
+        "rotation_range": (0, 360),
+        "spread_range": (1.0, 1.0),
         "translation_factor": 200.0,
         "frequency_divisor": 0.4,  # Medium grid scale
     },
@@ -90,9 +90,9 @@ SCALES_DEFS = {
         # Grid cell parameters
         "grid_influence": 0.5,  # 50% grid, 50% BVC
         "gamma_pg": 0.3,
-        "num_grid_cells": 200,
+        "num_grid_cells": 360,
         "rotation_range": (0, 90),
-        "spread_range": (1.2, 1.2),
+        "spread_range": (1.0, 1.0),
         "translation_factor": 400.0,
         "frequency_divisor": 0.8,  # Larger grid scale (lower frequency)
     },
@@ -245,25 +245,25 @@ if __name__ == "__main__":
         "PLOTTING": RobotMode.PLOTTING  
     }
     
-    SELECTED_MODE = "EXPLOIT"
+    SELECTED_MODE = "DMTP"
     td_learning = False # keep off
     corners = [[8,-8]] # start point
     dmtp_start = [-9,9]
     exploit_start = corners[0]
-    start_loc = [0, 0]
+    start_loc = [-7, -6]
     
     goal_location = [-7, 7]    
-    randomize_start_loc = True
+    randomize_start_loc = False
     use_prox_mod = False
 
     # Scale combinations to choose from:
-    multiscale = ["small", "medium", "large"]  # Use all 3 scales
+    multiscale = ["small", "medium"]  # Use all 3 scales
     small = ["small"]                         # Just small scale
     medium = ["medium"]                       # Just medium scale
     large = ["large"]                         # Just large scale
     
     scale_names = multiscale  # what scales you are using
-    run_time_hours = 20
+    run_time_hours = 7
     max_dist = 25
     plot_bvc = False
 
