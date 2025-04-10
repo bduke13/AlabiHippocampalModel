@@ -13,7 +13,7 @@ sys.path.append(str(project_root))
 
 CONTROLLER_PATH_PREFIX = "webots/controllers/"
 CONTROLLER_NAME = "multiscale_grid_controller"
-WORLD_NAME = "20x20"
+WORLD_NAME = "A_20x20_Maze"
 
 # Define output directories relative to project root
 OUTPUT_DIR = os.path.join(
@@ -179,3 +179,29 @@ def filter_directories(directories: List[str], substrings: List[str]) -> List[st
         if any(substring in directory for substring in substrings):
             filtered_dirs.append(directory)
     return sorted(filtered_dirs)
+
+def load_multi_scale_hmaps(scales=None):
+    """
+    Load history map (hmap) data for multiple scales.
+    
+    Args:
+        scales (List[int], optional): List of scales to load. Defaults to [0, 1, 2].
+        
+    Returns:
+        tuple: (hmap_loc, dict of hmap_pcn by scale)
+    """
+    if scales is None:
+        scales = [0, 1, 2]
+    
+    # Load location data
+    hmap_loc = load_hmaps(["hmap_loc"])[0] if isinstance(load_hmaps(["hmap_loc"]), list) else load_hmaps(["hmap_loc"])
+    
+    # Load PCN data for each scale
+    hmap_pcn_dict = {}
+    for scale in scales:
+        scale_data = load_hmaps([f"hmap_pcn_scale_{scale}"])
+        if isinstance(scale_data, list):
+            scale_data = scale_data[0]
+        hmap_pcn_dict[scale] = scale_data
+    
+    return hmap_loc, hmap_pcn_dict

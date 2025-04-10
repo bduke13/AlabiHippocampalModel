@@ -245,7 +245,7 @@ if __name__ == "__main__":
         "PLOTTING": RobotMode.PLOTTING  
     }
     
-    SELECTED_MODE = "PLOTTING"
+    SELECTED_MODE = "EXPLOIT"
     td_learning = False # keep off
     corners = [[8,-8]] # start point
     dmtp_start = [-9,9]
@@ -253,7 +253,7 @@ if __name__ == "__main__":
     start_loc = [0, 0]
     
     goal_location = [-7, 7]    
-    randomize_start_loc = False
+    randomize_start_loc = True
     use_prox_mod = False
 
     # Scale combinations to choose from:
