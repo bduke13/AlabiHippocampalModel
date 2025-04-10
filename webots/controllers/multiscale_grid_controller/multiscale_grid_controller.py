@@ -1,4 +1,4 @@
-"""my_controller_iCreate controller."""
+"""multiscale_controller with grid cells integration."""
 
 import sys
 import os
@@ -10,7 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.append(str(PROJECT_ROOT))
 
 # Import necessary modules
-from driver import Driver
+from multiscale_grid_driver import MultiscaleDriverWithGrid
 from core.robot.robot_mode import RobotMode
 from analysis.stats.stats_collector import stats_collector
 
@@ -47,32 +47,72 @@ SCALES_DEFS = {
         "name": "small",
         "num_pc": 2000,
         "sigma_r": 0.5,
-        "sigma_theta": 1,
+        "sigma_theta": 1.0,
         "rcn_learning_rate": 0.1,
+        "gamma_pp": 0.5,
+        "gamma_pb": 0.3,
+        # Grid cell parameters
+        "grid_influence": 0.3,  # 30% grid, 70% BVC
+        "gamma_pg": 0.3,
+        "num_grid_cells": 400,
+        "rotation_range": (0, 90),
+        "spread_range": (1.2, 1.2),
+        "translation_factor": 100.0,
+        "frequency_divisor": 0.2,  # Smallest grid scale (high frequency)
     },
     "medium": {
         "scale_index": 1,
         "name": "medium",
         "num_pc": 1000,
-        "sigma_r": 2,
-        "sigma_theta": 1,
+        "sigma_r": 2.0,
+        "sigma_theta": 1.0,
         "rcn_learning_rate": 0.1,
+        "gamma_pp": 0.5,
+        "gamma_pb": 0.3,
+        # Grid cell parameters
+        "grid_influence": 0.4,  # 40% grid, 60% BVC
+        "gamma_pg": 0.3,
+        "num_grid_cells": 300,
+        "rotation_range": (0, 90),
+        "spread_range": (1.2, 1.2),
+        "translation_factor": 200.0,
+        "frequency_divisor": 0.4,  # Medium grid scale
     },
     "large": {
         "scale_index": 2,
         "name": "large",
         "num_pc": 250,
-        "sigma_r": 4,
-        "sigma_theta": 1,
+        "sigma_r": 4.0,
+        "sigma_theta": 1.0,
         "rcn_learning_rate": 0.1,
+        "gamma_pp": 0.5,
+        "gamma_pb": 0.3,
+        # Grid cell parameters
+        "grid_influence": 0.5,  # 50% grid, 50% BVC
+        "gamma_pg": 0.3,
+        "num_grid_cells": 200,
+        "rotation_range": (0, 90),
+        "spread_range": (1.2, 1.2),
+        "translation_factor": 400.0,
+        "frequency_divisor": 0.8,  # Larger grid scale (lower frequency)
     },
     "xlarge": {
         "scale_index": 3,
         "name": "xlarge",
         "num_pc": 200,
-        "sigma_r": 4,
-        "sigma_theta": 8,
+        "sigma_r": 4.0,
+        "sigma_theta": 8.0,
         "rcn_learning_rate": 0.005,
+        "gamma_pp": 0.5,
+        "gamma_pb": 0.3,
+        # Grid cell parameters
+        "grid_influence": 0.6,  # 60% grid, 40% BVC
+        "gamma_pg": 0.3,
+        "num_grid_cells": 100,
+        "rotation_range": (0, 90),
+        "spread_range": (1.2, 1.2),
+        "translation_factor": 800.0,
+        "frequency_divisor": 3.2,  # Largest grid scale (lowest frequency)
     }
 }
 
@@ -95,7 +135,7 @@ def run_bot(mode, corners=None, save_data=False, **kwargs):
     - If `enable_multiscale=True`, we load more than one scale if scale_names 
       has more than one entry, or we can do single-scale if it has exactly one.
     """
-    bot = Driver()
+    bot = MultiscaleDriverWithGrid()
     world_name = get_world_name(bot)
     print(f"[INFO] Current world: {world_name}")
 
@@ -160,9 +200,6 @@ def run_bot(mode, corners=None, save_data=False, **kwargs):
             if save_data:
                 print(f"[INFO] Running trial: {trial_id}")
 
-            # Extract RCN learning rates from the scale definitions
-            rcn_learning_rates = [scale["rcn_learning_rate"] for scale in scales_list]
-
             bot.initialization(
                 mode=mode,
                 run_time_hours=kwargs.get("run_time_hours", 2),
@@ -171,7 +208,6 @@ def run_bot(mode, corners=None, save_data=False, **kwargs):
                 enable_ojas=kwargs.get("enable_ojas", None),
                 enable_stdp=kwargs.get("enable_stdp", None),
                 scales=scales_list,
-                rcn_learning_rates=rcn_learning_rates, 
                 stats_collector=stats_collector_instance,
                 trial_id=trial_id,
                 world_name=world_name,
@@ -220,19 +256,19 @@ if __name__ == "__main__":
     randomize_start_loc = False
     use_prox_mod = False
 
-    multiscale = ["small", "medium", "large"]
-    small = ["small"]
-    medium = ["medium"]
-    large = ["large"]
+    # Scale combinations to choose from:
+    multiscale = ["small", "medium", "large"]  # Use all 3 scales
+    small = ["small"]                         # Just small scale
+    medium = ["medium"]                       # Just medium scale
+    large = ["large"]                         # Just large scale
     
-    scale_names = multiscale # what scales you are using
+    scale_names = multiscale  # what scales you are using
     run_time_hours = 20
     max_dist = 25
     plot_bvc = False
 
-    enable_ojas = False
+    enable_ojas = True
     enable_stdp = False
-
 
     MODE_PARAMS = {
         "LEARN_OJAS": {

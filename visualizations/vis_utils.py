@@ -12,8 +12,8 @@ project_root = Path(__file__).resolve().parent.parent  # Adjust this if needed
 sys.path.append(str(project_root))
 
 CONTROLLER_PATH_PREFIX = "webots/controllers/"
-CONTROLLER_NAME = "multiscale_controller"
-WORLD_NAME = "20x20_1obstacle_learning_0"
+CONTROLLER_NAME = "multiscale_grid_controller"
+WORLD_NAME = "20x20"
 
 # Define output directories relative to project root
 OUTPUT_DIR = os.path.join(
@@ -47,7 +47,7 @@ def load_layer_pkl(layer_name: str = ""):
         layer = pickle.load(f)
     return layer
 
-
+# 0: small, l med, 2. lrg
 def load_hmaps(
     hmap_names: List[str] = ["hmap_loc", "hmap_pcn_scale_2"],
 ) -> List[np.ndarray]:
