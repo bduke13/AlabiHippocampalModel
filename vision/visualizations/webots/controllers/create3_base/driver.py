@@ -83,7 +83,7 @@ class Driver(Supervisor):
         goal_location: Optional[List[float]] = None,
         max_dist: float = 10,
         show_bvc_activation: bool = False,
-        enable_visual_fusion: bool = True
+        enable_visual_fusion: bool = False
 
     ):
         """Initializes the Driver class with specified parameters and sets up the robot's sensors and neural networks.
