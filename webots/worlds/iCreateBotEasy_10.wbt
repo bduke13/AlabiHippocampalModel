@@ -1,0 +1,105 @@
+#VRML_SIM R2021a utf8
+WorldInfo {
+  info [
+    "iRobot Create simulation"
+    "The vacuum cleaner robot goes randomly into the apartment while a supervisor tracks its position and alterates the ground texture."
+    "The robot can be stopped by the virtual walls emitting IR light."
+  ]
+  title "iRobot Create"
+  coordinateSystem "NUE"
+}
+Viewpoint {
+  orientation 0.9999999999999761 -1.8159850196771428e-07 -1.2169505111479102e-07 4.712389777598878
+  position -1.489042230408075e-06 36.73004272703197 -1.981661616912191e-05
+  near 0.1
+  follow "Create"
+  followType "None"
+}
+TexturedBackground {
+}
+RectangleArena {
+  floorSize 10 10
+  floorAppearance Parquetry {
+    type "light strip"
+  }
+}
+DEF agent Create {
+  translation 1.3662 0.046244 3.77037
+  rotation 0.0007015312901819035 0.9999784136317846 0.0065330027023158994 0.214857
+  controller "bek_controller_2"
+  supervisor TRUE
+  bodySlot [
+    Solid {
+      translation 0 0.04 -0.08
+      children [
+        Display {
+          width 100
+          height 100
+        }
+        Compass {
+        }
+        DEF range-finder RangeFinder {
+          fieldOfView 6.28
+          width 720
+          height 1
+          spherical TRUE
+          maxRange 10
+        }
+        Camera {
+          translation -0.002 0.02 0
+          rotation 0 1 0 1.57
+          name "lefteye"
+          fieldOfView 3.14
+          width 720
+          height 360
+          spherical TRUE
+          recognition Recognition {
+          }
+        }
+        Camera {
+          translation 0.002 0.02 0
+          rotation 0 1 0 -1.57
+          name "righteye"
+          fieldOfView 3.14
+          width 720
+          height 360
+          spherical TRUE
+          recognition Recognition {
+          }
+        }
+        Shape {
+          appearance PBRAppearance {
+          }
+          geometry Cylinder {
+            height 0.04
+            radius 0.05
+          }
+        }
+      ]
+    }
+  ]
+}
+Wall {
+  translation 0 0 -5
+  size 10.3 2.4 0.3
+}
+Wall {
+  translation -5 0 0
+  rotation 0 1 0 1.5708
+  name "wall(2)"
+  size 9.7 2.4 0.3
+}
+Wall {
+  translation 0 0 5
+  name "wall(3)"
+  size 10.3 2.4 0.3
+}
+Wall {
+  translation 5 0 0
+  rotation 0 1 0 1.5708
+  name "wall(4)"
+  size 9.7 2.4 0.3
+}
+DirectionalLight {
+  direction 0 -1 0
+}
