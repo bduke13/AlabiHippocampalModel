@@ -88,7 +88,7 @@ class RewardCellLayer:
         weight_update = torch.zeros_like(self.w_in, device=self.device)
 
         # Perform replay for a fixed number of time steps (20, as in the original TF version)
-        for time_step in range(20):  # ⬅ FIX: Use 20 iterations instead of 10
+        for time_step in range(40):  # ⬅ FIX: Use 20 iterations instead of 10
             exponential_decay_factor = math.exp(-time_step / 6)
 
             # Normalize place cell activations (L2 norm with stability)

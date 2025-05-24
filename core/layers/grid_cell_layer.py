@@ -10,7 +10,7 @@ class GridCellLayer:
         spread_range: tuple = (1.2, 1.2),      # Range for the spread parameter
         translation_factor: float = 1.0,       # Factor controlling translation range (-factor to +factor)
         frequency_divisor: float = 1.0,        # Divisor to increase spacing between grid fields
-        threshold: float = 0.7,                # Activation threshold value (0.0 to 1.0)
+        threshold: float = 0.5,                # Activation threshold value (0.0 to 1.0)
         threshold_type: str = 'soft',          # Type of thresholding ('hard', 'soft', 'binary')
         sparsity: float = None,                # If provided, keep only top X% of activations
         normalization: str = 'per-cell',       # Normalization method ('none', 'global', 'per-cell', 'soft', 'local')
