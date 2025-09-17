@@ -39,3 +39,8 @@ class RobotMode(Enum):
     PLOTTING = auto()
     MANUAL_CONTROL = auto()
     RECORDING = auto()
+    # New
+    LEARNING = auto()
+    LEARN_LOCATIONS = auto()
+    EXPLOIT_LOCATIONS = auto()
+

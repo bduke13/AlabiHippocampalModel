@@ -12,9 +12,10 @@ project_root = Path(__file__).resolve().parent.parent  # Adjust this if needed
 sys.path.append(str(project_root))
 
 CONTROLLER_PATH_PREFIX = "webots/controllers/"
-CONTROLLER_NAME = "multiscale_grid_controller"
-WORLD_NAME = "A_20x20_Maze"
-
+CONTROLLER_NAME = "msg_controller_v20"
+WORLD_NAME = "20x20_multi_goal"
+# "A_20x20_Maze_Multi_Goal"
+# "20x20_multi_goal"
 # Define output directories relative to project root
 OUTPUT_DIR = os.path.join(
     CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl", WORLD_NAME, "vis_outputs"
@@ -205,3 +206,173 @@ def load_multi_scale_hmaps(scales=None):
         hmap_pcn_dict[scale] = scale_data
     
     return hmap_loc, hmap_pcn_dict
+
+def load_multi_goal_rcn_data(goal_name=None, scale_idx=None):
+    """
+    Load multi-goal RCN data from the multi_goal_rewards directory.
+    
+    Args:
+        goal_name (str, optional): Specific goal to load. If None, loads all goals.
+        scale_idx (int, optional): Specific scale to load. If None, loads all scales.
+        
+    Returns:
+        dict: Dictionary with structure {goal_name: {scale_idx: rcn_object}}
+              or single rcn_object if both goal_name and scale_idx specified
+    """
+    multi_goal_dir = os.path.join(
+        CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl", WORLD_NAME, "networks", "multi_goal_rewards"
+    )
+    
+    if not os.path.exists(multi_goal_dir):
+        raise FileNotFoundError(f"Multi-goal rewards directory not found: {multi_goal_dir}")
+    
+    # If both specific goal and scale requested, load just that one
+    if goal_name is not None and scale_idx is not None:
+        file_path = os.path.join(multi_goal_dir, f"rcn_scale_{scale_idx}_goal_{goal_name}.pkl")
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"RCN file not found: {file_path}")
+        
+        with open(file_path, "rb") as f:
+            rcn = pickle.load(f)
+        print(f"Loaded RCN for {goal_name} scale {scale_idx}")
+        return rcn
+    
+    # Otherwise, load all available combinations
+    rcn_data = {}
+    
+    # Scan directory for RCN files
+    for filename in os.listdir(multi_goal_dir):
+        if filename.startswith("rcn_scale_") and filename.endswith(".pkl") and "_goal_" in filename:
+            # Parse filename: rcn_scale_X_goal_GOALNAME.pkl
+            parts = filename.replace(".pkl", "").split("_")
+            if len(parts) >= 4:
+                try:
+                    file_scale_idx = int(parts[2])  # scale_X
+                    file_goal_name = "_".join(parts[4:])  # goal_GOALNAME (handle multi-word goal names)
+                    
+                    # Apply filters if specified
+                    if goal_name is not None and file_goal_name != goal_name:
+                        continue
+                    if scale_idx is not None and file_scale_idx != scale_idx:
+                        continue
+                    
+                    # Load the RCN
+                    file_path = os.path.join(multi_goal_dir, filename)
+                    with open(file_path, "rb") as f:
+                        rcn = pickle.load(f)
+                    
+                    # Store in nested dictionary
+                    if file_goal_name not in rcn_data:
+                        rcn_data[file_goal_name] = {}
+                    rcn_data[file_goal_name][file_scale_idx] = rcn
+                    
+                    print(f"Loaded RCN for {file_goal_name} scale {file_scale_idx}")
+                    
+                except (ValueError, IndexError) as e:
+                    print(f"Warning: Could not parse filename {filename}: {e}")
+                    continue
+    
+    if not rcn_data:
+        raise ValueError("No multi-goal RCN data found matching the specified criteria")
+    
+    return rcn_data
+
+def load_goal_associations():
+    """
+    Load goal associations data.
+    
+    Returns:
+        dict: Goal associations data including place cell mappings
+    """
+    multi_goal_dir = os.path.join(
+        CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl", WORLD_NAME, "networks", "multi_goal_rewards"
+    )
+    
+    associations_path = os.path.join(multi_goal_dir, "goal_associations.pkl")
+    
+    if not os.path.exists(associations_path):
+        raise FileNotFoundError(f"Goal associations file not found: {associations_path}")
+    
+    with open(associations_path, "rb") as f:
+        associations = pickle.load(f)
+    
+    print(f"Loaded goal associations: {list(associations['goal_place_cell_associations'].keys())}")
+    return associations
+
+def get_available_multi_goal_combinations():
+    """
+    Discover available goal-scale combinations in the multi_goal_rewards directory.
+    
+    Returns:
+        tuple: (goals_list, scales_list, combinations_dict)
+               goals_list: List of available goal names
+               scales_list: List of available scale indices
+               combinations_dict: {goal_name: [scale_indices]}
+    """
+    multi_goal_dir = os.path.join(
+        CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl", WORLD_NAME, "networks", "multi_goal_rewards"
+    )
+    
+    if not os.path.exists(multi_goal_dir):
+        return [], [], {}
+    
+    goals = set()
+    scales = set()
+    combinations = {}
+    
+    # Scan directory for RCN files
+    for filename in os.listdir(multi_goal_dir):
+        if filename.startswith("rcn_scale_") and filename.endswith(".pkl") and "_goal_" in filename:
+            # Parse filename: rcn_scale_X_goal_GOALNAME.pkl
+            parts = filename.replace(".pkl", "").split("_")
+            if len(parts) >= 4:
+                try:
+                    scale_idx = int(parts[2])  # scale_X
+                    goal_name = "_".join(parts[4:])  # goal_GOALNAME
+                    
+                    goals.add(goal_name)
+                    scales.add(scale_idx)
+                    
+                    if goal_name not in combinations:
+                        combinations[goal_name] = []
+                    combinations[goal_name].append(scale_idx)
+                    
+                except (ValueError, IndexError):
+                    continue
+    
+    # Sort the results
+    goals_list = sorted(list(goals))
+    scales_list = sorted(list(scales))
+    
+    # Sort scales for each goal
+    for goal in combinations:
+        combinations[goal] = sorted(combinations[goal])
+    
+    print(f"Found {len(goals_list)} goals and {len(scales_list)} scales")
+    print(f"Goals: {goals_list}")
+    print(f"Scales: {scales_list}")
+    
+    return goals_list, scales_list, combinations
+
+def load_multi_goal_hmaps(goal_name, scale_idx):
+    """
+    Load history map data for a specific goal-scale combination.
+    
+    Args:
+        goal_name (str): Name of the goal
+        scale_idx (int): Scale index
+        
+    Returns:
+        tuple: (hmap_loc, hmap_pcn) for the specified scale
+    """
+    # Load location data (shared across all goals/scales)
+    hmap_loc = load_hmaps(["hmap_loc"])
+    if isinstance(hmap_loc, list):
+        hmap_loc = hmap_loc[0]
+    
+    # Load PCN data for the specific scale
+    hmap_pcn = load_hmaps([f"hmap_pcn_scale_{scale_idx}"])
+    if isinstance(hmap_pcn, list):
+        hmap_pcn = hmap_pcn[0]
+    
+    return hmap_loc, hmap_pcn
