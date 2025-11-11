@@ -20,7 +20,15 @@ class stats_collector:
             "total_time_secs": 0.0,
             "success": False,
             "turn_count": 0,
-            "collision_count": 0
+            "collision_count": 0,
+            # New fields for EXPLOIT_LOCATIONS_RANDOM mode
+            "goal_name": None,
+            "optimal_path_distance": None,
+            "path_ratio": None,
+            "spawn_method": None,
+            "path_failure_ratio": None,
+            "termination_reason": None,
+            "goal_reached": None
         }
 
     def update_stat(self, key, value):
@@ -65,3 +73,13 @@ class stats_collector:
         with open(filename, "w") as f:
             json.dump(self.stats, f, indent=1)
         print(f"Saved stats for {trial_id} to {filename}")
+
+    def finalize_and_save(self):
+        """
+        Finalize and save the trial stats using the stored trial_id.
+        Used by EXPLOIT_LOCATIONS_RANDOM mode.
+        """
+        if self.stats.get("trial_id"):
+            self.save_stats(self.stats["trial_id"])
+        else:
+            print("Warning: Cannot save stats - trial_id not set")

@@ -20,7 +20,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[3]  # Moves two levels up
 sys.path.append(str(PROJECT_ROOT))  # Add project root to sys.path
 
-from core.layers.multiscale_bvc_v10 import BoundaryVectorCellLayer
+from core.layers.multiscale_bvc import BoundaryVectorCellLayer
 from core.layers.head_direction_layer import HeadDirectionLayer
 from core.layers.multiscale_pcn import PlaceCellLayer
 from core.layers.multiscale_pcn_with_gcn_v10 import MultiscalePlaceCellWithGrid

@@ -43,4 +43,10 @@ class RobotMode(Enum):
     LEARNING = auto()
     LEARN_LOCATIONS = auto()
     EXPLOIT_LOCATIONS = auto()
+    LEARN_LOCATIONS_COVERAGE = auto()
+    LEARN_LOCATIONS_COVERAGE_AUTO = auto()
+    EXPLOIT_LOCATIONS_RANDOM = auto()
+    EXPLOIT_LOCATIONS_RANDOM_AUTO = auto()
+    PLOTTING_AUTO = auto()
+    PLOTTING_COVERAGE_AUTO = auto()
 
