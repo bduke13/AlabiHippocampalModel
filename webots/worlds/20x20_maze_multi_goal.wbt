@@ -15,7 +15,7 @@ WorldInfo {
 }
 Viewpoint {
   orientation -0.7071057814660382 0.7071077809056435 5.551115123136879e-17 3.1415966524690035
-  position -5.740259962455537e-05 47.430039625357125 5.7402761951489754e-05
+  position 1.0898890223190574e-05 53.200540006881184 -1.0898921027462532e-05
   near 0.1
   follow "agent"
   followType "None"
@@ -31,7 +31,7 @@ RectangleArena {
 DEF agent Create {
   translation -8 0.044 -8
   rotation -0.5939471866743633 -0.5685711786988225 -0.5691691788867705 2.06822
-  controller "msg_controller_v15"
+  controller "msg_test_v10"
   supervisor TRUE
   bodySlot [
     Solid {
@@ -123,28 +123,28 @@ Wall {
   }
 }
 Wall {
-  translation -5 1.2 3
+  translation -5.25 1.2 3
   rotation 0 1 0 0
   name "MazeMid_HorizLeft"
-  size 10 2.4 0.3
+  size 9.5 2.4 0.5
   appearance Roughcast {
     colorOverride 0.8 0.6 0.25
   }
 }
 Wall {
-  translation 5 1.2 -3
+  translation 5.25 1.2 -3.2
   rotation 0 1 0 0
   name "MazeMid_HorizRight"
-  size 10 2.4 0.3
+  size 9.5 2.4 0.5
   appearance Roughcast {
     colorOverride 0.8 0.6 0.25
   }
 }
 Wall {
-  translation -4 1.2 -0.5
+  translation -4 1.2 -0.2
   rotation 0 1 0 1.5708
   name "MazeMid_VertLeft"
-  size 7 2.4 0.3
+  size 6.4 2.4 0.5
   appearance Roughcast {
     colorOverride 0.8 0.6 0.25
   }
@@ -153,25 +153,25 @@ Wall {
   translation 3 1.2 0.5
   rotation 0 1 0 1.5708
   name "MazeMid_VertRight"
-  size 7 2.4 0.3
+  size 6.4 2.4 0.5
   appearance Roughcast {
     colorOverride 0.8 0.6 0.25
   }
 }
 Wall {
-  translation 0 1.2 -8.5
+  translation 0.5 1.2 -8.5
   rotation 0 1 0 1.5708
   name "MazeBottom_VertCenter"
-  size 3 2.4 0.3
+  size 3 2.4 0.5
   appearance Roughcast {
     colorOverride 0.8 0.6 0.25
   }
 }
 Wall {
-  translation -0.5 1.2 8.5
+  translation -1 1.2 8.5
   rotation 0 1 0 1.5708
   name "MazeBottom_VertCenter(1)"
-  size 3 2.4 0.3
+  size 3 2.4 0.5
   appearance Roughcast {
     colorOverride 0.8 0.6 0.25
   }

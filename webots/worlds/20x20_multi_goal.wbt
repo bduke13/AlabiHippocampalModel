@@ -4,6 +4,8 @@ EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/project
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/BrushedAluminium.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/Roughcast.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/apartment_structure/protos/Wall.proto"
 
 WorldInfo {
   info [
@@ -14,7 +16,7 @@ WorldInfo {
 }
 Viewpoint {
   orientation -0.7071057814660382 0.7071077809056435 5.551115123136879e-17 3.1415966524690035
-  position 0.675448927653872 47.933902419853034 -0.0047139986992741165
+  position 4.2553367072649017e-13 55.71962011395573 9.387921175801812e-15
   near 0.1
   follow "Create"
   followType "None"
@@ -98,7 +100,7 @@ Pose {
 DEF agent Create {
   translation 0 0.0441865 0
   rotation -0.6607352787486408 0.5303053028717288 0.5312298722427797 1.9727887896457816
-  controller "msg_controller_v20"
+  controller "msg_test_v10"
   supervisor TRUE
   bodySlot [
     Solid {
@@ -131,4 +133,39 @@ DEF agent Create {
 }
 DirectionalLight {
   direction 0.75 -1 0
+}
+Wall {
+  translation 0 1.2 10
+  name "OuterWall_North"
+  size 20 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.7 0.45 0.25
+  }
+}
+Wall {
+  translation 0 1.2 -10
+  rotation 0 1 0 3.1416
+  name "OuterWall_South"
+  size 20 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.7 0.45 0.25
+  }
+}
+Wall {
+  translation 10 1.2 0
+  rotation 0 1 0 1.5708
+  name "OuterWall_East"
+  size 20.6 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.7 0.45 0.25
+  }
+}
+Wall {
+  translation -10 1.2 0
+  rotation 0 1 0 -1.5708
+  name "OuterWall_West"
+  size 20.6 2.4 0.3
+  appearance Roughcast {
+    colorOverride 0.7 0.45 0.25
+  }
 }

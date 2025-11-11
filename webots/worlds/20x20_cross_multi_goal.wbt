@@ -15,8 +15,8 @@ WorldInfo {
   coordinateSystem "NUE"
 }
 Viewpoint {
-  orientation -0.7071057814660382 0.7071077809056435 5.551115123136879e-17 3.1415966524690035
-  position -1.7581204702254415e-05 50.82497372283047 1.7581254442112677e-05
+  orientation 0.7071057814660382 -0.7071077809056435 -5.551115123136879e-17 3.1415886547105827
+  position -1.0157719275462878e-13 71.46895054084635 -6.694858780558101e-14
   near 0.1
   follow "Create"
   followType "None"
@@ -27,7 +27,6 @@ RectangleArena {
   rotation 1 0 0 -1.5708
   floorSize 20 20
   floorAppearance NULL
-  wallHeight 0
   wallAppearance BrushedAluminium {
     colorOverride 0 1 1
     IBLStrength 11
@@ -69,9 +68,9 @@ Wall {
   }
 }
 Wall {
-  translation 0 1.2 0
+  translation 0 1.2 -0.25
   name "wall(horizontal)"
-  size 12 2.4 0.3
+  size 12 2.4 0.5
   appearance Roughcast {
     colorOverride 0.8 0.45 0.25
     textureTransform TextureTransform {
@@ -80,10 +79,10 @@ Wall {
   }
 }
 Wall {
-  translation 0 1.2 0
+  translation -0.25 1.2 0
   rotation 0 1 0 1.5708
   name "wall(vertical)"
-  size 12 2.4 0.3
+  size 12 2.4 0.5
   appearance Roughcast {
     colorOverride 0.8 0.45 0.25
     textureTransform TextureTransform {
@@ -103,7 +102,6 @@ Pose {
       }
       geometry Cylinder {
         height 0.002
-        radius 0.7
       }
     }
   ]
@@ -120,7 +118,6 @@ Pose {
       }
       geometry Cylinder {
         height 0.002
-        radius 0.7
       }
     }
   ]
@@ -137,7 +134,6 @@ Pose {
       }
       geometry Cylinder {
         height 0.002
-        radius 0.7
       }
     }
   ]
@@ -154,7 +150,6 @@ Pose {
       }
       geometry Cylinder {
         height 0.002
-        radius 0.7
       }
     }
   ]
@@ -162,7 +157,7 @@ Pose {
 DEF agent Create {
   translation -3.02896 0.0466361 -2.46272
   rotation -0.6607352787486408 0.5303053028717288 0.5312298722427797 1.9727887896457816
-  controller "msg_controller_v15"
+  controller "msg_test_v10"
   supervisor TRUE
   bodySlot [
     Solid {
