@@ -12,14 +12,39 @@ project_root = Path(__file__).resolve().parent.parent  # Adjust this if needed
 sys.path.append(str(project_root))
 
 CONTROLLER_PATH_PREFIX = "webots/controllers/"
-CONTROLLER_NAME = "msg_controller_v20"
-WORLD_NAME = "20x20_multi_goal"
+CONTROLLER_NAME = "msg_test_v10"
+WORLD_NAME = "20x20_maze_multi_goal"
 # "A_20x20_Maze_Multi_Goal"
 # "20x20_multi_goal"
 # Define output directories relative to project root
 OUTPUT_DIR = os.path.join(
     CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl", WORLD_NAME, "vis_outputs"
 )
+
+# Global context for custom paths (can be overridden)
+_custom_controller_name = None
+_custom_world_name = None
+
+def set_custom_paths(controller_name=None, world_name=None):
+    """
+    Override the default controller and world names for loading data.
+
+    Args:
+        controller_name (str, optional): Custom controller name (e.g., "msg_test_v10")
+        world_name (str, optional): Custom world name (e.g., "20x20_maze_multi_goal")
+    """
+    global _custom_controller_name, _custom_world_name
+    _custom_controller_name = controller_name
+    _custom_world_name = world_name
+    print(f"[vis_utils] Set custom paths: controller={controller_name}, world={world_name}")
+
+def _get_controller_name():
+    """Get the active controller name (custom or default)."""
+    return _custom_controller_name if _custom_controller_name is not None else CONTROLLER_NAME
+
+def _get_world_name():
+    """Get the active world name (custom or default)."""
+    return _custom_world_name if _custom_world_name is not None else WORLD_NAME
 
 
 def load_layer_pkl(layer_name: str = ""):
@@ -35,9 +60,9 @@ def load_layer_pkl(layer_name: str = ""):
     file_path = (
         os.path.join(
             CONTROLLER_PATH_PREFIX,
-            CONTROLLER_NAME,
+            _get_controller_name(),
             "pkl",
-            WORLD_NAME,
+            _get_world_name(),
             "networks",
             layer_name,
         )
@@ -62,7 +87,7 @@ def load_hmaps(
         NOTE: if a single hmap name is provided the hmap will not be returned as a list but rather just the np.ndarray for simpler usage
     """
     hmap_directory = os.path.join(
-        CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl", WORLD_NAME, "hmaps"
+        CONTROLLER_PATH_PREFIX, _get_controller_name(), "pkl", _get_world_name(), "hmaps"
     )
 
     # collect all hmaps
@@ -210,17 +235,17 @@ def load_multi_scale_hmaps(scales=None):
 def load_multi_goal_rcn_data(goal_name=None, scale_idx=None):
     """
     Load multi-goal RCN data from the multi_goal_rewards directory.
-    
+
     Args:
         goal_name (str, optional): Specific goal to load. If None, loads all goals.
         scale_idx (int, optional): Specific scale to load. If None, loads all scales.
-        
+
     Returns:
         dict: Dictionary with structure {goal_name: {scale_idx: rcn_object}}
               or single rcn_object if both goal_name and scale_idx specified
     """
     multi_goal_dir = os.path.join(
-        CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl", WORLD_NAME, "networks", "multi_goal_rewards"
+        CONTROLLER_PATH_PREFIX, _get_controller_name(), "pkl", _get_world_name(), "networks", "multi_goal_rewards"
     )
     
     if not os.path.exists(multi_goal_dir):
@@ -280,12 +305,12 @@ def load_multi_goal_rcn_data(goal_name=None, scale_idx=None):
 def load_goal_associations():
     """
     Load goal associations data.
-    
+
     Returns:
         dict: Goal associations data including place cell mappings
     """
     multi_goal_dir = os.path.join(
-        CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl", WORLD_NAME, "networks", "multi_goal_rewards"
+        CONTROLLER_PATH_PREFIX, _get_controller_name(), "pkl", _get_world_name(), "networks", "multi_goal_rewards"
     )
     
     associations_path = os.path.join(multi_goal_dir, "goal_associations.pkl")
@@ -302,7 +327,7 @@ def load_goal_associations():
 def get_available_multi_goal_combinations():
     """
     Discover available goal-scale combinations in the multi_goal_rewards directory.
-    
+
     Returns:
         tuple: (goals_list, scales_list, combinations_dict)
                goals_list: List of available goal names
@@ -310,7 +335,7 @@ def get_available_multi_goal_combinations():
                combinations_dict: {goal_name: [scale_indices]}
     """
     multi_goal_dir = os.path.join(
-        CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl", WORLD_NAME, "networks", "multi_goal_rewards"
+        CONTROLLER_PATH_PREFIX, _get_controller_name(), "pkl", _get_world_name(), "networks", "multi_goal_rewards"
     )
     
     if not os.path.exists(multi_goal_dir):

@@ -1373,59 +1373,104 @@ class MultiscalePlaceCellWithGrid:
                 print(f"\n[BOLTZMANN_PREPLAY] Processing scale {scale_idx}: {scale_name}")
 
             # Loop through each of the 8 head directions
-            for direction in range(self.n_hd):
-                # Store per-step rewards and angles for this trajectory
-                step_rewards = []
-                step_angles = []
+            for initial_direction in range(self.n_hd):
+                # We will accumulate all micro-trajectories into a single macro-vector
+                macro_discounted_return = torch.tensor(0.0, dtype=self.dtype, device=self.device)
+                macro_direction_vector = torch.zeros(2, dtype=self.dtype, device=self.device)
 
-                # Simulate preplay for this direction
-                current_activations = pcn.place_cell_activations.clone()
-                current_direction = direction
+                micro_trajectory_count = 0
 
-                for step in range(num_steps):
-                    # Perform one preplay step
-                    next_activations = pcn.preplay_from_state(
-                        current_activations, current_direction, num_steps=1
-                    )
+                def explore_microtrajectory(activations, remaining_steps, path_so_far, depth, accumulated_reward, accumulated_vector):
+                    """Recursively explore all micro-trajectories starting from initial_direction.
 
-                    # Evaluate reward at this step (keep as tensor)
-                    rcn.update_reward_cell_activations(next_activations, visit=False)
-                    step_reward = torch.max(torch.nan_to_num(rcn.reward_cell_activations))
-                    step_rewards.append(step_reward)
+                    Args:
+                        activations: Current place cell activations
+                        remaining_steps: Number of steps remaining
+                        path_so_far: List of directions taken so far
+                        depth: Current depth in the trajectory (0-indexed)
+                        accumulated_reward: Sum of discounted rewards so far
+                        accumulated_vector: Sum of discounted direction vectors so far
+                    """
+                    nonlocal macro_discounted_return, macro_direction_vector, micro_trajectory_count
 
-                    # Store step angle (in radians) - trajectory continues in same fixed direction
-                    # (no within-trajectory turning in current implementation)
-                    step_angle = current_direction * (2 * np.pi / self.n_hd)
-                    step_angles.append(step_angle)
+                    # Determine which directions to explore at this step
+                    if len(path_so_far) == 0:
+                        # First step: use initial direction only (forced)
+                        directions_to_try = [initial_direction]
+                    else:
+                        # Subsequent steps: branch to straight, left (-1), right (+1)
+                        last_direction = path_so_far[-1]
+                        directions_to_try = [
+                            last_direction,                    # Continue straight
+                            (last_direction - 1) % self.n_hd,  # Turn left (counter-clockwise)
+                            (last_direction + 1) % self.n_hd   # Turn right (clockwise)
+                        ]
 
-                    # Update for next step - continue straight in same direction
-                    current_activations = next_activations
+                    for direction in directions_to_try:
+                        # Perform one preplay step in this direction
+                        next_activations = pcn.preplay_from_state(activations, direction, num_steps=1)
 
-                # Stack step rewards into tensor: shape [num_steps]
-                step_rewards_tensor = torch.stack(step_rewards)
+                        # Evaluate reward at this step (keep as tensor)
+                        rcn.update_reward_cell_activations(next_activations, visit=False)
+                        step_reward = torch.max(torch.nan_to_num(rcn.reward_cell_activations))
 
-                # Compute discounted return: sum(gamma^t * r_t)
-                discounted_return = torch.sum(discount_weights * step_rewards_tensor)
+                        # Compute discounted reward for this step
+                        step_weight = discount_weights[depth]
+                        weighted_reward = step_weight * step_reward
 
-                # Convert step angles to unit vectors: [cos(angle), sin(angle)]
-                step_angles_tensor = torch.tensor(step_angles, dtype=self.dtype, device=self.device)
-                step_vectors = torch.stack([torch.cos(step_angles_tensor), torch.sin(step_angles_tensor)], dim=1)  # [num_steps, 2]
+                        # Compute direction vector for this step
+                        step_angle = direction * (2 * np.pi / self.n_hd)
+                        step_vector = torch.tensor([np.cos(step_angle), np.sin(step_angle)],
+                                                   dtype=self.dtype, device=self.device)
+                        weighted_vector = step_weight * step_vector
 
-                # Compute discounted direction vector: sum(gamma^t * [cos(theta_t), sin(theta_t)])
-                direction_vector = torch.sum(discount_weights.unsqueeze(1) * step_vectors, dim=0)  # [2]
+                        # Accumulate for this branch
+                        branch_reward = accumulated_reward + weighted_reward
+                        branch_vector = accumulated_vector + weighted_vector
 
-                # Store trajectory results
-                all_discounted_returns.append(discounted_return)
-                all_direction_vectors.append(direction_vector)
+                        if remaining_steps == 1:
+                            # Leaf node: this micro-trajectory is complete
+                            # Add to macro-vector
+                            macro_discounted_return += branch_reward
+                            macro_direction_vector += branch_vector
+                            micro_trajectory_count += 1
+                        else:
+                            # Continue exploring this branch
+                            new_path = path_so_far + [direction]
+                            explore_microtrajectory(
+                                next_activations,
+                                remaining_steps - 1,
+                                new_path,
+                                depth + 1,
+                                branch_reward,
+                                branch_vector
+                            )
+
+                # Start recursive exploration from initial direction
+                starting_activations = pcn.place_cell_activations.clone()
+                explore_microtrajectory(
+                    starting_activations,
+                    num_steps,
+                    [],
+                    0,
+                    torch.tensor(0.0, dtype=self.dtype, device=self.device),
+                    torch.zeros(2, dtype=self.dtype, device=self.device)
+                )
+
+                # Store the macro-vector for this (scale, initial_direction) pair
+                all_discounted_returns.append(macro_discounted_return)
+                all_direction_vectors.append(macro_direction_vector)
                 trajectory_metadata.append({
                     'scale_idx': scale_idx,
                     'scale_name': scale_name,
-                    'direction': direction
+                    'direction': initial_direction
                 })
 
-                if debug and direction % 4 == 0:
-                    print(f"  Dir {direction} ({direction*45}°): reward={discounted_return.item():.4f}, "
-                          f"vector=[{direction_vector[0].item():.3f}, {direction_vector[1].item():.3f}]")
+                if debug and initial_direction % 4 == 0:
+                    print(f"  Dir {initial_direction} ({initial_direction*45}°): "
+                          f"micro-trajs={micro_trajectory_count}, "
+                          f"reward={macro_discounted_return.item():.4f}, "
+                          f"vector=[{macro_direction_vector[0].item():.3f}, {macro_direction_vector[1].item():.3f}]")
 
         # Stack all trajectory results into tensors
         # Shape: [N_trajectories] and [N_trajectories, 2]

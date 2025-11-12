@@ -15,12 +15,13 @@ sys.path.append(str(project_root))
 
 # Import utility functions from vis_utils.py
 from vis_utils import (
-    load_hmaps, 
-    convert_xzy_hmaps, 
+    load_hmaps,
+    convert_xzy_hmaps,
     load_multi_goal_rcn_data,
     load_goal_associations,
     get_available_multi_goal_combinations,
     load_multi_goal_hmaps,
+    set_custom_paths,
     CONTROLLER_PATH_PREFIX,
     CONTROLLER_NAME,
     WORLD_NAME,
@@ -371,24 +372,33 @@ def plot_single_goal_all_scales(
     else:
         plt.close(fig)
 
-def save_all_multi_goal_plots(output_dir=None):
+def save_all_multi_goal_plots(output_dir=None, controller_name=None, world_name=None):
     """
     Generate and save all multi-goal reward plots.
+
+    Args:
+        output_dir (str, optional): Directory to save plots. If None, uses default OUTPUT_DIR.
+        controller_name (str, optional): Custom controller name (e.g., "msg_test_v10")
+        world_name (str, optional): Custom world name (e.g., "20x20_maze_multi_goal")
     """
+    # Set custom paths if provided
+    if controller_name is not None or world_name is not None:
+        set_custom_paths(controller_name=controller_name, world_name=world_name)
+
     if output_dir is None:
         output_dir = os.path.join(OUTPUT_DIR, "multi_goal_rcn_plots")
-    
+
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # Get available data
     goals, scales, combinations = get_available_multi_goal_combinations()
-    
+
     if not goals:
         print("No multi-goal data found to plot")
         return
-    
+
     print(f"Generating plots for {len(goals)} goals and {len(scales)} scales")
-    
+
     # Save the main grid plot
     main_save_path = os.path.join(output_dir, "all_goals_all_scales.png")
     plot_all_multi_goal_rewards(
@@ -397,7 +407,7 @@ def save_all_multi_goal_plots(output_dir=None):
         save_path=main_save_path,
         show_plot=False,
     )
-    
+
     # Save individual goal plots
     for goal in goals:
         goal_save_path = os.path.join(output_dir, f"{goal}_all_scales.png")
@@ -407,8 +417,9 @@ def save_all_multi_goal_plots(output_dir=None):
             save_path=goal_save_path,
             show_plot=False,
         )
-    
+
     print(f"All plots saved to {output_dir}")
+    return output_dir
 
 # %%
 if __name__ == "__main__":

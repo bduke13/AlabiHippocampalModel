@@ -61,11 +61,11 @@ SCALES_DEFS = {
         "gamma_pp": 0.5,  # Place-to-place recurrent inhibition strength
         "gamma_pb": 0.3,  # BVC-to-place afferent inhibition strength
         # Grid cell parameters
-        "grid_influence": 0.25, # 0.25
+        "grid_influence": 0.3, # 0.25
         "gamma_pg": 0.3, # 0.3
-        "num_grid_cells": 800,
+        "num_grid_cells": 400,
         "num_modules": 8,
-        "cells_per_module": 100,
+        "cells_per_module": 50,
         "spread_range": (0.8, 1.2),
         "frequency_divisor": 0.25,
         "mask_resolution": 128,
@@ -76,6 +76,10 @@ SCALES_DEFS = {
         "correlation_scaling": 10, #2.5
         "min_correlation_weight": 0.10, #0.03
         "correlation_threshold": 0.005, #0.015
+        # Reward cell replay parameters
+        "replay_timesteps": 100,  # Number of timesteps for regular replay
+        "replay_decay_factor": 8,  # Decay factor for exponential decay during replay
+        "custom_replay_timesteps": 300,  # Number of timesteps for custom activations replay
 
     },
     "medium": {
@@ -109,6 +113,10 @@ SCALES_DEFS = {
         "correlation_scaling": 10, #3.0
         "min_correlation_weight": 0.10, #0.06
         "correlation_threshold": 0.05, #0.03
+        # Reward cell replay parameters
+        "replay_timesteps": 40,  # Number of timesteps for regular replay
+        "replay_decay_factor": 6,  # Decay factor for exponential decay during replay
+        "custom_replay_timesteps": 100,  # Number of timesteps for custom activations replay
 
     },
     "large": {
@@ -142,6 +150,10 @@ SCALES_DEFS = {
         "correlation_scaling": 10, #2.5
         "min_correlation_weight": 0.10, #0.12
         "correlation_threshold": 0.05, #0.05
+        # Reward cell replay parameters
+        "replay_timesteps": 40,  # Number of timesteps for regular replay
+        "replay_decay_factor": 5,  # Decay factor for exponential decay during replay
+        "custom_replay_timesteps": 75,  # Number of timesteps for custom activations replay
     },
     "xlarge": {
         "scale_index": 3,
@@ -174,6 +186,10 @@ SCALES_DEFS = {
         "correlation_scaling": 2.0,
         "min_correlation_weight": 0.18,
         "correlation_threshold": 0.08,
+        # Reward cell replay parameters
+        "replay_timesteps": 20,  # Number of timesteps for regular replay
+        "replay_decay_factor": 3,  # Decay factor for exponential decay during replay
+        "custom_replay_timesteps": 40,  # Number of timesteps for custom activations replay
     }
 }
 
@@ -226,6 +242,7 @@ def _run_single_trial(bot, mode, trial_id, start_loc, target_goal, stats_collect
         environment_size=trial_kwargs.get("environment_size", None),
         grid_size=trial_kwargs.get("grid_size", None),
         coverage_percentage=trial_kwargs.get("coverage_percentage", None),
+        min_goal_visits=trial_kwargs.get("min_goal_visits", 3),
         optimal_path_distance=trial_kwargs.get("optimal_path_distance", None),
         path_failure_ratio=trial_kwargs.get("path_failure_ratio", None),
         paths_folder=trial_kwargs.get("paths_folder", None),
@@ -615,6 +632,7 @@ def _run_learn_coverage_auto_trials(mode, **kwargs):
             environment_size=kwargs.get("environment_size", None),
             grid_size=kwargs.get("grid_size", None),
             coverage_percentage=kwargs.get("coverage_percentage", None),
+            min_goal_visits=kwargs.get("min_goal_visits", 3),
             auto_trial_name=auto_trial_name,
             num_auto_trials=num_auto_trials,
             current_auto_trial=trial_num,
@@ -902,6 +920,7 @@ def _run_plotting_auto_trials(mode, **kwargs):
             environment_size=kwargs.get("environment_size", None),
             grid_size=kwargs.get("grid_size", None),
             coverage_percentage=kwargs.get("coverage_percentage", None),
+            min_goal_visits=kwargs.get("min_goal_visits", 3),
             auto_trial_name=auto_trial_name,
             num_auto_trials=num_auto_trials,
             current_auto_trial=trial_num,
@@ -1020,6 +1039,7 @@ def _run_plotting_coverage_auto_trials(mode, **kwargs):
             environment_size=kwargs.get("environment_size", None),
             grid_size=kwargs.get("grid_size", None),
             coverage_percentage=kwargs.get("coverage_percentage", None),
+            min_goal_visits=kwargs.get("min_goal_visits", 3),
             auto_trial_name=auto_trial_name,
             num_auto_trials=num_auto_trials,
             current_auto_trial=trial_num,
@@ -1122,7 +1142,7 @@ if __name__ == "__main__":
         "PLOTTING_COVERAGE_AUTO": RobotMode.PLOTTING_COVERAGE_AUTO,
     }
 
-    SELECTED_MODE = "LEARN_LOCATIONS_COVERAGE"
+    SELECTED_MODE = "EXPLOIT_LOCATIONS_RANDOM"
     td_learning = False # keep off
     corners = [[8,-8]] # start point
     dmtp_start = [-9,9]
@@ -1139,7 +1159,7 @@ if __name__ == "__main__":
     large = ["large"]
 
     scale_names = multiscale # what scales you are using
-    run_time_hours = 6
+    run_time_hours = 8
     max_dist = 25
     plot_bvc = False
 
@@ -1172,7 +1192,8 @@ if __name__ == "__main__":
     # Coverage parameters for LEARN_LOCATIONS_COVERAGE
     environment_size = [20.0, 20.0]  # 20x20 meter environment
     grid_size = 0.5  # 0.5 meter grid cells
-    coverage_percentage = 0.92  # 90% coverage target
+    coverage_percentage = 0.95  # 90% coverage target
+    min_goal_visits = 3  # Minimum number of visits required per goal
 
     # Random spawn parameters for EXPLOIT_LOCATIONS_RANDOM
     min_spawn_distance = 6.0  # 6 meters from goal
@@ -1305,6 +1326,7 @@ if __name__ == "__main__":
             "environment_size": environment_size,
             "grid_size": grid_size,
             "coverage_percentage": coverage_percentage,
+            "min_goal_visits": min_goal_visits,
         },
         "LEARN_LOCATIONS_COVERAGE_AUTO": {
             "start_loc": start_loc,
@@ -1322,6 +1344,7 @@ if __name__ == "__main__":
             "environment_size": environment_size,
             "grid_size": grid_size,
             "coverage_percentage": coverage_percentage,
+            "min_goal_visits": min_goal_visits,
             # Auto trial specific parameters (use shared variables)
             "auto_trial_name": auto_trial_name,
             "num_auto_trials": num_auto_trials,

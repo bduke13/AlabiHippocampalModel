@@ -25,7 +25,7 @@ from core.layers.head_direction_layer import HeadDirectionLayer
 from core.layers.multiscale_pcn import PlaceCellLayer
 from core.layers.multiscale_pcn_with_gcn_v10 import MultiscalePlaceCellWithGrid
 from core.layers.grid_cell_layer_v10 import GridCellLayer
-from core.layers.reward_cell_layer_test import RewardCellLayerTest
+from core.layers.reward_cell_layer_v10 import RewardCellLayerTest
 from core.robot.robot_mode import RobotMode
 from analysis.stats.stats_collector import stats_collector
 
@@ -95,6 +95,7 @@ class Driver(Supervisor):
         environment_size: Optional[List[float]] = None,
         grid_size: Optional[float] = None,
         coverage_percentage: Optional[float] = None,
+        min_goal_visits: int = 3,
         optimal_path_distance: Optional[float] = None,
         path_failure_ratio: Optional[float] = None,
         paths_folder: Optional[str] = None,
@@ -194,6 +195,7 @@ class Driver(Supervisor):
         self.environment_size = environment_size
         self.grid_size = grid_size
         self.coverage_percentage = coverage_percentage
+        self.min_goal_visits = min_goal_visits
 
         # Store random spawn parameters
         self.optimal_path_distance = optimal_path_distance
@@ -495,7 +497,7 @@ class Driver(Supervisor):
                     enable_stdp=enable_stdp if enable_stdp is not None else False,
                     w_in_init_ratio=w_in_init_ratio,
                     w_grid_init_ratio=w_grid_init_ratio,
-                    w_grid_init_strategy=scale_def.get('w_grid_init_strategy', 'global'),
+                    w_grid_init_strategy=scale_def.get('w_grid_init_strategy', 'balanced_modules'),
                     gc_num_modules=scale_def.get('num_modules'),
                     gc_cells_per_module=scale_def.get('cells_per_module'),
                     grid_influence=scale_def.get("grid_influence", 0.5),
@@ -552,6 +554,9 @@ class Driver(Supervisor):
                 num_place_cells=scale_def["num_pc"],
                 num_replay=3,
                 learning_rate=learning_rate,
+                replay_timesteps=scale_def.get("replay_timesteps", 20),
+                replay_decay_factor=scale_def.get("replay_decay_factor", 6),
+                custom_replay_timesteps=scale_def.get("custom_replay_timesteps", 40),
                 device=self.device,
             )
         return rcn
@@ -698,6 +703,12 @@ class Driver(Supervisor):
                 }
                 self.goal_place_cell_activations = {
                     goal["name"]: [None] * len(self.scales) for goal in self.goals
+                }
+                self.goal_visit_counts = {
+                    goal["name"]: 0 for goal in self.goals
+                }
+                self.goal_currently_in = {
+                    goal["name"]: False for goal in self.goals
                 }
 
                 # Threshold for activation similarity (within 20% = use connections as tiebreaker)
@@ -1436,10 +1447,22 @@ class Driver(Supervisor):
                 distance = torch.norm(current_position - goal_position)
 
                 if distance <= goal["radius"]:
+                    # Track first visit (for backward compatibility)
                     if not goal["visited"]:
                         print(f"[LEARN_LOCATIONS_COVERAGE] First visit to {goal['name']} goal at {goal['location']}")
                         goal["visited"] = True
+
+                    # Increment visit count when entering goal (not already in it)
+                    if not self.goal_currently_in[goal["name"]]:
+                        self.goal_visit_counts[goal["name"]] += 1
+                        self.goal_currently_in[goal["name"]] = True
+                        print(f"[LEARN_LOCATIONS_COVERAGE] {goal['name']} visit #{self.goal_visit_counts[goal['name']]}")
+
                     self._handle_goal_learning(goal)
+                else:
+                    # Mark that robot has left this goal zone
+                    if self.goal_currently_in[goal["name"]]:
+                        self.goal_currently_in[goal["name"]] = False
 
             # Check termination conditions: (time limit OR coverage reached) AND learning complete
             minimum_time_reached = trial_elapsed_time >= 60 * self.run_time_minutes
@@ -1660,6 +1683,11 @@ class Driver(Supervisor):
                 if pc_idx is None:
                     return False
 
+        # All goals must have minimum number of visits
+        for goal_name, visit_count in self.goal_visit_counts.items():
+            if visit_count < self.min_goal_visits:
+                return False
+
         return True
 
     def _create_multi_goal_reward_maps(self):
@@ -1718,6 +1746,7 @@ class Driver(Supervisor):
             "goal_place_cell_associations": self.goal_place_cell_associations,
             "goal_association_step": self.goal_association_step,
             "goal_place_cell_activations": self.goal_place_cell_activations,
+            "goal_visit_counts": self.goal_visit_counts,
             "goals": self.goals,
             "scales": [{"scale_index": s["scale_index"], "name": s["name"]} for s in self.scales],
             "total_steps": self.step_count,
@@ -1732,7 +1761,8 @@ class Driver(Supervisor):
         print(f"[LEARN_LOCATIONS] Final associations:")
         for goal_name, associations in self.goal_place_cell_associations.items():
             goal_info = next(g for g in self.goals if g["name"] == goal_name)
-            print(f"  {goal_name} at {goal_info['location']}: {associations}")
+            visit_count = self.goal_visit_counts[goal_name]
+            print(f"  {goal_name} at {goal_info['location']}: {associations} (visits: {visit_count})")
 
     def _save_trial_completion_time(self, trial_elapsed_time):
         """Save trial completion time to JSON for AUTO mode"""
