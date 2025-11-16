@@ -335,6 +335,11 @@ class Driver(Supervisor):
         self.MOMENTUM_STEPS = 15  # Number of steps to track in direction history
         self.CHANGE_THRESHOLD = 0.1  # Threshold for direction change in 'threshold' mode
         self._last_chosen_direction = None  # Track last chosen direction for momentum
+
+        # Trajectory suppression for spatial aliasing correction (Mechanism 1)
+        self.suppressed_trajectories = {}  # Key: (scale_idx, direction), Value: remaining_steps
+        self.last_trajectory_probs = None  # Store last decision probabilities for credit assignment
+        self.last_trajectory_metadata = None  # Store last decision metadata for credit assignment
         self._last_direction_reward = 0.0  # Track last direction's reward
         self._direction_history = []  # History of chosen directions
         self.DEBUG_EXPLOIT_V1 = False  # Debug flag for momentum printing
@@ -439,7 +444,13 @@ class Driver(Supervisor):
                 pcn.min_correlation_weight = scale_def.get("min_correlation_weight", 0.1)
                 pcn.correlation_threshold = scale_def.get("correlation_threshold", 0.01)
 
-                print(f"[DRIVER] Updated MultiscalePlaceCellWithGrid PCN - grid_influence: {pcn.grid_influence}, gamma_pp: {pcn.gamma_pp}, gamma_pb: {pcn.gamma_pb}")
+                # Update Oja's learning normalization parameters from scale definition
+                if scale_def.get("alpha_pb") is not None:
+                    pcn.alpha_pb = scale_def.get("alpha_pb")
+                if scale_def.get("alpha_pg") is not None:
+                    pcn.alpha_pg = scale_def.get("alpha_pg")
+
+                print(f"[DRIVER] Updated MultiscalePlaceCellWithGrid PCN - grid_influence: {pcn.grid_influence}, gamma_pp: {pcn.gamma_pp}, gamma_pb: {pcn.gamma_pb}, alpha_pb: {pcn.alpha_pb:.4f}, alpha_pg: {pcn.alpha_pg:.4f}")
             else:
                 # Update legacy PCN parameters
                 if enable_ojas is not None:
@@ -485,6 +496,10 @@ class Driver(Supervisor):
                 min_correlation_weight = scale_def.get("min_correlation_weight", 0.1)
                 correlation_threshold = scale_def.get("correlation_threshold", 0.01)
 
+                # Get Oja's learning normalization parameters
+                alpha_pb = scale_def.get("alpha_pb", None)  # None will use default sqrt(0.5)
+                alpha_pg = scale_def.get("alpha_pg", None)  # None will use default sqrt(0.5)
+
                 # Use MultiscalePlaceCellWithGrid
                 # Note: Proximity suppression is now handled in the grid cell layer
                 pcn = MultiscalePlaceCellWithGrid(
@@ -504,6 +519,8 @@ class Driver(Supervisor):
                     gamma_pp=scale_def.get("gamma_pp", 0.5),
                     gamma_pb=scale_def.get("gamma_pb", 0.25),
                     gamma_pg=scale_def.get("gamma_pg", 0.3),
+                    alpha_pb=alpha_pb,
+                    alpha_pg=alpha_pg,
                     enable_correlation_weighting = enable_correlation_weighting,
                     correlation_window = correlation_window,
                     correlation_update_freq = correlation_update_freq,
@@ -512,7 +529,9 @@ class Driver(Supervisor):
                     correlation_threshold = correlation_threshold,
                     device=self.device,
                 )
-                print(f"[DRIVER] Created MultiscalePlaceCellWithGrid with {num_grid_cells} grid cells, grid_influence={scale_def.get('grid_influence', 0.5)}, w_in_ratio={w_in_init_ratio}, w_grid_ratio={w_grid_init_ratio}")
+                alpha_pb_val = alpha_pb if alpha_pb is not None else np.sqrt(0.5)
+                alpha_pg_val = alpha_pg if alpha_pg is not None else np.sqrt(0.5)
+                print(f"[DRIVER] Created MultiscalePlaceCellWithGrid with {num_grid_cells} grid cells, grid_influence={scale_def.get('grid_influence', 0.5)}, w_in_ratio={w_in_init_ratio}, w_grid_ratio={w_grid_init_ratio}, alpha_pb={alpha_pb_val:.4f}, alpha_pg={alpha_pg_val:.4f}")
             else:
                 # Use standard PlaceCellLayer
                 w_in_init_ratio = scale_def.get("w_in_init_ratio", 0.25)
@@ -1065,16 +1084,20 @@ class Driver(Supervisor):
         #===================================================================
 
         # --- Boltzmann Preplay Configuration ---
-        num_preplay_steps = 3              # Number of steps per trajectory
+        num_preplay_steps = 2              # Number of steps per trajectory
         discount_factor = 0.9              # Temporal discount (gamma)
         inverse_temperature = 2.0          # Boltzmann selectivity (beta)
 
         # --- Safety & Loop Detection ---
-        min_safe_distance = 0.5           # Minimum obstacle clearance
+        min_safe_distance = 1           # Minimum obstacle clearance
         loop_threshold = 5                 # Number of loops before forcing exploration
         max_steps_between_loops = 10       # Max steps between loops to count
         forced_exploration_steps = 10      # Steps to force exploration
         cooldown_steps = 20                # Cooldown after forced exploration
+
+        # --- Trajectory Suppression (Spatial Aliasing Correction) ---
+        trajectory_suppression_duration = 5  # Steps to suppress a trajectory after collision
+        top_k_suppress = 2                   # Number of top trajectories to suppress on collision
 
         # --- Debug ---
         debug_print_interval = 100         # Print debug info every N steps
@@ -1085,6 +1108,13 @@ class Driver(Supervisor):
         # 1) Sense and compute: update heading, place/boundary cell activations
         #-------------------------------------------------------------------
         self.sense()
+
+        # Debug: Log suppression state periodically
+        if debug_print_interval > 0 and (self.step_count % debug_print_interval) <= 10:
+            if len(self.suppressed_trajectories) > 0:
+                print(f"[SUPPRESS] Active suppressions: {len(self.suppressed_trajectories)}")
+                for (scale_idx, direction), remaining in self.suppressed_trajectories.items():
+                    print(f"  Scale {scale_idx}, {direction*45:3d}° -> {remaining} steps remaining")
         self.compute_pcn_activations()
         self.update_hmaps(update_loc=True, update_pcn=True, update_scale_priority=True)
         self.check_goal_reached()
@@ -1183,6 +1213,33 @@ class Driver(Supervisor):
         )
 
         #-------------------------------------------------------------------
+        # 5b) Trajectory suppression: filter out suppressed trajectories
+        #-------------------------------------------------------------------
+        suppressed_mask = self._get_suppression_mask(trajectory_metadata)
+        active_traj_mask = ~suppressed_mask  # Invert: True = not suppressed
+
+        if not torch.any(active_traj_mask):
+            # All trajectories suppressed -> force exploration
+            print("[EXPLOIT_V10] All trajectories suppressed. Forcing exploration.")
+            self.explore()
+            return
+
+        # Filter out suppressed trajectories
+        if torch.any(suppressed_mask):
+            # Some trajectories are suppressed, filter them out
+            boltzmann_probs = boltzmann_probs[active_traj_mask]
+            direction_vectors = direction_vectors[active_traj_mask]
+            discounted_returns = discounted_returns[active_traj_mask]
+            trajectory_metadata = [trajectory_metadata[i] for i, active in enumerate(active_traj_mask) if active]
+
+            # Renormalize probabilities after removing suppressed trajectories
+            boltzmann_probs = boltzmann_probs / torch.clamp(torch.sum(boltzmann_probs), min=1e-9)
+
+            if debug_enabled:
+                num_suppressed = torch.sum(suppressed_mask).item()
+                print(f"[EXPLOIT_V10] Filtered {num_suppressed} suppressed trajectories")
+
+        #-------------------------------------------------------------------
         # 6) Safety filtering: restrict to safe directions before finalizing
         #-------------------------------------------------------------------
         # Build per-trajectory mask based on discrete head-direction safety
@@ -1217,7 +1274,7 @@ class Driver(Supervisor):
             combined_vector = safe_vectors[max_idx]
             expected_value = safe_returns[max_idx]
             if debug_enabled:
-                print(f"[EXPLOIT_V10] Safe combined vector near zero; using best safe trajectory")
+                print(f"[EXPLOIT_V10] Fallback: safe vector near zero, using best safe trajectory")
 
         # Final direction from safe combined vector
         final_direction_rad = torch.atan2(combined_vector[1], combined_vector[0])
@@ -1228,8 +1285,29 @@ class Driver(Supervisor):
         self.action_heading_deg = final_direction_deg
 
         if debug_enabled:
-            print(f"[EXPLOIT_V10] Step {self.step_count}: Action heading = {self.action_heading_deg:.1f}°, "
-                  f"Expected value = {expected_value:.4f}")
+            # Compute scale contributions from safe trajectories
+            safe_metadata = [trajectory_metadata[i] for i, is_safe in enumerate(safe_traj_mask) if is_safe]
+            scale_contributions = []
+            for scale_idx in range(len(scales_data)):
+                scale_mass = sum(safe_probs[i].item() for i, meta in enumerate(safe_metadata) if meta['scale_idx'] == scale_idx)
+                scale_contributions.append(scale_mass)
+
+            # Get confidence (max probability among safe trajectories)
+            confidence = torch.max(safe_probs).item()
+
+            # Format scale contributions string
+            scale_str = ' '.join([f"{scales_data[i][0][0]}:{c:.2f}" for i, c in enumerate(scale_contributions)])
+
+            print(f"[EXPLOIT_V10 #{self.step_count}] θ={self.action_heading_deg:.0f}° V={expected_value:.3f} "
+                  f"Conf={confidence:.2f} Scales:[{scale_str}]")
+
+        #-------------------------------------------------------------------
+        # 6b) Store decision for credit assignment (before movement)
+        #-------------------------------------------------------------------
+        # Store the safe trajectories and their probabilities for collision detection
+        safe_metadata = [trajectory_metadata[i] for i, is_safe in enumerate(safe_traj_mask) if is_safe]
+        self.last_trajectory_probs = safe_probs.clone()
+        self.last_trajectory_metadata = safe_metadata.copy()
 
         #-------------------------------------------------------------------
         # 7) Execute movement
@@ -1247,7 +1325,89 @@ class Driver(Supervisor):
                 observed_reward = float(rcn.reward_cell_activations.item())
                 rcn.td_update(old_pcn_activations[i], observed_reward)
 
+        #-------------------------------------------------------------------
+        # 9) Collision detection and trajectory suppression
+        #-------------------------------------------------------------------
+        # Note: Check collision status at the START of the next timestep
+        # The collision will be detected in the next exploit call after sense()
+        # For now, we'll check if we had a collision in the previous step
+        if torch.any(self.collided):
+            self._suppress_trajectories_on_collision(
+                top_k=top_k_suppress,
+                duration=trajectory_suppression_duration
+            )
+
+        # Decay all active suppressions
+        self._decay_suppressions()
+
         return
+
+    def _get_suppression_mask(self, trajectory_metadata):
+        """Build boolean mask for currently suppressed trajectories.
+
+        Args:
+            trajectory_metadata: List of dicts with 'scale_idx' and 'direction' keys
+
+        Returns:
+            torch.Tensor: Boolean mask where True = trajectory is suppressed
+        """
+        mask = torch.zeros(len(trajectory_metadata), dtype=torch.bool, device=self.device)
+        for i, traj in enumerate(trajectory_metadata):
+            key = (traj['scale_idx'], traj['direction'])
+            if key in self.suppressed_trajectories and self.suppressed_trajectories[key] > 0:
+                mask[i] = True
+        return mask
+
+    def _suppress_trajectories_on_collision(self, top_k=3, duration=8):
+        """Suppress top-K trajectories by probability when collision is detected.
+
+        Uses the stored last_trajectory_probs and last_trajectory_metadata to identify
+        which trajectories contributed most to the collision decision and suppresses them
+        for a fixed duration.
+
+        Args:
+            top_k: Number of top trajectories to suppress (default: 3)
+            duration: Number of steps to suppress trajectories (default: 8)
+        """
+        if self.last_trajectory_probs is None or self.last_trajectory_metadata is None:
+            return
+
+        # Get top-K trajectories by probability
+        k = min(top_k, len(self.last_trajectory_probs))
+        if k == 0:
+            return
+
+        top_indices = torch.topk(self.last_trajectory_probs, k).indices
+
+        # Suppress each top trajectory
+        for idx in top_indices:
+            traj = self.last_trajectory_metadata[idx.item()]
+            key = (traj['scale_idx'], traj['direction'])
+            self.suppressed_trajectories[key] = duration
+
+            # Debug logging
+            scale_name = traj['scale_name']
+            direction_deg = traj['direction'] * 45
+            prob = self.last_trajectory_probs[idx].item()
+            print(f"[SUPPRESS] {scale_name}-{direction_deg:3d}° (P={prob:.3f}) for {duration} steps")
+
+    def _decay_suppressions(self):
+        """Decrement all suppression counters and remove expired suppressions.
+
+        Called at the end of each exploit step to gradually restore suppressed trajectories.
+        """
+        keys_to_remove = []
+        for key in self.suppressed_trajectories:
+            self.suppressed_trajectories[key] -= 1
+            if self.suppressed_trajectories[key] <= 0:
+                keys_to_remove.append(key)
+
+        # Remove expired suppressions
+        for key in keys_to_remove:
+            scale_idx, direction = key
+            direction_deg = direction * 45
+            print(f"[SUPPRESS] Restored scale {scale_idx}, direction {direction_deg:3d}°")
+            del self.suppressed_trajectories[key]
 
 
     ########################################### SENSE ###########################################

@@ -4,8 +4,10 @@ import sys
 import os
 import re
 import gc
+import json
 import torch
 from pathlib import Path
+from datetime import datetime
 
 # Set project root.
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -40,6 +42,87 @@ def get_world_name(bot):
     world_path = bot.getWorldPath()
     return os.path.basename(world_path).replace('.wbt', '')
 
+def save_trial_parameters(world_name, trial_id, mode, **kwargs):
+    """
+    Saves trial parameters to a JSON file in the pkl folder (alongside trial data).
+
+    Args:
+        world_name: Name of the world
+        trial_id: Unique identifier for the trial
+        mode: Robot mode being used
+        **kwargs: All parameters passed to the trial
+    """
+    # Determine the correct folder based on mode (matching msg_driver_v10.py logic)
+    auto_trial_name = kwargs.get("auto_trial_name")
+    current_auto_trial = kwargs.get("current_auto_trial")
+
+    if mode in {RobotMode.LEARN_LOCATIONS_COVERAGE_AUTO, RobotMode.EXPLOIT_LOCATIONS_RANDOM_AUTO,
+                RobotMode.PLOTTING_AUTO, RobotMode.PLOTTING_COVERAGE_AUTO} and auto_trial_name:
+        # Auto trial mode: pkl_{trial_name}/{world_name}_{trial_num}/
+        base_folder = f"pkl_{auto_trial_name}"
+        trial_folder = f"{world_name}_{current_auto_trial}"
+        save_folder = os.path.join(PROJECT_ROOT, "webots", "controllers", "msg_test_v10", base_folder, trial_folder)
+    else:
+        # Standard mode: pkl/{world_name}/
+        save_folder = os.path.join(PROJECT_ROOT, "webots", "controllers", "msg_test_v10", "pkl", world_name)
+
+    os.makedirs(save_folder, exist_ok=True)
+
+    # Get scale names and compile scale definitions
+    scale_names = kwargs.get("scale_names", [])
+    scales_list = compile_scales(scale_names)
+
+    # Prepare parameters to save
+    trial_params = {
+        "trial_id": trial_id,
+        "timestamp": datetime.now().isoformat(),
+        "world_name": world_name,
+        "mode": str(mode),
+        "scale_names": scale_names,
+        "scales_definitions": scales_list,  # Full scale definitions
+        "robot_parameters": {
+            "start_location": kwargs.get("start_loc", [0, 0]),
+            "randomize_start_loc": kwargs.get("randomize_start_loc", False),
+            "run_time_hours": kwargs.get("run_time_hours", 2),
+            "max_dist": kwargs.get("max_dist", 25),
+            "enable_ojas": kwargs.get("enable_ojas", None),
+            "enable_stdp": kwargs.get("enable_stdp", None),
+            "td_learning": kwargs.get("td_learning", False),
+            "use_prox_mod": kwargs.get("use_prox_mod", False),
+            "plot_bvc": kwargs.get("plot_bvc", False),
+        },
+        "goal_config": kwargs.get("goal_config"),
+        "trial_config": kwargs.get("trial_config"),
+        "environment_parameters": {
+            "environment_size": kwargs.get("environment_size"),
+            "grid_size": kwargs.get("grid_size"),
+            "coverage_percentage": kwargs.get("coverage_percentage"),
+            "min_goal_visits": kwargs.get("min_goal_visits", 3),
+        },
+        "path_planning_parameters": {
+            "optimal_path_distance": kwargs.get("optimal_path_distance"),
+            "path_failure_ratio": kwargs.get("path_failure_ratio"),
+            "min_spawn_distance": kwargs.get("min_spawn_distance"),
+            "wall_clearance": kwargs.get("wall_clearance"),
+        },
+        "auto_trial_parameters": {
+            "auto_trial_name": kwargs.get("auto_trial_name"),
+            "num_auto_trials": kwargs.get("num_auto_trials"),
+            "current_auto_trial": kwargs.get("current_auto_trial"),
+        }
+    }
+
+    # Save to JSON file
+    filename = f"{trial_id}_parameters.json"
+    filepath = os.path.join(save_folder, filename)
+
+    with open(filepath, 'w') as f:
+        json.dump(trial_params, f, indent=2)
+
+    print(f"[INFO] Trial parameters saved to: {filepath}")
+
+    return filepath
+
 #################################
 # Scale Definitions
 #################################
@@ -49,26 +132,29 @@ SCALES_DEFS = {
         "scale_index": 0,
         "name": "small",
         "num_pc": 2000,
-        "sigma_r": 0.5,
+        "sigma_r": 0.7,
         "sigma_theta": 1,
         "rcn_learning_rate": 0.1,
         # BVC parameters
         "num_bvc_per_dir": 50,  # Number of BVCs per head direction
         # Weight initialization parameters
-        "w_in_init_ratio": 0.25,  # Proportion of BVC->PC weights active initially
-        "w_grid_init_ratio": 0.25,  # Proportion of GC->PC weights active initially
+        "w_in_init_ratio": 0.3,  # Proportion of BVC->PC weights active initially
+        "w_grid_init_ratio": 0.3,  # Proportion of GC->PC weights active initially
         # Place cell recurrent inhibition parameters
-        "gamma_pp": 0.5,  # Place-to-place recurrent inhibition strength
+        "gamma_pp": 0.6,  # Place-to-place recurrent inhibition strength
         "gamma_pb": 0.3,  # BVC-to-place afferent inhibition strength
         # Grid cell parameters
         "grid_influence": 0.3, # 0.25
-        "gamma_pg": 0.3, # 0.3
-        "num_grid_cells": 400,
+        "gamma_pg": 0.4, # 0.3
+        "num_grid_cells": 1200,
         "num_modules": 8,
-        "cells_per_module": 50,
-        "spread_range": (0.8, 1.2),
-        "frequency_divisor": 0.25,
+        "cells_per_module": 150,
+        "spread_range": (1, 1),
+        "frequency_divisor": 0.3,
         "mask_resolution": 128,
+        # Oja's learning normalization parameters
+        "alpha_pb": 0.548,  # np.sqrt(0.5) - BVC weight decay factor (default)
+        "alpha_pg": 0.447,  # np.sqrt(0.3) - Grid weight decay factor (stronger decay = more selective)
         # Correlation-based weighting parameters
         "enable_correlation_weighting": False,
         "correlation_window": 8, #12, 10
@@ -78,8 +164,8 @@ SCALES_DEFS = {
         "correlation_threshold": 0.005, #0.015
         # Reward cell replay parameters
         "replay_timesteps": 100,  # Number of timesteps for regular replay
-        "replay_decay_factor": 8,  # Decay factor for exponential decay during replay
-        "custom_replay_timesteps": 300,  # Number of timesteps for custom activations replay
+        "replay_decay_factor": 12,  # Decay factor for exponential decay during replay
+        "custom_replay_timesteps": 350,  # Number of timesteps for custom activations replay
 
     },
     "medium": {
@@ -90,19 +176,19 @@ SCALES_DEFS = {
         "sigma_theta": 3,
         "rcn_learning_rate": 0.1,
         # BVC parameters
-        "num_bvc_per_dir": 50,  # Number of BVCs per head direction
+        "num_bvc_per_dir": 100,  # Number of BVCs per head direction
         # Weight initialization parameters
-        "w_in_init_ratio": 0.2,  # Proportion of BVC->PC weights active initially
-        "w_grid_init_ratio": 0.2,  # Proportion of GC->PC weights active initially
+        "w_in_init_ratio": 0.3,  # Proportion of BVC->PC weights active initially
+        "w_grid_init_ratio": 0.3,  # Proportion of GC->PC weights active initially
         # Place cell recurrent inhibition parameters
         "gamma_pp": 0.5,  # Place-to-place recurrent inhibition strength
-        "gamma_pb": 0.25,  # BVC-to-place afferent inhibition strength
+        "gamma_pb": 0.35,  # BVC-to-place afferent inhibition strength
         # Grid cell parameters
         "grid_influence": 0.35, #0.25
-        "gamma_pg": 0.25,
-        "num_grid_cells": 600,
+        "gamma_pg": 0.35,
+        "num_grid_cells": 800,
         "num_modules": 8,
-        "cells_per_module": 75,
+        "cells_per_module": 100,
         "spread_range": (0.8, 1.2),
         "frequency_divisor": 0.45, # 0.5
         "mask_resolution": 112,
@@ -152,7 +238,7 @@ SCALES_DEFS = {
         "correlation_threshold": 0.05, #0.05
         # Reward cell replay parameters
         "replay_timesteps": 40,  # Number of timesteps for regular replay
-        "replay_decay_factor": 5,  # Decay factor for exponential decay during replay
+        "replay_decay_factor": 6,  # Decay factor for exponential decay during replay
         "custom_replay_timesteps": 75,  # Number of timesteps for custom activations replay
     },
     "xlarge": {
@@ -219,6 +305,16 @@ def _run_single_trial(bot, mode, trial_id, start_loc, target_goal, stats_collect
     rcn_learning_rates = [scale["rcn_learning_rate"] for scale in scales_list]
 
     world_name = get_world_name(bot)
+
+    # Save trial parameters to JSON file in world folder
+    save_trial_parameters(
+        world_name=world_name,
+        trial_id=trial_id,
+        mode=mode,
+        start_loc=start_loc,
+        target_goal=target_goal,
+        **trial_kwargs
+    )
 
     # Initialize bot for this trial
     bot.initialization(
@@ -610,6 +706,15 @@ def _run_learn_coverage_auto_trials(mode, **kwargs):
         print(f"[AUTO_TRIAL] Starting trial {trial_num}/{num_auto_trials}")
         print(f"{'='*60}\n")
 
+        # Save trial parameters to JSON file
+        trial_id = f"auto_trial_{trial_num}"
+        save_trial_parameters(
+            world_name=world_name,
+            trial_id=trial_id,
+            mode=mode,
+            **kwargs
+        )
+
         # Initialize bot for this trial (creates fresh networks, resets robot position)
         bot.initialization(
             mode=mode,
@@ -898,6 +1003,15 @@ def _run_plotting_auto_trials(mode, **kwargs):
         print(f"[AUTO_PLOTTING] Plotting learning trial {trial_num}/{num_auto_trials}")
         print(f"{'='*60}\n")
 
+        # Save trial parameters to JSON file
+        trial_id = f"auto_plotting_{trial_num}"
+        save_trial_parameters(
+            world_name=world_name,
+            trial_id=trial_id,
+            mode=mode,
+            **kwargs
+        )
+
         # Initialize bot for this trial (loads networks from the trial folder)
         bot.initialization(
             mode=mode,
@@ -1015,6 +1129,15 @@ def _run_plotting_coverage_auto_trials(mode, **kwargs):
         print(f"\n{'='*60}")
         print(f"[AUTO_PLOTTING_COVERAGE] Plotting learning trial {trial_num}/{num_auto_trials}")
         print(f"{'='*60}\n")
+
+        # Save trial parameters to JSON file
+        trial_id = f"auto_plotting_coverage_{trial_num}"
+        save_trial_parameters(
+            world_name=world_name,
+            trial_id=trial_id,
+            mode=mode,
+            **kwargs
+        )
 
         # Initialize bot for this trial (loads networks from the trial folder)
         # Use PLOTTING_COVERAGE_AUTO mode to ensure correct path loading
@@ -1159,7 +1282,7 @@ if __name__ == "__main__":
     large = ["large"]
 
     scale_names = multiscale # what scales you are using
-    run_time_hours = 8
+    run_time_hours = 6
     max_dist = 25
     plot_bvc = False
 
@@ -1193,7 +1316,7 @@ if __name__ == "__main__":
     environment_size = [20.0, 20.0]  # 20x20 meter environment
     grid_size = 0.5  # 0.5 meter grid cells
     coverage_percentage = 0.95  # 90% coverage target
-    min_goal_visits = 3  # Minimum number of visits required per goal
+    min_goal_visits = 10  # Minimum number of visits required per goal
 
     # Random spawn parameters for EXPLOIT_LOCATIONS_RANDOM
     min_spawn_distance = 6.0  # 6 meters from goal

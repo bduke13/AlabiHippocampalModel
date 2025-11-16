@@ -38,6 +38,9 @@ class MultiscalePlaceCellWithGrid:
         gamma_pp: float = 0.5,
         gamma_pb: float = 0.3,
         gamma_pg: float = 0.3,  # Parameter for grid cell inhibition
+        # Oja's learning normalization parameters
+        alpha_pb: float = None,  # Weight decay factor for BVC->PC learning (default: sqrt(0.5))
+        alpha_pg: float = None,  # Weight decay factor for GC->PC learning (default: sqrt(0.5))
         # Correlation-based weighting parameters
         enable_correlation_weighting: bool = True,
         correlation_window: int = 100,
@@ -74,6 +77,8 @@ class MultiscalePlaceCellWithGrid:
             gamma_pp: Coefficient for place cell recurrent inhibition.
             gamma_pb: Coefficient for boundary vector cell afferent inhibition.
             gamma_pg: Coefficient for grid cell afferent inhibition.
+            alpha_pb: Weight decay factor for BVC->PC learning (Oja's rule). Lower = stronger decay/more selective.
+            alpha_pg: Weight decay factor for GC->PC learning (Oja's rule). Lower = stronger decay/more selective.
             enable_correlation_weighting: Whether to enable correlation-based connection weighting.
             correlation_window: Window size for correlation tracking.
             correlation_update_freq: How often to update correlation matrix.
@@ -239,10 +244,12 @@ class MultiscalePlaceCellWithGrid:
         self.tau_p = 0.5
 
         # Normalization factor for synaptic weight updates (α_pb in Equation 3.3)
-        self.alpha_pb = np.sqrt(0.5)
+        # Use provided values or default to sqrt(0.5) ≈ 0.707
+        self.alpha_pb = alpha_pb if alpha_pb is not None else np.sqrt(0.5)
 
         # Normalization factor for grid cell synaptic weight updates
-        self.alpha_pg = np.sqrt(0.5)
+        # Use provided values or default to sqrt(0.5) ≈ 0.707
+        self.alpha_pg = alpha_pg if alpha_pg is not None else np.sqrt(0.5)
 
         # Initial weights for the input connections from BVCs to place cells
         self.initial_w_in = torch.clone(self.w_in.data)
@@ -1353,9 +1360,7 @@ class MultiscalePlaceCellWithGrid:
         """
 
         if debug:
-            print(f"[BOLTZMANN_PREPLAY] Starting multi-scale preplay")
-            print(f"[BOLTZMANN_PREPLAY] Scales: {len(scales_data)}, Directions: {self.n_hd}, Steps: {num_steps}")
-            print(f"[BOLTZMANN_PREPLAY] Discount: {discount_factor}, Inv-Temp: {inverse_temperature}")
+            print(f"[BOLTZMANN] Preplay: {len(scales_data)} scales × {self.n_hd} dirs × {num_steps} steps | γ={discount_factor} β={inverse_temperature}")
 
         # Build discount weights for all steps: [gamma^0, gamma^1, ..., gamma^(num_steps-1)]
         discount_weights = discount_factor ** torch.arange(num_steps, dtype=self.dtype, device=self.device)
@@ -1369,9 +1374,6 @@ class MultiscalePlaceCellWithGrid:
 
         # Loop through each scale
         for scale_idx, (scale_name, pcn, rcn) in enumerate(scales_data):
-            if debug:
-                print(f"\n[BOLTZMANN_PREPLAY] Processing scale {scale_idx}: {scale_name}")
-
             # Loop through each of the 8 head directions
             for initial_direction in range(self.n_hd):
                 # We will accumulate all micro-trajectories into a single macro-vector
@@ -1466,12 +1468,6 @@ class MultiscalePlaceCellWithGrid:
                     'direction': initial_direction
                 })
 
-                if debug and initial_direction % 4 == 0:
-                    print(f"  Dir {initial_direction} ({initial_direction*45}°): "
-                          f"micro-trajs={micro_trajectory_count}, "
-                          f"reward={macro_discounted_return.item():.4f}, "
-                          f"vector=[{macro_direction_vector[0].item():.3f}, {macro_direction_vector[1].item():.3f}]")
-
         # Stack all trajectory results into tensors
         # Shape: [N_trajectories] and [N_trajectories, 2]
         discounted_returns = torch.stack(all_discounted_returns)
@@ -1488,14 +1484,25 @@ class MultiscalePlaceCellWithGrid:
         boltzmann_probs = boltzmann_weights / torch.clamp(total_weight, min=1e-9)
 
         if debug:
-            print(f"\n[BOLTZMANN_PREPLAY] Boltzmann probability range: "
-                  f"[{torch.min(boltzmann_probs).item():.6f}, {torch.max(boltzmann_probs).item():.6f}]")
+            # Top 3 trajectories
             top_indices = torch.topk(boltzmann_probs, min(3, len(boltzmann_probs))).indices
-            print("[BOLTZMANN_PREPLAY] Top 3 trajectories:")
+            print("[BOLTZMANN] Top 3:")
             for idx in top_indices:
                 traj = trajectory_metadata[idx.item()]
-                print(f"  Scale={traj['scale_name']}, Dir={traj['direction']}({traj['direction']*45}°), "
-                      f"P={boltzmann_probs[idx].item():.4f}, R={discounted_returns[idx].item():.4f}")
+                scale_abbrev = traj['scale_name'][0]  # S/M/L
+                print(f"  {scale_abbrev}-{traj['direction']*45:3d}° P={boltzmann_probs[idx].item():.3f} R={discounted_returns[idx].item():.3f}")
+
+            # Summary statistics
+            print(f"[BOLTZMANN] Rewards: min={torch.min(discounted_returns).item():.2f} "
+                  f"max={torch.max(discounted_returns).item():.2f} mean={torch.mean(discounted_returns).item():.2f}")
+
+            # Scale contribution breakdown
+            scale_probs = []
+            for i in range(len(scales_data)):
+                scale_prob = boltzmann_probs[i*self.n_hd:(i+1)*self.n_hd].sum().item()
+                scale_probs.append(scale_prob)
+            scale_str = ' '.join([f"{scales_data[i][0][0]}:{p:.2f}" for i, p in enumerate(scale_probs)])
+            print(f"[BOLTZMANN] Scale Mass: {scale_str}")
 
         # Form combined movement vector: weighted sum of direction vectors
         # Shape: [2] = sum over trajectories of (prob * direction_vector)
@@ -1515,9 +1522,7 @@ class MultiscalePlaceCellWithGrid:
             # Set expected value to match the chosen trajectory (full consistency)
             expected_value = discounted_returns[max_idx]
             if debug:
-                print(f"[BOLTZMANN_PREPLAY] Combined vector near zero (mag={combined_magnitude.item():.2e}), "
-                      f"using max-return trajectory {max_idx.item()}")
-                print(f"[BOLTZMANN_PREPLAY] Updated expected value to match: {expected_value.item():.4f}")
+                print(f"[BOLTZMANN] Fallback: vector near zero (mag={combined_magnitude.item():.2e}), using max-return traj")
 
         # Compute final direction angle from combined vector
         final_direction_rad = torch.atan2(combined_vector[1], combined_vector[0])
@@ -1531,9 +1536,8 @@ class MultiscalePlaceCellWithGrid:
         )
 
         if debug:
-            print(f"\n[BOLTZMANN_PREPLAY] Final direction: {final_direction_deg_tensor.item():.1f}°")
-            print(f"[BOLTZMANN_PREPLAY] Expected value: {expected_value.item():.4f}")
-            print(f"[BOLTZMANN_PREPLAY] Combined vector: [{combined_vector[0].item():.3f}, {combined_vector[1].item():.3f}]")
+            print(f"[BOLTZMANN] Result: θ={final_direction_deg_tensor.item():.1f}° V={expected_value.item():.3f} "
+                  f"vec=[{combined_vector[0].item():.2f},{combined_vector[1].item():.2f}]")
 
         # Return all tensors (no .item() calls), plus metadata
         return (final_direction_deg_tensor.item(), expected_value, combined_vector,
