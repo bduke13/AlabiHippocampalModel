@@ -850,7 +850,7 @@ class Driver(Supervisor):
                                       RobotMode.LEARN_LOCATIONS_COVERAGE_AUTO):
                 self.explore()
             elif self.robot_mode in (RobotMode.EXPLOIT, RobotMode.EXPLOIT_LOCATIONS_RANDOM, RobotMode.EXPLOIT_LOCATIONS_RANDOM_AUTO):
-                self.exploit_v10()
+                self.exploit_v11()
             else:
                 print("Unknown state. Exiting...")
                 break
@@ -1084,7 +1084,7 @@ class Driver(Supervisor):
         #===================================================================
 
         # --- Boltzmann Preplay Configuration ---
-        num_preplay_steps = 2              # Number of steps per trajectory
+        num_preplay_steps = 1              # Number of steps per trajectory
         discount_factor = 0.9              # Temporal discount (gamma)
         inverse_temperature = 2.0          # Boltzmann selectivity (beta)
 
@@ -1331,6 +1331,355 @@ class Driver(Supervisor):
         # Note: Check collision status at the START of the next timestep
         # The collision will be detected in the next exploit call after sense()
         # For now, we'll check if we had a collision in the previous step
+        if torch.any(self.collided):
+            self._suppress_trajectories_on_collision(
+                top_k=top_k_suppress,
+                duration=trajectory_suppression_duration
+            )
+
+        # Decay all active suppressions
+        self._decay_suppressions()
+
+        return
+
+    ########################################### EXPLOIT V11 ###########################################
+
+    def exploit_v11(self):
+        """
+        Hierarchical multi-scale preplay exploitation with entropy-based scale selection.
+
+        Core philosophy:
+        - Evaluate trajectories across all spatial scales (small, medium, large)
+        - Evaluate all 8 head directions for each scale
+        - Use TWO-LEVEL normalization instead of flat Boltzmann distribution:
+          1. Within each scale: Compute Boltzmann over directions P(d|s)
+          2. Across scales: Score by mean return and entropy, compute P(s)
+        - Form joint distribution: P(s,d) = P(s) × P(d|s)
+        - Apply safety filtering and combine direction vectors
+        - Return final movement direction and expected value
+
+        Key innovations compared to exploit_v10:
+        1. Entropy-based scale quality: Low entropy = clear signal = trust this scale
+        2. Scale scoring: Q_s = alpha*M_s - gamma*H_s (reward vs uncertainty tradeoff)
+        3. Temporal stability: EMA over scale weights P(s) across timesteps
+        4. Hierarchical structure: Prevents mediocre trajectories from diluting good ones
+        5. Better scale selection: Explicitly favors confident, high-reward scales
+
+        Parameters are defined at the top of the function for clarity.
+        """
+        #===================================================================
+        # EXPLOIT V11 PARAMETERS
+        #===================================================================
+
+        # --- Hierarchical Preplay Configuration ---
+        num_preplay_steps = 2              # Number of steps per trajectory
+        discount_factor = 0.9              # 0.9 Temporal discount (gamma)
+        within_scale_beta = 1.5           # 2 Inverse temperature for P(d|s) within each scale
+        alpha = 0.8                        # 1 Weight for mean return in scale scoring
+        gamma = 2                        # Weight for entropy penalty (higher = favor confident scales)
+        ema_lambda = 0.15                   # 0.1 EMA decay for scale weights (0.1 = 10% new, 90% old)
+
+        # --- Safety & Loop Detection ---
+        min_safe_distance = 1              # Minimum obstacle clearance
+        loop_threshold = 5                 # Number of loops before forcing exploration
+        max_steps_between_loops = 10       # Max steps between loops to count
+        forced_exploration_steps = 10      # Steps to force exploration
+        cooldown_steps = 20                # Cooldown after forced exploration
+
+        # --- Trajectory Suppression (Spatial Aliasing Correction) ---
+        trajectory_suppression_duration = 10  # 5 Steps to suppress a trajectory after collision
+        top_k_suppress = 2                   # Number of top trajectories to suppress on collision
+
+        # --- Debug ---
+        debug_print_interval = 100         # Print debug info every N steps
+
+        #===================================================================
+
+        #-------------------------------------------------------------------
+        # 1) Sense and compute: update heading, place/boundary cell activations
+        #-------------------------------------------------------------------
+        self.sense()
+
+        # Debug: Log suppression state periodically
+        if debug_print_interval > 0 and (self.step_count % debug_print_interval) <= 10:
+            if len(self.suppressed_trajectories) > 0:
+                print(f"[SUPPRESS] Active suppressions: {len(self.suppressed_trajectories)}")
+                for (scale_idx, direction), remaining in self.suppressed_trajectories.items():
+                    print(f"  Scale {scale_idx}, {direction*45:3d}° -> {remaining} steps remaining")
+
+        self.compute_pcn_activations()
+        self.update_hmaps(update_loc=True, update_pcn=True, update_scale_priority=True)
+        self.check_goal_reached()
+
+        if self.robot_mode in {RobotMode.EXPLOIT_LOCATIONS_RANDOM, RobotMode.EXPLOIT_LOCATIONS_RANDOM_AUTO}:
+            self._update_distance_tracking()
+
+        # Save old PCN activations for each scale (for TD learning)
+        old_pcn_activations = [pcn.place_cell_activations.clone() for pcn in self.pcns]
+
+        # Exploit can only begin with at least tau_w steps
+        if self.step_count <= self.tau_w:
+            return
+
+        #-------------------------------------------------------------------
+        # 2) Forced Exploration Check
+        #-------------------------------------------------------------------
+        if self.force_explore_count > 0:
+            self.force_explore_count -= 1
+            if self.force_explore_count == 0:
+                print("[EXPLOIT_V11] Forced exploration complete. Resuming hierarchical navigation...")
+
+            self.explore()
+            return
+
+        #-------------------------------------------------------------------
+        # 3) Loop Detection - Detect excessive rotation and force exploration
+        #-------------------------------------------------------------------
+        if not hasattr(self, 'rotation_accumulator'):
+            self.rotation_accumulator = 0.0
+            self.rotation_loop_count = 0
+            self.steps_since_last_loop = 0
+
+        if not hasattr(self, 'last_heading_deg') or self.last_heading_deg is None:
+            self.last_heading_deg = self.current_heading_deg
+
+        heading_diff = self.current_heading_deg - self.last_heading_deg
+        heading_diff = ((heading_diff + 180) % 360) - 180  # Normalize to [-180, 180]
+        self.rotation_accumulator += abs(heading_diff)
+        self.last_heading_deg = self.current_heading_deg
+
+        if self.rotation_accumulator >= 360.0:
+            self.rotation_loop_count += 1
+            self.rotation_accumulator -= 360.0
+            if self.steps_since_last_loop > max_steps_between_loops:
+                self.rotation_loop_count = 1
+            self.steps_since_last_loop = 0
+
+            if self.rotation_loop_count >= loop_threshold:
+                self.rotation_loop_count = 0
+                self.rotation_accumulator = 0.0
+                self.steps_since_last_loop = 0
+                print(f"[EXPLOIT_V11] Detected {loop_threshold} loops within {max_steps_between_loops} steps. Forcing exploration.")
+
+                # Start forced exploration
+                self.force_explore_count = forced_exploration_steps
+                self.explore()
+                return
+        else:
+            self.steps_since_last_loop += 1
+            if self.steps_since_last_loop > max_steps_between_loops:
+                self.rotation_loop_count = 0
+
+        #-------------------------------------------------------------------
+        # 4) Prepare distance-per-direction array for safety filtering
+        #-------------------------------------------------------------------
+        boundaries_rolled = torch.roll(self.boundaries, shifts=len(self.boundaries) // 2)
+        num_points_per_hd = len(boundaries_rolled) // self.n_hd
+
+        distances_per_hd = torch.tensor([
+            torch.min(boundaries_rolled[i * num_points_per_hd: (i + 1) * num_points_per_hd])
+            for i in range(self.n_hd)
+        ], device=self.device, dtype=self.dtype)
+
+        #-------------------------------------------------------------------
+        # 5) Build scales_data for hierarchical preplay
+        #-------------------------------------------------------------------
+        scales_data = [
+            (scale_def['name'], pcn, rcn)
+            for scale_def, pcn, rcn in zip(self.scales, self.pcns, self.rcns)
+        ]
+
+        # Initialize EMA state for scale weights if needed
+        if not hasattr(self, 'prev_scale_weights_v11'):
+            self.prev_scale_weights_v11 = None
+
+        #-------------------------------------------------------------------
+        # 6) Call hierarchical_multiscale_preplay
+        #-------------------------------------------------------------------
+        debug_enabled = (debug_print_interval > 0 and self.step_count % debug_print_interval == 0)
+
+        (final_direction_deg, expected_value, combined_vector,
+         discounted_returns, direction_vectors, joint_probs, trajectory_metadata, scale_weights) = self.pcns[0].hierarchical_multiscale_preplay(
+            scales_data=scales_data,
+            num_steps=num_preplay_steps,
+            discount_factor=discount_factor,
+            within_scale_beta=within_scale_beta,
+            alpha=alpha,
+            gamma=gamma,
+            ema_lambda=ema_lambda,
+            prev_scale_weights=self.prev_scale_weights_v11,
+            debug=debug_enabled
+        )
+
+        # Store scale weights for next timestep's EMA
+        self.prev_scale_weights_v11 = scale_weights
+
+        #-------------------------------------------------------------------
+        # 7) Apply Suppression Filtering
+        #-------------------------------------------------------------------
+        suppressed_mask = self._get_suppression_mask(trajectory_metadata)
+        active_traj_mask = ~suppressed_mask
+
+        if not torch.any(active_traj_mask):
+            # All trajectories suppressed -> force exploration
+            print("[EXPLOIT_V11] All trajectories suppressed. Forcing exploration.")
+            self.explore()
+            return
+
+        # Filter out suppressed trajectories
+        if torch.any(suppressed_mask):
+            # Some trajectories are suppressed, filter them out
+            joint_probs = joint_probs[active_traj_mask]
+            direction_vectors = direction_vectors[active_traj_mask]
+            discounted_returns = discounted_returns[active_traj_mask]
+            trajectory_metadata = [trajectory_metadata[i] for i, active in enumerate(active_traj_mask) if active]
+
+            # Renormalize joint probabilities
+            joint_probs = joint_probs / torch.clamp(torch.sum(joint_probs), min=1e-9)
+
+            if debug_enabled:
+                suppressed_count = torch.sum(suppressed_mask).item()
+                print(f"[EXPLOIT_V11] Filtered {suppressed_count} suppressed trajectories, {len(trajectory_metadata)} remain")
+
+        #-------------------------------------------------------------------
+        # 8) Apply Safety Filtering
+        #-------------------------------------------------------------------
+        # Build safety mask: check if direction has sufficient clearance
+        safe_traj_mask = torch.tensor(
+            [distances_per_hd[traj_meta['direction']] >= min_safe_distance
+             for traj_meta in trajectory_metadata],
+            dtype=torch.bool,
+            device=self.device,
+        )
+
+        if not torch.any(safe_traj_mask):
+            # No safe directions -> explore instead of taking an unsafe action
+            print("[EXPLOIT_V11] No safe trajectories available. Forcing exploration.")
+            self.explore()
+            return
+
+        # Filter to safe trajectories and renormalize
+        safe_probs = joint_probs[safe_traj_mask]
+        safe_probs = safe_probs / torch.clamp(torch.sum(safe_probs), min=1e-9)
+
+        safe_vectors = direction_vectors[safe_traj_mask]
+        safe_returns = discounted_returns[safe_traj_mask]
+        safe_metadata = [trajectory_metadata[i] for i, safe in enumerate(safe_traj_mask) if safe]
+
+        # Recompute combined_vector and expected_value from safe trajectories only
+        combined_vector = torch.sum(safe_probs.unsqueeze(1) * safe_vectors, dim=0)
+        expected_value = torch.sum(safe_probs * safe_returns)
+
+        if debug_enabled:
+            num_safe = len(safe_metadata)
+            unsafe_count = len(trajectory_metadata) - num_safe
+            print(f"[EXPLOIT_V11] Safety filter: {num_safe} safe, {unsafe_count} unsafe")
+
+        #-------------------------------------------------------------------
+        # Opposing Vectors Check (Cross-Scale)
+        #-------------------------------------------------------------------
+        # Check if top-2 trajectories by return have opposing direction vectors
+        # This operates across ALL scales on the safe trajectories
+
+        opposition_threshold = -0.75  # Cosine similarity threshold for opposition
+
+        if len(safe_returns) >= 2:
+            # Find top 2 trajectories by discounted return (cross-scale)
+            idx1 = torch.argmax(safe_returns).item()
+
+            # Find second best (mask out idx1)
+            safe_returns_masked = safe_returns.clone()
+            safe_returns_masked[idx1] = -float('inf')
+            idx2 = torch.argmax(safe_returns_masked).item()
+
+            # Get their direction vectors
+            v1 = safe_vectors[idx1]
+            v2 = safe_vectors[idx2]
+
+            # Compute cosine similarity
+            norm1 = torch.norm(v1)
+            norm2 = torch.norm(v2)
+
+            if norm1 > 1e-9 and norm2 > 1e-9:
+                cos_sim = torch.dot(v1, v2) / (norm1 * norm2)
+
+                # Check if vectors are strongly opposing
+                if cos_sim < opposition_threshold:
+                    # Opposition detected - always use best trajectory
+                    combined_vector = v1
+                    expected_value = safe_returns[idx1]
+
+                    if debug_enabled:
+                        meta1 = safe_metadata[idx1]
+                        meta2 = safe_metadata[idx2]
+                        r1 = safe_returns[idx1].item()
+                        r2 = safe_returns[idx2].item()
+                        print(f"[EXPLOIT_V11] Opposition detected: cos_sim={cos_sim.item():.3f}")
+                        print(f"  Top1: {meta1['scale_name'][0]}-{meta1['direction']*45:3d}° R={r1:.3f}")
+                        print(f"  Top2: {meta2['scale_name'][0]}-{meta2['direction']*45:3d}° R={r2:.3f}")
+                        print(f"  Resolution: Using best trajectory")
+
+        # Fallback: if combined vector near zero, use max-return safe trajectory
+        combined_magnitude = torch.norm(combined_vector)
+        epsilon = 1e-6
+        if combined_magnitude < epsilon:
+            max_idx = torch.argmax(safe_returns)
+            combined_vector = safe_vectors[max_idx]
+            expected_value = safe_returns[max_idx]
+            if debug_enabled:
+                print(f"[EXPLOIT_V11] Fallback: combined vector near zero, using max-return trajectory")
+
+        #-------------------------------------------------------------------
+        # 9) Compute Final Angle
+        #-------------------------------------------------------------------
+        final_direction_rad = torch.atan2(combined_vector[1], combined_vector[0])
+        final_direction_deg = float((final_direction_rad * (180.0 / np.pi)).item())
+
+        if final_direction_deg < 0:
+            final_direction_deg += 360.0
+
+        self.action_heading_deg = final_direction_deg
+
+        #-------------------------------------------------------------------
+        # 10) Debug Output
+        #-------------------------------------------------------------------
+        if debug_enabled:
+            # Compute confidence (max probability among safe trajectories)
+            confidence = torch.max(safe_probs).item()
+
+            # Compute scale contributions (sum of probabilities per scale)
+            scale_contributions = []
+            for scale_idx in range(len(scales_data)):
+                scale_mass = sum(safe_probs[i].item() for i, meta in enumerate(safe_metadata)
+                               if meta['scale_idx'] == scale_idx)
+                scale_contributions.append(scale_mass)
+
+            scale_str = ' '.join([f"{scales_data[i][0][0]}:{c:.2f}"
+                                 for i, c in enumerate(scale_contributions)])
+
+            print(f"[EXPLOIT_V11 #{self.step_count}] θ={final_direction_deg:.1f}° "
+                  f"V={expected_value.item():.3f} Conf={confidence:.2f} Scales:[{scale_str}]")
+
+        #-------------------------------------------------------------------
+        # 11) Execute Movement
+        #-------------------------------------------------------------------
+        self._execute_movement(self.action_heading_deg)
+
+        #-------------------------------------------------------------------
+        # 12) TD Learning Update for all scales
+        #-------------------------------------------------------------------
+        if self.td_learning:
+            for i in range(len(self.pcns)):
+                pcn, rcn = self.pcns[i], self.rcns[i]
+                new_pcn_activations = pcn.place_cell_activations
+                rcn.update_reward_cell_activations(new_pcn_activations, visit=False)
+                observed_reward = float(rcn.reward_cell_activations.item())
+                rcn.td_update(old_pcn_activations[i], observed_reward)
+
+        #-------------------------------------------------------------------
+        # 13) Collision-based Suppression
+        #-------------------------------------------------------------------
+        # Note: Collision will be detected in the next timestep after sense()
         if torch.any(self.collided):
             self._suppress_trajectories_on_collision(
                 top_k=top_k_suppress,

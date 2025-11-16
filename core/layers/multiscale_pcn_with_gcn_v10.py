@@ -1542,3 +1542,278 @@ class MultiscalePlaceCellWithGrid:
         # Return all tensors (no .item() calls), plus metadata
         return (final_direction_deg_tensor.item(), expected_value, combined_vector,
                 discounted_returns, direction_vectors, boltzmann_probs, trajectory_metadata)
+
+    def hierarchical_multiscale_preplay(
+        self,
+        scales_data: list,
+        num_steps: int = 3,
+        discount_factor: float = 0.9,
+        within_scale_beta: float = 2.0,
+        alpha: float = 1.0,
+        gamma: float = 1.2,
+        ema_lambda: float = 0.1,
+        prev_scale_weights: Optional[torch.Tensor] = None,
+        debug: bool = False
+    ) -> tuple:
+        """Perform hierarchical multi-scale preplay with entropy-based scale selection.
+
+        This method introduces a two-level normalization approach:
+        1. Within each scale: Compute Boltzmann distribution over directions
+        2. Across scales: Score scales by mean return and entropy, apply softmax + EMA
+
+        The key innovation is entropy-based scale quality assessment:
+        - Low entropy within a scale → clear directional signal → trust this scale
+        - High entropy within a scale → confused/ambiguous → distrust this scale
+
+        Args:
+            scales_data: List of tuples (scale_name, pcn, rcn) for each spatial scale
+            num_steps: Number of preplay steps per trajectory
+            discount_factor: Temporal discount factor (gamma)
+            within_scale_beta: Inverse temperature for within-scale Boltzmann (beta)
+            alpha: Weight for mean return in scale scoring (Q_s = alpha*M_s - gamma*H_s)
+            gamma: Weight for entropy penalty in scale scoring (higher = favor confident scales)
+            ema_lambda: EMA decay for scale weights (0.1 = 10% new, 90% old)
+            prev_scale_weights: Previous timestep's scale weights for EMA (None on first call)
+            debug: Whether to print debug information
+
+        Returns:
+            tuple: (final_direction_deg, expected_value, combined_vector,
+                    discounted_returns_per_traj, direction_vectors_per_traj,
+                    joint_probs, trajectory_metadata, scale_weights)
+            - final_direction_deg: Final movement direction in degrees (0-360)
+            - expected_value: Expected reward value (tensor)
+            - combined_vector: Combined direction vector [x, y] (tensor)
+            - discounted_returns_per_traj: Per-trajectory discounted returns (tensor, [N_traj])
+            - direction_vectors_per_traj: Per-trajectory direction vectors (tensor, [N_traj, 2])
+            - joint_probs: P(s,d) joint probabilities (tensor, [N_traj])
+            - trajectory_metadata: List of dicts with scale_idx, scale_name, direction
+            - scale_weights: P(s) scale weights after EMA (tensor, [num_scales])
+        """
+
+        num_scales = len(scales_data)
+
+        if debug:
+            print(f"[HIERARCHICAL] Preplay: {num_scales} scales × {self.n_hd} dirs × {num_steps} steps")
+            print(f"[HIERARCHICAL] Params: α={alpha} γ={gamma} β={within_scale_beta} λ={ema_lambda}")
+
+        # Build discount weights for all steps: [gamma^0, gamma^1, ..., gamma^(num_steps-1)]
+        discount_weights = discount_factor ** torch.arange(num_steps, dtype=self.dtype, device=self.device)
+
+        # Store trajectory metadata
+        trajectory_metadata = []
+
+        # Accumulate per-trajectory data
+        all_discounted_returns = []
+        all_direction_vectors = []
+
+        # ------------------------------------------------------------------
+        # STAGE 1: Compute discounted returns and direction vectors
+        #          for all (scale, direction) pairs
+        # ------------------------------------------------------------------
+
+        for scale_idx, (scale_name, pcn, rcn) in enumerate(scales_data):
+            for initial_direction in range(self.n_hd):
+                # Accumulate macro-trajectory from all micro-trajectories
+                macro_discounted_return = torch.tensor(0.0, dtype=self.dtype, device=self.device)
+                macro_direction_vector = torch.zeros(2, dtype=self.dtype, device=self.device)
+
+                def explore_microtrajectory(activations, remaining_steps, path_so_far, depth, accumulated_reward, accumulated_vector):
+                    """Recursively explore all micro-trajectories starting from initial_direction."""
+                    nonlocal macro_discounted_return, macro_direction_vector
+
+                    # Determine which directions to explore at this step
+                    if len(path_so_far) == 0:
+                        # First step: use initial direction only (forced)
+                        directions_to_try = [initial_direction]
+                    else:
+                        # Subsequent steps: branch to straight, left (-1), right (+1)
+                        last_direction = path_so_far[-1]
+                        directions_to_try = [
+                            last_direction,                    # Continue straight
+                            (last_direction - 1) % self.n_hd,  # Turn left (counter-clockwise)
+                            (last_direction + 1) % self.n_hd   # Turn right (clockwise)
+                        ]
+
+                    for direction in directions_to_try:
+                        # Perform one preplay step in this direction
+                        next_activations = pcn.preplay_from_state(activations, direction, num_steps=1)
+
+                        # Evaluate reward at this step (keep as tensor)
+                        rcn.update_reward_cell_activations(next_activations, visit=False)
+                        step_reward = torch.max(torch.nan_to_num(rcn.reward_cell_activations))
+
+                        # Compute discounted reward for this step
+                        step_weight = discount_weights[depth]
+                        weighted_reward = step_weight * step_reward
+
+                        # Compute direction vector for this step
+                        step_angle = direction * (2 * np.pi / self.n_hd)
+                        step_vector = torch.tensor([np.cos(step_angle), np.sin(step_angle)],
+                                                   dtype=self.dtype, device=self.device)
+                        weighted_vector = step_weight * step_vector
+
+                        # Accumulate for this branch
+                        branch_reward = accumulated_reward + weighted_reward
+                        branch_vector = accumulated_vector + weighted_vector
+
+                        if remaining_steps == 1:
+                            # Leaf node: this micro-trajectory is complete
+                            macro_discounted_return += branch_reward
+                            macro_direction_vector += branch_vector
+                        else:
+                            # Continue exploring this branch
+                            new_path = path_so_far + [direction]
+                            explore_microtrajectory(
+                                next_activations,
+                                remaining_steps - 1,
+                                new_path,
+                                depth + 1,
+                                branch_reward,
+                                branch_vector
+                            )
+
+                # Start recursive exploration from initial direction
+                starting_activations = pcn.place_cell_activations.clone()
+                explore_microtrajectory(
+                    starting_activations,
+                    num_steps,
+                    [],
+                    0,
+                    torch.tensor(0.0, dtype=self.dtype, device=self.device),
+                    torch.zeros(2, dtype=self.dtype, device=self.device)
+                )
+
+                # Store the macro-vector for this (scale, initial_direction) pair
+                all_discounted_returns.append(macro_discounted_return)
+                all_direction_vectors.append(macro_direction_vector)
+                trajectory_metadata.append({
+                    'scale_idx': scale_idx,
+                    'scale_name': scale_name,
+                    'direction': initial_direction
+                })
+
+        # Stack all trajectory results into tensors
+        # Shape: [N_trajectories] and [N_trajectories, 2]
+        discounted_returns = torch.stack(all_discounted_returns)
+        direction_vectors = torch.stack(all_direction_vectors)
+
+        # ------------------------------------------------------------------
+        # STAGE 2: Hierarchical Normalization
+        # ------------------------------------------------------------------
+
+        # Initialize storage for per-scale statistics
+        scale_mean_returns = torch.zeros(num_scales, dtype=self.dtype, device=self.device)
+        scale_entropies = torch.zeros(num_scales, dtype=self.dtype, device=self.device)
+        scale_direction_probs = []  # List of tensors, one per scale
+
+        for scale_idx in range(num_scales):
+            # Extract returns for this scale (8 directions)
+            scale_start = scale_idx * self.n_hd
+            scale_end = scale_start + self.n_hd
+            scale_returns = discounted_returns[scale_start:scale_end]
+
+            # Compute Boltzmann distribution over directions within this scale
+            # P(d|s) = exp(beta * R_{s,d}) / Σ_d' exp(beta * R_{s,d'})
+            scale_returns_normalized = scale_returns - torch.max(scale_returns)  # Numerical stability
+            boltzmann_weights = torch.exp(within_scale_beta * scale_returns_normalized)
+            direction_probs = boltzmann_weights / torch.clamp(torch.sum(boltzmann_weights), min=1e-9)
+            scale_direction_probs.append(direction_probs)
+
+            # Compute mean return: M_s = Σ_d P(d|s) × R_{s,d}
+            mean_return = torch.sum(direction_probs * scale_returns)
+            scale_mean_returns[scale_idx] = mean_return
+
+            # Compute entropy: H_s = -Σ_d P(d|s) log P(d|s)
+            # Clamp probabilities to avoid log(0)
+            safe_probs = torch.clamp(direction_probs, min=1e-9)
+            entropy = -torch.sum(direction_probs * torch.log(safe_probs))
+            scale_entropies[scale_idx] = entropy
+
+        # Compute scale scores: Q_s = alpha * M_s - gamma * H_s
+        scale_scores = alpha * scale_mean_returns - gamma * scale_entropies
+
+        # Compute scale weights via softmax: P(s) = softmax(Q_s)
+        scale_scores_normalized = scale_scores - torch.max(scale_scores)  # Numerical stability
+        scale_weights_raw = torch.exp(scale_scores_normalized)
+        scale_weights_current = scale_weights_raw / torch.clamp(torch.sum(scale_weights_raw), min=1e-9)
+
+        # Apply EMA for temporal stability
+        if prev_scale_weights is not None:
+            scale_weights = ema_lambda * scale_weights_current + (1.0 - ema_lambda) * prev_scale_weights
+            # Renormalize after EMA
+            scale_weights = scale_weights / torch.clamp(torch.sum(scale_weights), min=1e-9)
+        else:
+            # First timestep: no previous weights, use current
+            scale_weights = scale_weights_current
+
+        # ------------------------------------------------------------------
+        # STAGE 3: Form Joint Distribution P(s, d) = P(s) × P(d|s)
+        # ------------------------------------------------------------------
+
+        joint_probs = torch.zeros(num_scales * self.n_hd, dtype=self.dtype, device=self.device)
+
+        for scale_idx in range(num_scales):
+            scale_start = scale_idx * self.n_hd
+            scale_end = scale_start + self.n_hd
+            # P(s, d) = P(s) × P(d|s)
+            joint_probs[scale_start:scale_end] = scale_weights[scale_idx] * scale_direction_probs[scale_idx]
+
+        # ------------------------------------------------------------------
+        # STAGE 4: Compute Combined Vector and Expected Value
+        # ------------------------------------------------------------------
+
+        # Form combined movement vector: weighted sum of direction vectors
+        combined_vector = torch.sum(joint_probs.unsqueeze(1) * direction_vectors, dim=0)
+
+        # Compute expected value: weighted sum of discounted returns
+        expected_value = torch.sum(joint_probs * discounted_returns)
+
+        # Robust fallback: if combined vector magnitude is near zero, use max-return trajectory
+        combined_magnitude = torch.norm(combined_vector)
+        epsilon = 1e-6
+        if combined_magnitude < epsilon:
+            max_idx = torch.argmax(discounted_returns)
+            combined_vector = direction_vectors[max_idx]
+            expected_value = discounted_returns[max_idx]
+            if debug:
+                print(f"[HIERARCHICAL] Fallback: vector near zero (mag={combined_magnitude.item():.2e}), using max-return traj")
+
+        # Compute final direction angle from combined vector
+        final_direction_rad = torch.atan2(combined_vector[1], combined_vector[0])
+
+        # Convert to degrees [0, 360)
+        final_direction_deg_tensor = final_direction_rad * (180.0 / np.pi)
+        final_direction_deg_tensor = torch.where(
+            final_direction_deg_tensor < 0,
+            final_direction_deg_tensor + 360.0,
+            final_direction_deg_tensor
+        )
+
+        # ------------------------------------------------------------------
+        # STAGE 5: Debug Output
+        # ------------------------------------------------------------------
+
+        if debug:
+            print(f"\n[HIERARCHICAL] Scale Statistics:")
+            for scale_idx, (scale_name, _, _) in enumerate(scales_data):
+                print(f"  {scale_name}: M={scale_mean_returns[scale_idx].item():.3f} "
+                      f"H={scale_entropies[scale_idx].item():.3f} "
+                      f"Q={scale_scores[scale_idx].item():.3f} "
+                      f"P={scale_weights[scale_idx].item():.3f}")
+
+            # Top 3 trajectories by joint probability
+            top_indices = torch.topk(joint_probs, min(3, len(joint_probs))).indices
+            print(f"\n[HIERARCHICAL] Top 3 Trajectories:")
+            for idx in top_indices:
+                traj = trajectory_metadata[idx.item()]
+                scale_abbrev = traj['scale_name'][0]  # S/M/L
+                print(f"  {scale_abbrev}-{traj['direction']*45:3d}° P={joint_probs[idx].item():.3f} "
+                      f"R={discounted_returns[idx].item():.3f}")
+
+            print(f"\n[HIERARCHICAL] Result: θ={final_direction_deg_tensor.item():.1f}° "
+                  f"V={expected_value.item():.3f} "
+                  f"vec=[{combined_vector[0].item():.2f},{combined_vector[1].item():.2f}]")
+
+        # Return all data including scale_weights for next timestep's EMA
+        return (final_direction_deg_tensor.item(), expected_value, combined_vector,
+                discounted_returns, direction_vectors, joint_probs, trajectory_metadata, scale_weights)
