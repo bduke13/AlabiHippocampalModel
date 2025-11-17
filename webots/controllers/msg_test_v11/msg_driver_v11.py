@@ -938,144 +938,6 @@ class Driver(Supervisor):
         # A small random turn at the end
         self.turn(np.random.normal(0, np.deg2rad(30)))
 
-    def explore_v2(self) -> None:
-        """
-        Improved exploration: smooth random walk with LIDAR-based obstacle avoidance,
-        proportional arcs, periodic random turns, and continuous PC/GC updates.
-
-        Runs for ~tau_w iterations per call to keep cadence with the main loop.
-        """
-        # Speeds and thresholds
-        move_forward_speed = self.max_speed * 0.7
-        turn_speed = self.max_speed * 0.4
-        obstacle_far = 0.6
-        obstacle_near = 0.35
-        persistence_steps = 150  # straight-line travel before periodic random turn, per reference logic
-
-        # Ensure velocity control mode (position = infinity) so negative velocities are valid
-        try:
-            self.left_motor.setPosition(float("inf"))
-            self.right_motor.setPosition(float("inf"))
-        except Exception:
-            pass
-
-        # Persistent state across calls so periodic turns and ongoing turns work
-        if not hasattr(self, "_ev2_turning_state"):
-            self._ev2_turning_state = 0
-        if not hasattr(self, "_ev2_forward_steps"):
-            self._ev2_forward_steps = 0
-
-        # Iterate for a window similar to prior explore()
-        for _ in range(self.tau_w):
-            # Sense first to update boundaries/HD and step sim
-            self.sense()
-
-            # Compute PCN/GC activations (steps sim once more, consistent with existing flow)
-            self.compute_pcn_activations()
-
-            # Optional reward updates in DMTP/EXPLOIT modes
-            if self.robot_mode == RobotMode.DMTP or self.robot_mode == RobotMode.EXPLOIT:
-                actual_reward = self.get_actual_reward()
-                for pcn, rcn in zip(self.pcns, self.rcns):
-                    rcn.update_reward_cell_activations(pcn.place_cell_activations)
-
-            # Collision via bumpers -> emergency turn (treat like near obstacle)
-            if torch.any(self.collided):
-                self._ev2_turning_state = 15
-                # random in-place turn direction
-                if np.random.rand() < 0.5:
-                    self.left_motor.setVelocity(-turn_speed)
-                    self.right_motor.setVelocity(turn_speed)
-                else:
-                    self.left_motor.setVelocity(turn_speed)
-                    self.right_motor.setVelocity(-turn_speed)
-                self._ev2_forward_steps = 0
-            else:
-                # Use range image for smooth avoidance
-                # Use raw LiDAR scan (robot-centric) to avoid front reference issues from global roll
-                d_raw = self.range_finder.getRangeImage()
-                # Convert to numpy array for fast slicing/min without device sync
-                dists = np.array(d_raw, dtype=float)
-                n = dists.shape[0]
-                mid = n // 2
-
-                # Narrow front cone (~120 degrees, 60 left/right indices)
-                start = max(0, mid - 30)
-                end = min(n, mid + 30)
-                min_front = float(np.min(dists[start:end]))
-
-                # Wider sides (quarters)
-                min_left = float(np.min(dists[: n // 4])) if n // 4 > 0 else float("inf")
-                min_right = float(np.min(dists[3 * n // 4 :])) if n - (3 * n // 4) > 0 else float("inf")
-
-                if self._ev2_turning_state > 0:
-                    self._ev2_turning_state -= 1
-                    # Keep previously set wheel velocities
-                elif min_front < obstacle_near:
-                    # Emergency in-place turn toward freer side
-                    self._ev2_turning_state = 15
-                    if min_left > min_right:
-                        self.left_motor.setVelocity(-turn_speed)
-                        self.right_motor.setVelocity(turn_speed)
-                    else:
-                        self.left_motor.setVelocity(turn_speed)
-                        self.right_motor.setVelocity(-turn_speed)
-                    self._ev2_forward_steps = 0
-                elif min_front < obstacle_far:
-                    # Proportional arc away from obstacle
-                    turn_strength = (obstacle_far - min_front) / max(obstacle_far, 1e-6)
-                    turn_strength = float(np.clip(turn_strength, 0.0, 1.0))
-                    if min_left > min_right:
-                        # Turn left: slow left wheel
-                        self.left_motor.setVelocity(move_forward_speed * (1.0 - turn_strength))
-                        self.right_motor.setVelocity(move_forward_speed)
-                    else:
-                        # Turn right: slow right wheel
-                        self.left_motor.setVelocity(move_forward_speed)
-                        self.right_motor.setVelocity(move_forward_speed * (1.0 - turn_strength))
-                    self._ev2_forward_steps = 0
-                elif self._ev2_forward_steps >= persistence_steps:
-                    # Periodic random turn to diversify exploration
-                    self._ev2_turning_state = np.random.randint(10, 25)
-                    r = np.random.rand()
-                    if r < 0.4:
-                        # Turn left in place
-                        self.left_motor.setVelocity(-turn_speed)
-                        self.right_motor.setVelocity(turn_speed)
-                    elif r < 0.8:
-                        # Turn right in place
-                        self.left_motor.setVelocity(turn_speed)
-                        self.right_motor.setVelocity(-turn_speed)
-                    else:
-                        # Gentle arc
-                        self.left_motor.setVelocity(move_forward_speed * 0.6)
-                        self.right_motor.setVelocity(move_forward_speed)
-                    self._ev2_forward_steps = 0
-                else:
-                    # Clear path -> go forward
-                    self.left_motor.setVelocity(move_forward_speed)
-                    self.right_motor.setVelocity(move_forward_speed)
-                    self._ev2_forward_steps += 1
-
-            # Goal checks and bookkeeping
-            self.check_goal_reached()
-
-            if self.robot_mode in {RobotMode.LEARN_LOCATIONS_COVERAGE, RobotMode.LEARN_LOCATIONS_COVERAGE_AUTO,
-                                   RobotMode.PLOTTING_COVERAGE_AUTO}:
-                curr_pos = self.robot.getField("translation").getSFVec3f()
-                self._update_coverage([curr_pos[0], curr_pos[2]])
-
-            if self.robot_mode in {RobotMode.EXPLOIT_LOCATIONS_RANDOM, RobotMode.EXPLOIT_LOCATIONS_RANDOM_AUTO}:
-                self._update_distance_tracking()
-
-            self.update_hmaps(update_loc=True,
-                              update_pcn=True,
-                              update_gcn=True,
-                              update_scale_priority=True if self.robot_mode == RobotMode.EXPLOIT else False,
-                              update_prox=True if (self.use_prox_mod and self.robot_mode == RobotMode.LEARN_OJAS) else False)
-
-        # No extra random nudge; obstacle logic and periodic turns handle diversity
-
     ########################################### EXPLOIT ###########################################
 
     def exploit_v10(self):
@@ -1401,16 +1263,16 @@ class Driver(Supervisor):
 
         # --- Hierarchical Preplay Configuration ---
         num_preplay_steps = 2              # Number of steps per trajectory
-        discount_factor = 0.95              # 0.9 Temporal discount (gamma)
-        within_scale_beta = 500           # 2 Inverse temperature for P(d|s) within each scale 300
-        alpha = 15                        # 1 Weight for mean return in scale scoring
+        discount_factor = 0.6              # 0.9 Temporal discount (gamma) 95
+        within_scale_beta = 100           # 2 Inverse temperature for P(d|s) within each scale 300/500
+        alpha = 3                        # 1 Weight for mean return in scale scoring 15
         gamma = 1                        # 2 Weight for entropy penalty (higher = favor confident scales) 1.5
         ema_lambda = 0.15                   # 0.1 EMA decay for scale weights (0.1 = 10% new, 90% old)
 
         # --- Safety & Loop Detection ---
         min_safe_distance = 1                        # Minimum obstacle clearance
-        loop_threshold_reliability = 2               # Loops before applying reliability penalty
-        loop_threshold_forced_exploration = 5        # Loops before forcing exploration
+        loop_threshold_reliability = 1               # Loops before applying reliability penalty
+        loop_threshold_forced_exploration = 10        # Loops before forcing exploration
         max_steps_between_loops = 10                 # Max steps between loops to count
         forced_exploration_steps = 10                # Steps to force exploration
         cooldown_steps = 20                          # Cooldown after forced exploration
@@ -1425,11 +1287,12 @@ class Driver(Supervisor):
         use_scale_reliability = True           # Mechanism 2: Per-scale reliability scoring
 
         # --- Scale Reliability Parameters (only used if use_scale_reliability=True) ---
-        reliability_decay_bad = 0.05          # Penalty for bad outcomes (collisions, loops)
+        reliability_decay_bad = 0.1          # Penalty for bad outcomes (collisions, loops)
         reliability_decay_good = 0.01          # Reward for good outcomes (goal reached)
         reliability_attribution = 'dominant'   # 'weighted' or 'dominant'
-        reliability_min_floor = 0.25            # Minimum reliability value (prevents total suppression)
-        reliability_term_factor = 5.0           # Multiplier on log(reliability) in scale scoring (>1 amplifies impact)
+        reliability_min_floor = 0.1            # Minimum reliability value (prevents total suppression)
+        reliability_term_factor = 7.0           # Multiplier on log(reliability) in scale scoring (>1 amplifies impact)
+        reliability_good_cooldown_steps = 4      # After a bad update, wait this many steps before rewarding that scale
 
         # --- Debug ---
         debug_print_interval = 100         # Print debug info every N steps
@@ -1469,7 +1332,15 @@ class Driver(Supervisor):
             num_scales = len(self.scales)
             self.scale_reliability = torch.ones(num_scales, dtype=self.dtype, device=self.device)
             self.loop_scale_contributions = torch.zeros(num_scales, dtype=self.dtype, device=self.device)
+            self.reliability_good_cooldown = torch.zeros(num_scales, dtype=torch.long, device=self.device)
             print(f"[EXPLOIT_V11] Initialized scale reliability tracking for {num_scales} scales")
+
+        # Decay cooldown timers each step so recently penalized scales cannot be rewarded immediately
+        if use_scale_reliability and hasattr(self, 'reliability_good_cooldown'):
+            self.reliability_good_cooldown = torch.maximum(
+                self.reliability_good_cooldown - 1,
+                torch.zeros_like(self.reliability_good_cooldown)
+            )
 
         #-------------------------------------------------------------------
         # 2) Forced Exploration Check
@@ -1524,6 +1395,9 @@ class Driver(Supervisor):
                             min=reliability_min_floor,
                             max=1.0
                         )
+                        # Start cooldown for any scale that was penalized this step
+                        if penalty > 0 and reliability_good_cooldown_steps > 0:
+                            self.reliability_good_cooldown[scale_idx] = reliability_good_cooldown_steps
                     if debug_enabled:
                         print(f"[RELIABILITY] Loop penalty applied after {self.rotation_loop_count} loops")
                         print(f"[RELIABILITY] Loop contributions: {self.loop_scale_contributions.cpu().numpy()}")
@@ -1791,7 +1665,9 @@ class Driver(Supervisor):
                     scale_weights=self.last_scale_weights,
                     decay_bad=reliability_decay_bad,
                     attribution=reliability_attribution,
-                    min_floor=reliability_min_floor
+                    min_floor=reliability_min_floor,
+                    cooldown=self.reliability_good_cooldown if hasattr(self, 'reliability_good_cooldown') else None,
+                    cooldown_steps=reliability_good_cooldown_steps
                 )
                 if debug_enabled:
                     print(f"[RELIABILITY] Collision penalty applied. Reliability: {self.scale_reliability.cpu().numpy()}")
@@ -1801,7 +1677,8 @@ class Driver(Supervisor):
                 self._update_scale_reliability_good(
                     scale_weights=self.last_scale_weights,
                     decay_good=reliability_decay_good,
-                    attribution=reliability_attribution
+                    attribution=reliability_attribution,
+                    cooldown=self.reliability_good_cooldown if hasattr(self, 'reliability_good_cooldown') else None
                 )
 
         # Decay all active suppressions
@@ -1876,7 +1753,8 @@ class Driver(Supervisor):
             print(f"[SUPPRESS] Restored scale {scale_idx}, direction {direction_deg:3d}°")
             del self.suppressed_trajectories[key]
 
-    def _update_scale_reliability_bad(self, scale_weights, decay_bad, attribution='weighted', min_floor=0.1):
+    def _update_scale_reliability_bad(self, scale_weights, decay_bad, attribution='weighted', min_floor=0.1,
+                                      cooldown=None, cooldown_steps=0):
         """Decrease reliability for scales that contributed to bad outcomes.
 
         Args:
@@ -1898,6 +1776,8 @@ class Driver(Supervisor):
                     min=min_floor,
                     max=1.0
                 )
+                if cooldown is not None and penalty > 0 and cooldown_steps > 0:
+                    cooldown[scale_idx] = cooldown_steps
         elif attribution == 'dominant':
             # Penalize only the dominant scale
             dominant_idx = torch.argmax(scale_weights).item()
@@ -1906,8 +1786,10 @@ class Driver(Supervisor):
                 min=min_floor,
                 max=1.0
             )
+            if cooldown is not None and cooldown_steps > 0:
+                cooldown[dominant_idx] = cooldown_steps
 
-    def _update_scale_reliability_good(self, scale_weights, decay_good, attribution='weighted'):
+    def _update_scale_reliability_good(self, scale_weights, decay_good, attribution='weighted', cooldown=None):
         """Increase reliability for scales that contributed to good outcomes.
 
         Args:
@@ -1921,6 +1803,9 @@ class Driver(Supervisor):
         if attribution == 'weighted':
             # Reward all scales proportionally to their contribution
             for scale_idx in range(len(self.scale_reliability)):
+                # Skip if this scale is still in cooldown from a recent penalty
+                if cooldown is not None and cooldown[scale_idx] > 0:
+                    continue
                 contribution = scale_weights[scale_idx].item()
                 reward = decay_good * contribution
                 self.scale_reliability[scale_idx] = torch.clamp(
@@ -1931,6 +1816,8 @@ class Driver(Supervisor):
         elif attribution == 'dominant':
             # Reward only the dominant scale
             dominant_idx = torch.argmax(scale_weights).item()
+            if cooldown is not None and cooldown[dominant_idx] > 0:
+                return
             self.scale_reliability[dominant_idx] = torch.clamp(
                 self.scale_reliability[dominant_idx] + decay_good,
                 min=0.0,

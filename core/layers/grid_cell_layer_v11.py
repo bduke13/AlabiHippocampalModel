@@ -37,6 +37,8 @@ class GridCellLayer:
         world_name: Optional[str] = None,
         mask_resolution: int = 128,
         obstacle_dilation: float = 0.2,
+        overlap_thresh: float = 0.1,
+        max_split_dilation_px: int = 8,
         device: str = "cpu",
         dtype: torch.dtype = torch.float32,
     ):
@@ -124,6 +126,8 @@ class GridCellLayer:
         self.world_obstacles = (self.world["obstacles"] if self.world else [])
         self.mask_resolution = int(mask_resolution)
         self.obstacle_dilation = float(obstacle_dilation)
+        self.overlap_thresh = float(overlap_thresh)
+        self.max_split_dilation_px = int(max_split_dilation_px)
         self._build_blob_mask_once()
 
     # ---------------------
@@ -217,6 +221,67 @@ class GridCellLayer:
                 best_region = region_mask
         return best_region if best_region is not None else free_blob
 
+    def _force_split_partially_cut_blob(
+        self,
+        blob_mask: np.ndarray,
+        obstacle_mask: np.ndarray,
+        activation: np.ndarray,
+    ) -> Optional[np.ndarray]:
+        """
+        Attempt to split a blob that is only partially intersected by an obstacle.
+
+        If the overlap between blob and obstacle exceeds overlap_thresh, we locally dilate
+        the obstacle inside the blob's bounding box to force a disconnect, then keep the
+        strongest activated component. Returns a keep-mask (same shape as blob) or None.
+        """
+        if not _HAS_SCIPY:
+            return None
+
+        blob_area = int(blob_mask.sum())
+        if blob_area == 0:
+            return None
+
+        overlap = blob_mask & (obstacle_mask == 0)
+        overlap_area = int(overlap.sum())
+        overlap_frac = overlap_area / float(blob_area)
+        if overlap_frac < self.overlap_thresh:
+            return None
+
+        ys, xs = np.nonzero(blob_mask)
+        y0, y1 = ys.min(), ys.max()
+        x0, x1 = xs.min(), xs.max()
+        pad = 1
+        y0 = max(0, y0 - pad)
+        y1 = min(blob_mask.shape[0] - 1, y1 + pad)
+        x0 = max(0, x0 - pad)
+        x1 = min(blob_mask.shape[1] - 1, x1 + pad)
+
+        sub_blob = blob_mask[y0 : y1 + 1, x0 : x1 + 1]
+        sub_obs = (obstacle_mask == 0)[y0 : y1 + 1, x0 : x1 + 1]
+        sub_act = activation[y0 : y1 + 1, x0 : x1 + 1]
+
+        for it in range(1, max(1, self.max_split_dilation_px) + 1):
+            dil_obs = _ndimage.binary_dilation(sub_obs, iterations=it)
+            free_after = sub_blob & (~dil_obs)
+            labeled, num_regions = _ndimage.label(free_after)
+            if num_regions <= 1:
+                continue
+            best_region = None
+            best_sum = -1.0
+            for region_id in range(1, num_regions + 1):
+                region_mask = (labeled == region_id)
+                s = float(sub_act[region_mask].sum())
+                if s > best_sum:
+                    best_sum = s
+                    best_region = region_mask
+            if best_region is not None:
+                keep_mask = np.zeros_like(blob_mask, dtype=bool)
+                keep_mask[y0 : y1 + 1, x0 : x1 + 1] = best_region
+                return keep_mask
+
+        # If we cannot force a split, fall back to None and let caller decide
+        return None
+
     def _build_blob_mask_once(self) -> None:
         # Precompute per-cell blob-aware mask over the world grid
         H = W = int(self.mask_resolution)
@@ -264,7 +329,10 @@ class GridCellLayer:
                 blob_in_free = blob & (obstacle_mask == 1)
                 blob_in_obs = blob & (obstacle_mask == 0)
                 if blob_in_free.any() and blob_in_obs.any():
-                    keep_mask = self._process_single_blob_with_obstacles(blob, obstacle_mask, cell_activ)
+                    # Try to force a split if obstacle only partially cuts the blob
+                    keep_mask = self._force_split_partially_cut_blob(blob, obstacle_mask, cell_activ)
+                    if keep_mask is None:
+                        keep_mask = self._process_single_blob_with_obstacles(blob, obstacle_mask, cell_activ)
                     zero_region = blob & (~keep_mask)
                     blob_masks[:, :, c][zero_region] = 0.0
 

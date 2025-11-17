@@ -1289,7 +1289,7 @@ if __name__ == "__main__":
         "PLOTTING_COVERAGE_AUTO": RobotMode.PLOTTING_COVERAGE_AUTO,
     }
 
-    SELECTED_MODE = "PLOTTING"
+    SELECTED_MODE = "EXPLOIT_LOCATIONS_RANDOM"
     td_learning = False # keep off
     corners = [[8,-8]] # start point
     dmtp_start = [-9,9]
@@ -1306,7 +1306,7 @@ if __name__ == "__main__":
     large = ["large"]
 
     scale_names = multiscale # what scales you are using
-    run_time_hours = 8
+    run_time_hours = 6
     max_dist = 25
     plot_bvc = False
 
@@ -1346,7 +1346,7 @@ if __name__ == "__main__":
     min_spawn_distance = 6.0  # 6 meters from goal
     wall_clearance = 0.5  # 0.5 meter clearance from walls
     generate_path_plots = False  # Whether to generate path visualization plots
-    trials_per_goal = 20  # 20 trials per goal
+    trials_per_goal = 10  # 20 trials per goal
     path_failure_ratio = 10.0  # Fail if robot travels 2x optimal distance
 
     # Auto trial parameters (shared by both LEARN and EXPLOIT AUTO modes)

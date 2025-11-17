@@ -6,7 +6,7 @@ import copy
 # C_REWARD_PER_CELL now acts as a fixed reward budget per scale (not per cell)
 # Optionally override per-scale via k_reward in the caller if needed.
 # C_LAMBDA controls the time scale of propagation
-C_REWARD_PER_CELL = 1.0  # Reward budget per scale
+C_REWARD_PER_CELL = 5.0  # Reward budget per scale
 C_LAMBDA = 20.0  # Decay length scaling constant
 
 
