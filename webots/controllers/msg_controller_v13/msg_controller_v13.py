@@ -1304,7 +1304,7 @@ if __name__ == "__main__":
     randomize_start_loc = False
     use_prox_mod = False
 
-    multiscale = ["medium", "large"]
+    multiscale = ["small", "medium", "large"]
     small = ["small"]
     medium = ["medium"]
     large = ["large"]

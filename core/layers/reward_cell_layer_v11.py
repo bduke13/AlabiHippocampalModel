@@ -111,6 +111,40 @@ class RewardCellLayerTest:
             updated_weights = self.w_in_effective + self.learning_rate * input_data
             self.w_in_effective = updated_weights
 
+    def compute_reward_activations_batched(self, input_data_batch):
+        """
+        Compute reward activations for a batch of place cell activation patterns.
+
+        This is an optimized version for preplay that processes multiple activation
+        patterns in parallel without updating internal state.
+
+        Args:
+            input_data_batch: A torch.Tensor (shape: [batch_size, num_place_cells])
+
+        Returns:
+            reward_activations: A torch.Tensor (shape: [batch_size,]) with reward values
+        """
+        # Ensure input is on correct device
+        input_data_batch = input_data_batch.to(self.device)
+
+        # Compute L1 norms for each sample in the batch
+        # Shape: (batch_size,)
+        input_norms = torch.norm(input_data_batch, p=1, dim=1)
+        safe_denominators = torch.maximum(
+            input_norms, torch.tensor(1e-4, dtype=torch.float32, device=self.device)
+        )
+
+        # Batch matrix-vector multiply
+        # w_in_effective: (1, num_place_cells)
+        # input_data_batch: (batch_size, num_place_cells)
+        # Result: (batch_size,)
+        activations = torch.matmul(input_data_batch, self.w_in_effective.T).squeeze(1) / safe_denominators
+
+        # Clamp activations
+        activations = torch.clamp(activations, 0, 1e6)
+
+        return activations
+
     def replay(self, pcn):
         """
         Replay the place cell activations and update reward cell weights.
