@@ -378,7 +378,7 @@ def save_all_multi_goal_plots(output_dir=None, controller_name=None, world_name=
 
     Args:
         output_dir (str, optional): Directory to save plots. If None, uses default OUTPUT_DIR.
-        controller_name (str, optional): Custom controller name (e.g., "msg_test_v10")
+        controller_name (str, optional): Custom controller name (e.g., "msg_controller")
         world_name (str, optional): Custom world name (e.g., "20x20_maze_multi_goal")
     """
     # Set custom paths if provided

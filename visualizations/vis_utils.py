@@ -12,7 +12,7 @@ project_root = Path(__file__).resolve().parent.parent  # Adjust this if needed
 sys.path.append(str(project_root))
 
 CONTROLLER_PATH_PREFIX = "webots/controllers/"
-CONTROLLER_NAME = "msg_test_v10"
+CONTROLLER_NAME = "msg_controller"
 WORLD_NAME = "20x20_maze_multi_goal"
 # "A_20x20_Maze_Multi_Goal"
 # "20x20_multi_goal"
@@ -30,7 +30,7 @@ def set_custom_paths(controller_name=None, world_name=None):
     Override the default controller and world names for loading data.
 
     Args:
-        controller_name (str, optional): Custom controller name (e.g., "msg_test_v10")
+        controller_name (str, optional): Custom controller name (e.g., "msg_controller")
         world_name (str, optional): Custom world name (e.g., "20x20_maze_multi_goal")
     """
     global _custom_controller_name, _custom_world_name

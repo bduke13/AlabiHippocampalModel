@@ -157,7 +157,7 @@ Pose {
 DEF agent Create {
   translation -3.02896 0.0466361 -2.46272
   rotation -0.6607352787486408 0.5303053028717288 0.5312298722427797 1.9727887896457816
-  controller "msg_test_v10"
+  controller "msg_controller"
   supervisor TRUE
   bodySlot [
     Solid {

@@ -873,7 +873,7 @@ class Driver(Supervisor):
                                       RobotMode.LEARN_LOCATIONS_COVERAGE_AUTO):
                 self.explore()
             elif self.robot_mode in (RobotMode.EXPLOIT, RobotMode.EXPLOIT_LOCATIONS_RANDOM, RobotMode.EXPLOIT_LOCATIONS_RANDOM_AUTO):
-                self.exploit_v12()
+                self.exploit()
             else:
                 print("Unknown state. Exiting...")
                 break
@@ -940,6 +940,274 @@ class Driver(Supervisor):
         self.turn(np.random.normal(0, np.deg2rad(30)))
 
     ########################################### EXPLOIT ###########################################
+    def exploit(self):
+        """
+        Follows the reward gradient to reach the goal location using multiscale place field navigation.
+        If a scale has insufficient reward information, it is temporarily removed from the decision-making 
+        while still allowing learning.
+        """
+        #-------------------------------------------------------------------
+        # 1) Sense and compute: update heading, place/boundary cell activations
+        #-------------------------------------------------------------------
+        self.sense()
+        self.compute_pcn_activations()
+        self.update_hmaps(update_loc=True, update_pcn=True, update_scale_priority=True)
+        self.check_goal_reached()
+
+        if self.robot_mode in {RobotMode.EXPLOIT_LOCATIONS_RANDOM, RobotMode.EXPLOIT_LOCATIONS_RANDOM_AUTO}:
+            self._update_distance_tracking()
+
+        # Save old PCN activations for each scale
+        old_pcn_activations = [pcn.place_cell_activations.clone() for pcn in self.pcns]
+
+        # Exploit can only begin with at least 10 steps
+        if self.step_count <= self.tau_w:
+            return
+
+        #-------------------------------------------------------------------
+        # 2) Forced Exploration Check & Cooldown Setup
+        #-------------------------------------------------------------------
+        if self.force_explore_count > 0:
+            self.force_explore_count -= 1
+            if self.force_explore_count == 0:
+                print("Forced exploration complete. Checking for improved reward signal...")
+
+                # Compute the max post-explore reward gradient
+                self.max_post_explore_gradient = max(
+                    torch.max(torch.nan_to_num(rcn.reward_cell_activations)).item()
+                    for rcn in self.rcns
+                )
+
+            self.explore()
+            return
+
+        #-------------------------------------------------------------------
+        # 3) Detect excessive rotation and enforce forced exploration if needed
+        #-------------------------------------------------------------------
+        if not hasattr(self, 'rotation_accumulator'):
+            self.rotation_accumulator = 0.0
+            self.rotation_loop_count = 0
+            self.steps_since_last_loop = 0
+
+        if not hasattr(self, 'last_heading_deg') or self.last_heading_deg is None:
+            self.last_heading_deg = self.current_heading_deg
+
+        heading_diff = self.current_heading_deg - self.last_heading_deg
+        heading_diff = ((heading_diff + 180) % 360) - 180  # Normalize to [-180, 180]
+        self.rotation_accumulator += abs(heading_diff)
+        self.last_heading_deg = self.current_heading_deg
+
+        if self.rotation_accumulator >= 360.0:
+            self.rotation_loop_count += 1
+            self.rotation_accumulator -= 360.0
+            if self.steps_since_last_loop > self.MAX_STEPS_BETWEEN_LOOPS:
+                self.rotation_loop_count = 1
+            self.steps_since_last_loop = 0
+
+            if self.rotation_loop_count >= self.LOOP_THRESHOLD:
+                self.rotation_loop_count = 0
+                self.rotation_accumulator = 0.0
+                self.steps_since_last_loop = 0
+                print(f"Detected {self.LOOP_THRESHOLD} consecutive loops within {self.MAX_STEPS_BETWEEN_LOOPS} steps. Initiating forced exploration.")
+
+                # Store the preferred scale before entering forced exploration
+                if hasattr(self, "last_preferred_scale_index"):
+                    self.cooldown_scale_index = self.last_preferred_scale_index
+                    self.cooldown_steps_remaining = 20  # Cooldown for 10 steps
+                    print(f"[INFO] Cooling down scale {self.cooldown_scale_index} for 10 steps.")
+
+                # Start forced exploration
+                self.force_explore_count = 5
+                self.explore()
+                return
+        else:
+            self.steps_since_last_loop += 1
+            if self.steps_since_last_loop > self.MAX_STEPS_BETWEEN_LOOPS:
+                self.rotation_loop_count = 0
+
+        #-------------------------------------------------------------------
+        # 4) Compute potential rewards at multiple scales, skipping invalid directions
+        #-------------------------------------------------------------------
+        boundaries_rolled = torch.roll(self.boundaries, shifts=len(self.boundaries) // 2)
+        num_points_per_hd = len(boundaries_rolled) // self.n_hd
+
+        distances_per_hd = torch.tensor([
+            torch.min(boundaries_rolled[i * num_points_per_hd: (i + 1) * num_points_per_hd])
+            for i in range(self.n_hd)
+        ], device=self.device, dtype=self.dtype)
+
+        pot_rew_scales = []
+        valid_scale_indices = []
+        reward_threshold = 0.1  # Threshold for considering a scale valid
+
+        for i, scale_def in enumerate(self.scales):
+            if hasattr(self, "cooldown_steps_remaining") and self.cooldown_steps_remaining > 0:
+                if i == getattr(self, "cooldown_scale_index", -1):
+                    print(f"[INFO] Skipping scale {i} due to cooldown.")
+                    continue  # Skip the scale that is on cooldown
+
+            pcn, rcn = self.pcns[i], self.rcns[i]
+            pot_rew = torch.empty(self.n_hd, dtype=self.dtype, device=self.device)
+            current_pcn_activations = pcn.place_cell_activations
+
+            # Compute current reward at the agent's position
+            rcn.update_reward_cell_activations(current_pcn_activations, visit=False)
+            current_reward = torch.max(torch.nan_to_num(rcn.reward_cell_activations))
+
+            for d in range(self.n_hd):
+                if distances_per_hd[d] < 1:
+                    pot_rew[d] = 0.0
+                else:
+                    preplayed_pcn_activations = pcn.preplay(d)
+                    rcn.update_reward_cell_activations(preplayed_pcn_activations, visit=False)
+                    preplayed_reward = torch.max(torch.nan_to_num(rcn.reward_cell_activations))
+                    pot_rew[d] = preplayed_reward
+
+            if pot_rew.max().item() >= reward_threshold:
+                pot_rew_scales.append(pot_rew)
+                valid_scale_indices.append(i)
+
+        #-------------------------------------------------------------------
+        # 3.5) If NO valid scales remain, trigger exploration
+        #-------------------------------------------------------------------
+        if len(pot_rew_scales) == 0:
+            print(f"[WARNING] No valid scales found (all below reward threshold {reward_threshold}), forcing exploration.")
+            self.explore()
+            return
+
+        #-------------------------------------------------------------------
+        # 4.5) Reduce cooldown step count
+        #-------------------------------------------------------------------
+        if hasattr(self, "cooldown_steps_remaining") and self.cooldown_steps_remaining > 0:
+            self.cooldown_steps_remaining -= 1
+            if self.cooldown_steps_remaining == 0:
+                print(f"[INFO] Cooldown complete for scale {self.cooldown_scale_index}. Scale re-enabled.")
+
+        #-------------------------------------------------------------------
+        # 4) Normalize and blend across valid scales
+        #-------------------------------------------------------------------
+        pot_rew_scales = torch.stack(pot_rew_scales)
+        pot_rew_scales /= (pot_rew_scales.max(dim=1, keepdim=True)[0] + 1e-6)  # Avoid div by zero
+
+        # Compute gradients only on valid scales
+        grads = torch.sum(torch.abs(torch.diff(pot_rew_scales, dim=1)), dim=1)
+
+        # Apply Gaussian smoothing
+        kernel_size = 3  # Adjust as needed (3, 5, or 7 are common choices)
+        sigma = 3.0  # Standard deviation for Gaussian smoothing
+
+        # Create Gaussian kernel
+        def gaussian_kernel(size: int, sigma: float, device):
+            x = torch.arange(size, dtype=self.dtype, device=device) - size // 2
+            kernel = torch.exp(-0.5 * (x / sigma) ** 2)
+            kernel /= kernel.sum()
+            return kernel.view(1, 1, -1)  # Shape for 1D convolution
+
+        gaussian = gaussian_kernel(kernel_size, sigma, self.device)
+
+        # Apply smoothing via 1D convolution
+        grads_unsq = grads.unsqueeze(0).unsqueeze(0)  # Add batch and channel dims
+        grads_smooth = F.conv1d(grads_unsq, gaussian, padding=kernel_size // 2).squeeze()
+
+        # Compute initial mixing weights based on smoothed gradients
+        mixing_weights = grads_smooth / (grads_smooth.sum() + 1e-6)
+
+        mixing_weights = grads / (grads.sum() + 1e-6)
+        mixing_weights = torch.clamp(mixing_weights, min=0.0, max=1.0)
+        mixing_weights /= mixing_weights.sum()
+
+        # If proximity modulation is enabled, adjust the weights
+        if self.use_prox_mod:
+            prox_weight = self.prox  # self.prox is in [0, 1]
+            print(f"Proximity weight: {prox_weight}")
+            # Bias smaller scales more heavily when close to the goal
+            scale_biases = torch.tensor(
+                [1.0 / (i + 1) for i in range(len(valid_scale_indices))],
+                dtype=self.dtype, device=self.device
+            )
+            scale_biases /= scale_biases.sum()
+
+            # Blend mixing_weights with scale_biases based on proximity weight
+            mixing_weights = (1 - prox_weight) * mixing_weights + prox_weight * scale_biases
+            mixing_weights /= mixing_weights.sum()
+
+        # Determine the preferred scale
+        if mixing_weights.numel() > 1:  # Ensure multiple elements in mixing_weights
+            preferred_scale_index = torch.argmax(mixing_weights).item()
+            print(f"Preferred scale: {preferred_scale_index}, Weight: {mixing_weights[preferred_scale_index].item()}")
+        else:
+            preferred_scale_index = 0  # Default to the only available scale
+
+        # Apply hysteresis only if we have multiple scales to choose from
+        if hasattr(self, "last_preferred_scale_index") and self.last_preferred_scale_index is not None:
+            if mixing_weights.numel() > self.last_preferred_scale_index:  # Ensure valid index
+                if abs(mixing_weights[self.last_preferred_scale_index] - mixing_weights[preferred_scale_index]) < 0.1:
+                    preferred_scale_index = self.last_preferred_scale_index  # Stick with previous scale
+
+        # Now update the last preferred scale index
+        self.last_preferred_scale_index = preferred_scale_index
+
+        # Update scale priority for logging
+        self.scale_idx = valid_scale_indices[torch.argmax(mixing_weights).item()]
+
+        if mixing_weights.numel() > 1:
+            combined_pot_rew = torch.sum(mixing_weights[:, None] * pot_rew_scales, dim=0)
+        else:
+            # Directly use the only valid reward scale
+            combined_pot_rew = pot_rew_scales.squeeze(0)  # Remove batch dim if needed
+
+
+        #-------------------------------------------------------------------
+        # 5) Compute action heading
+        #-------------------------------------------------------------------
+        angles = torch.linspace(0, 2 * np.pi * (1 - 1 / self.n_hd), self.n_hd, device=self.device, dtype=self.dtype)
+        sin_component = torch.sum(torch.sin(angles) * combined_pot_rew)
+        cos_component = torch.sum(torch.cos(angles) * combined_pot_rew)
+        action_angle = torch.atan2(sin_component, cos_component)
+        if action_angle < 0:
+            action_angle += 2 * np.pi
+
+        self.action_heading_deg = float(torch.rad2deg(action_angle).item())
+
+        #-------------------------------------------------------------------
+        # 6) Execute movement
+        #-------------------------------------------------------------------
+        angle_to_turn_deg = self.action_heading_deg - self.current_heading_deg
+        angle_to_turn_deg = (angle_to_turn_deg + 180) % 360 - 180
+        angle_to_turn = torch.deg2rad(torch.tensor(angle_to_turn_deg, dtype=self.dtype, device=self.device))
+        self.turn(angle_to_turn.item())
+
+        for _ in range(self.tau_w):
+            self.sense()
+            self.compute_pcn_activations()
+            self.update_hmaps(update_loc=True,
+                              update_pcn=True,
+                              update_scale_priority=True)
+            self.forward()
+            self.check_goal_reached()
+
+            # Update rotation accumulator
+            heading_diff = self.current_heading_deg - getattr(self, 'last_heading_deg', self.current_heading_deg)
+            heading_diff = ((heading_diff + 180) % 360) - 180
+            self.rotation_accumulator += abs(heading_diff)
+            self.last_heading_deg = self.current_heading_deg
+
+            if self.done:
+                return
+
+        #--------------------------
+        # 7) (Optional) TD Learning Step
+        #--------------------------
+        if self.td_learning:
+            for i, scale_def in enumerate(self.scales):
+                pcn, rcn = self.pcns[i], self.rcns[i]
+                new_pcn_activations = pcn.place_cell_activations
+                rcn.update_reward_cell_activations(new_pcn_activations, visit=False)
+                observed_reward = float(rcn.reward_cell_activations.item())
+                rcn.td_update(old_pcn_activations[i], observed_reward)
+
+        return
+
 
     def exploit_v10(self):
         """
@@ -1738,17 +2006,21 @@ class Driver(Supervisor):
         preplay_random_seed = None  # Set to integer (e.g., 42) for reproducible sampling, None for random
 
         # --- Hierarchical Preplay Configuration ---
-        num_preplay_steps = 2              # 2 Number of steps per trajectory
+        num_preplay_steps = 3              # 2 Number of steps per trajectory
         discount_factor = 0.7              # 0.9 Temporal discount (gamma) 95
         within_scale_beta = 500           # 2 Inverse temperature for P(d|s) within each scale 300/500
-        scale_selection_beta = 1.0         # Inverse temperature for scale selection softmax (higher = more decisive)
-        ema_lambda = 0.05                   # 0.1 EMA decay for scale weights (0.1 = 10% new, 90% old)
+        scale_selection_beta = 2.0         # Inverse temperature for scale selection softmax (higher = more decisive)
+        ema_lambda = 0.25                   # 0.1 EMA decay for scale entropies (0.1 = 10% new, 90% old)
+        use_entropy_ema = True             # Toggle: True = apply EMA smoothing to entropies, False = use raw entropies
+        entropy_exponent = 2.0             # Exponent for inverse entropy simplex (higher = more sensitive to entropy differences)
+        reliability_exponent = 2.0         # Exponent for reliability scores (higher = more sensitive to reliability differences)
+        variance_lambda = 1.0              # Weight for variance term in composite entropy (higher = more penalty for high variance)
 
         # --- Stochastic Sampling Preplay (Biologically Plausible Alternative) ---
         use_sampling_preplay = True       # Toggle: False = exhaustive branching (default), True = stochastic sampling
-        num_samples_per_direction = 6     # Number of trajectory samples per (scale, direction) if use_sampling_preplay=True
+        num_samples_per_direction = 10     # Number of trajectory samples per (scale, direction) if use_sampling_preplay=True
         sampling_strategy = "learned"      # "uniform" (random turns) or "learned" (W_rec-weighted turns)
-        sampling_temperature = 2         # 1 Softmax temperature for "learned" strategy (higher = more random)
+        sampling_temperature = 1         # 1 Softmax temperature for "learned" strategy (higher = more random)
 
         # --- Safety & Loop Detection ---
         min_safe_distance = 1                        # Minimum obstacle clearance
@@ -1758,18 +2030,13 @@ class Driver(Supervisor):
         forced_exploration_steps = 10                # Steps to force exploration
         cooldown_steps = 20                          # Cooldown after forced exploration
 
-        # --- Trajectory Suppression (Spatial Aliasing Correction) ---
-        trajectory_suppression_duration = 10  # 5 Steps to suppress a trajectory after collision
-        top_k_suppress = 2                   # Number of top trajectories to suppress on collision
-
         # --- Spatial Aliasing Correction Strategy ---
-        use_trajectory_suppression = False      # Mechanism 1: Per-trajectory blocking
         use_loop_forced_exploration = False     # Original rotation-based exploration
         use_scale_reliability = True           # Mechanism 2: Per-scale reliability scoring
 
         # --- Scale Reliability Parameters (only used if use_scale_reliability=True) ---
-        reliability_bad_factor = 0.8           # Multiplicative factor for bad outcomes (e.g., 0.8 = multiply by 0.8)
-        reliability_good_factor = 1.1          # Multiplicative factor for good outcomes (e.g., 1.1 = multiply by 1.1, capped at 1.0)
+        reliability_bad_factor = 0.6           # Multiplicative factor for bad outcomes (e.g., 0.8 = multiply by 0.8)
+        reliability_good_factor = 1.03          # Multiplicative factor for good outcomes (e.g., 1.1 = multiply by 1.1, capped at 1.0)
         reliability_attribution = 'dominant'   # 'weighted' or 'dominant'
         reliability_min_floor = 0.1            # Minimum reliability value (prevents total suppression)
         reliability_good_cooldown_steps = 4      # After a bad update, wait this many steps before rewarding that scale
@@ -1783,13 +2050,6 @@ class Driver(Supervisor):
         # 1) Sense and compute: update heading, place/boundary cell activations
         #-------------------------------------------------------------------
         self.sense()
-
-        # Debug: Log suppression state periodically
-        if debug_print_interval > 0 and (self.step_count % debug_print_interval) <= 10:
-            if len(self.suppressed_trajectories) > 0:
-                print(f"[SUPPRESS] Active suppressions: {len(self.suppressed_trajectories)}")
-                for (scale_idx, direction), remaining in self.suppressed_trajectories.items():
-                    print(f"  Scale {scale_idx}, {direction*45:3d}° -> {remaining} steps remaining")
 
         self.compute_pcn_activations()
         self.update_hmaps(update_loc=True, update_pcn=True, update_scale_priority=True)
@@ -1823,12 +2083,38 @@ class Driver(Supervisor):
             )
 
         #-------------------------------------------------------------------
+        # 1c) Check if all scale reliabilities have hit near-minimum threshold
+        #-------------------------------------------------------------------
+        reliability_exploration_threshold = 0.15  # Trigger exploration if all scales below this
+        if use_scale_reliability and self.scale_reliability is not None:
+            all_near_minimum = torch.all(self.scale_reliability < reliability_exploration_threshold).item()
+            if all_near_minimum and not hasattr(self, 'triggered_min_reliability_exploration'):
+                # All scales have been pushed near minimum reliability - trigger forced exploration
+                print(f"[EXPLOIT] All scale reliabilities below threshold ({reliability_exploration_threshold}). Triggering forced exploration.")
+                print(f"  Reliability values: {self.scale_reliability.cpu().numpy()}")
+                self.force_explore_count = forced_exploration_steps
+                self.triggered_min_reliability_exploration = True  # Flag to prevent repeated triggers
+            elif not all_near_minimum:
+                # Reset flag when at least one scale recovers above threshold
+                if hasattr(self, 'triggered_min_reliability_exploration'):
+                    delattr(self, 'triggered_min_reliability_exploration')
+
+        #-------------------------------------------------------------------
         # 2) Forced Exploration Check
         #-------------------------------------------------------------------
         if self.force_explore_count > 0:
             self.force_explore_count -= 1
             if self.force_explore_count == 0:
-                print("[EXPLOIT_V11] Forced exploration complete. Resuming hierarchical navigation...")
+                print("[EXPLOIT] Forced exploration complete. Resuming hierarchical navigation...")
+
+            # During forced exploration, gradually regenerate reliability for all scales
+            if use_scale_reliability and self.scale_reliability is not None:
+                # Apply good factor uniformly to all scales to help them recover
+                self.scale_reliability = torch.clamp(
+                    self.scale_reliability * reliability_good_factor,
+                    min=reliability_min_floor,
+                    max=1.0
+                )
 
             self.explore()
             return
@@ -1927,8 +2213,8 @@ class Driver(Supervisor):
         ]
 
         # Initialize EMA state for scale weights if needed
-        if not hasattr(self, 'prev_scale_weights_v11'):
-            self.prev_scale_weights_v11 = None
+        if not hasattr(self, 'prev_scale_entropies_v11'):
+            self.prev_scale_entropies_v11 = None
 
         #-------------------------------------------------------------------
         # 6b) Set random seed for reproducibility (if specified)
@@ -1943,15 +2229,19 @@ class Driver(Supervisor):
         if use_sampling_preplay:
             # Stochastic sampling mode (biologically plausible)
             (final_direction_deg, expected_value, combined_vector,
-             discounted_returns, direction_vectors, joint_probs, trajectory_metadata, scale_weights, sampling_variances) = self.pcns[0].hierarchical_multiscale_preplay_sampling(
+             discounted_returns, direction_vectors, joint_probs, trajectory_metadata, scale_entropies, sampling_variances) = self.pcns[0].hierarchical_multiscale_preplay_sampling(
                 scales_data=scales_data,
                 num_steps=num_preplay_steps,
                 discount_factor=discount_factor,
                 within_scale_beta=within_scale_beta,
                 scale_selection_beta=scale_selection_beta,
                 ema_lambda=ema_lambda,
-                prev_scale_weights=self.prev_scale_weights_v11,
+                prev_scale_entropies=self.prev_scale_entropies_v11,
                 scale_reliability=self.scale_reliability if use_scale_reliability else None,
+                entropy_exponent=entropy_exponent,
+                reliability_exponent=reliability_exponent,
+                variance_lambda=variance_lambda,
+                use_entropy_ema=use_entropy_ema,
                 num_samples=num_samples_per_direction,
                 sampling_strategy=sampling_strategy,
                 sampling_temperature=sampling_temperature,
@@ -1966,50 +2256,25 @@ class Driver(Supervisor):
         else:
             # Exhaustive branching mode (original, default)
             (final_direction_deg, expected_value, combined_vector,
-             discounted_returns, direction_vectors, joint_probs, trajectory_metadata, scale_weights) = self.pcns[0].hierarchical_multiscale_preplay(
+             discounted_returns, direction_vectors, joint_probs, trajectory_metadata, scale_entropies) = self.pcns[0].hierarchical_multiscale_preplay(
                 scales_data=scales_data,
                 num_steps=num_preplay_steps,
                 discount_factor=discount_factor,
                 within_scale_beta=within_scale_beta,
                 scale_selection_beta=scale_selection_beta,
                 ema_lambda=ema_lambda,
-                prev_scale_weights=self.prev_scale_weights_v11,
+                prev_scale_entropies=self.prev_scale_entropies_v11,
                 scale_reliability=self.scale_reliability if use_scale_reliability else None,
+                entropy_exponent=entropy_exponent,
+                reliability_exponent=reliability_exponent,
                 debug=debug_enabled
             )
 
-        # Store scale weights for next timestep's EMA
-        self.prev_scale_weights_v11 = scale_weights
+        # Store scale entropies for next timestep's EMA
+        self.prev_scale_entropies_v11 = scale_entropies
 
         #-------------------------------------------------------------------
-        # 8) Apply Suppression Filtering
-        #-------------------------------------------------------------------
-        suppressed_mask = self._get_suppression_mask(trajectory_metadata)
-        active_traj_mask = ~suppressed_mask
-
-        if not torch.any(active_traj_mask):
-            # All trajectories suppressed -> force exploration
-            print("[EXPLOIT_V11] All trajectories suppressed. Forcing exploration.")
-            self.explore()
-            return
-
-        # Filter out suppressed trajectories
-        if torch.any(suppressed_mask):
-            # Some trajectories are suppressed, filter them out
-            joint_probs = joint_probs[active_traj_mask]
-            direction_vectors = direction_vectors[active_traj_mask]
-            discounted_returns = discounted_returns[active_traj_mask]
-            trajectory_metadata = [trajectory_metadata[i] for i, active in enumerate(active_traj_mask) if active]
-
-            # Renormalize joint probabilities
-            joint_probs = joint_probs / torch.clamp(torch.sum(joint_probs), min=1e-9)
-
-            if debug_enabled:
-                suppressed_count = torch.sum(suppressed_mask).item()
-                print(f"[EXPLOIT_V11] Filtered {suppressed_count} suppressed trajectories, {len(trajectory_metadata)} remain")
-
-        #-------------------------------------------------------------------
-        # 9) Apply Safety Filtering
+        # 8) Apply Safety Filtering
         #-------------------------------------------------------------------
         # Build safety mask: check if direction has sufficient clearance
         safe_traj_mask = torch.tensor(
@@ -2141,7 +2406,11 @@ class Driver(Supervisor):
         self.last_trajectory_probs = safe_probs.clone()
         self.last_trajectory_metadata = safe_metadata.copy()
         if use_scale_reliability:
-            self.last_scale_weights = scale_weights.clone()
+            # Compute scale weights from executed trajectory probabilities
+            executed_scale_weights = torch.zeros(len(scales_data), dtype=self.dtype, device=self.device)
+            for prob, meta in zip(safe_probs, safe_metadata):
+                executed_scale_weights[meta['scale_idx']] += prob
+            self.last_scale_weights = executed_scale_weights
 
         #-------------------------------------------------------------------
         # 12) Execute Movement
@@ -2164,27 +2433,26 @@ class Driver(Supervisor):
         #-------------------------------------------------------------------
         # Note: Collision will be detected in the next timestep after sense()
         if torch.any(self.collided):
-            # Mechanism 1: Suppress specific trajectories
-            if use_trajectory_suppression:
-                self._suppress_trajectories_on_collision(
-                    top_k=top_k_suppress,
-                    duration=trajectory_suppression_duration
-                )
-
-            # Mechanism 2: Penalize scale reliability
+            # Penalize scale reliability (ONLY if not in forced exploration mode)
             if use_scale_reliability and self.last_scale_weights is not None:
-                self._update_scale_reliability_bad(
-                    scale_weights=self.last_scale_weights,
-                    bad_factor=reliability_bad_factor,
-                    attribution=reliability_attribution,
-                    min_floor=reliability_min_floor,
-                    cooldown=self.reliability_good_cooldown if hasattr(self, 'reliability_good_cooldown') else None,
-                    cooldown_steps=reliability_good_cooldown_steps
-                )
-                if debug_enabled:
-                    print(f"[RELIABILITY] Collision penalty applied. Reliability: {self.scale_reliability.cpu().numpy()}")
+                # Check if we're in forced exploration mode - if so, skip bad updates
+                in_forced_exploration = hasattr(self, 'force_explore_count') and self.force_explore_count > 0
+                if not in_forced_exploration:
+                    self._update_scale_reliability_bad(
+                        scale_weights=self.last_scale_weights,
+                        bad_factor=reliability_bad_factor,
+                        attribution=reliability_attribution,
+                        min_floor=reliability_min_floor,
+                        cooldown=self.reliability_good_cooldown if hasattr(self, 'reliability_good_cooldown') else None,
+                        cooldown_steps=reliability_good_cooldown_steps
+                    )
+                    if debug_enabled:
+                        print(f"[RELIABILITY] Collision penalty applied. Reliability: {self.scale_reliability.cpu().numpy()}")
+                elif debug_enabled:
+                    print(f"[RELIABILITY] Collision during exploration - skipping penalty. Reliability: {self.scale_reliability.cpu().numpy()}")
         else:
             # No collision: naturally replenish reliability (good behavior)
+            # This happens both in normal exploit and during forced exploration
             if use_scale_reliability and self.last_scale_weights is not None:
                 self._update_scale_reliability_good(
                     scale_weights=self.last_scale_weights,
@@ -2192,9 +2460,6 @@ class Driver(Supervisor):
                     attribution=reliability_attribution,
                     cooldown=self.reliability_good_cooldown if hasattr(self, 'reliability_good_cooldown') else None
                 )
-
-        # Decay all active suppressions
-        self._decay_suppressions()
 
         return
 
@@ -2413,7 +2678,7 @@ class Driver(Supervisor):
         for gcn in self.gcns:
             if gcn is not None:
                 # Get grid cell activations for current position
-                grid_activations = gcn.get_grid_cell_activations(position)
+                grid_activations = gcn.get_grid_cell_activations(position, use_mask=False)
                 self.grid_activations_list.append(grid_activations)
             else:
                 # If no grid cells for this scale, add None as placeholder
@@ -2452,20 +2717,22 @@ class Driver(Supervisor):
         curr_pos = self.robot.getField("translation").getSFVec3f()
         time_limit = 120 # minutes
 
-        if self.robot_mode in (RobotMode.LEARN_OJAS, RobotMode.LEARN_HEBB, RobotMode.PLOTTING, RobotMode.PLOTTING_AUTO) \
-                and self.getTime() >= 60 * self.run_time_minutes:
-            self.stop()
-            is_plotting_mode = self.robot_mode in (RobotMode.PLOTTING, RobotMode.PLOTTING_AUTO)
-            self.save(include_pcn=not is_plotting_mode,
-                    include_rcn=not is_plotting_mode,
-                    include_gcn=not is_plotting_mode,
-                    include_hmaps=True)
-            self.done = True
-            # Only pause if not in AUTO mode, or if this is the last trial
-            if (self.robot_mode != RobotMode.PLOTTING_AUTO or
-                self.current_auto_trial == self.num_auto_trials):
-                self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
-            return
+        if self.robot_mode in (RobotMode.LEARN_OJAS, RobotMode.LEARN_HEBB, RobotMode.PLOTTING, RobotMode.PLOTTING_AUTO):
+            # Use trial elapsed time to avoid cumulative time issues in AUTO modes
+            trial_elapsed_time = self.getTime() - self.trial_start_time
+            if trial_elapsed_time >= 60 * self.run_time_minutes:
+                self.stop()
+                is_plotting_mode = self.robot_mode in (RobotMode.PLOTTING, RobotMode.PLOTTING_AUTO)
+                self.save(include_pcn=not is_plotting_mode,
+                        include_rcn=not is_plotting_mode,
+                        include_gcn=not is_plotting_mode,
+                        include_hmaps=True)
+                self.done = True
+                # Only pause if not in AUTO mode, or if this is the last trial
+                if (self.robot_mode != RobotMode.PLOTTING_AUTO or
+                    self.current_auto_trial == self.num_auto_trials):
+                    self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
+                return
 
         elif self.robot_mode == RobotMode.DMTP and torch.allclose(
             torch.tensor(self.goal_location, dtype=self.dtype, device=self.device),

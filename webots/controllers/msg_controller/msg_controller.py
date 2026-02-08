@@ -16,10 +16,10 @@ sys.path.append(str(PROJECT_ROOT))
 
 # Import necessary modules
 from core.layers.reward_cell_layer_v11 import C_LAMBDA
-from msg_driver_v13 import Driver
+from msg_driver import Driver
 from core.robot.robot_mode import RobotMode
 from analysis.stats.stats_collector import stats_collector
-from path_planning_v11 import generate_spawn_locations, calculate_optimal_paths, save_path_visualizations
+from path_planning import generate_spawn_locations, calculate_optimal_paths, save_path_visualizations
 
 #################################
 # Utility Functions
@@ -63,10 +63,10 @@ def save_trial_parameters(world_name, trial_id, mode, **kwargs):
         # Auto trial mode: pkl_{trial_name}/{world_name}_{trial_num}/
         base_folder = f"pkl_{auto_trial_name}"
         trial_folder = f"{world_name}_{current_auto_trial}"
-        save_folder = os.path.join(PROJECT_ROOT, "webots", "controllers", "msg_controller_v13", base_folder, trial_folder)
+        save_folder = os.path.join(PROJECT_ROOT, "webots", "controllers", "msg_controller", base_folder, trial_folder)
     else:
         # Standard mode: pkl/{world_name}/
-        save_folder = os.path.join(PROJECT_ROOT, "webots", "controllers", "msg_controller_v13", "pkl", world_name)
+        save_folder = os.path.join(PROJECT_ROOT, "webots", "controllers", "msg_controller", "pkl", world_name)
 
     os.makedirs(save_folder, exist_ok=True)
 
@@ -136,13 +136,13 @@ def _steps_for_sigma(sigma_pc_s: float) -> int:
     """Derive custom replay timesteps proportional to lambda_s; sigma drives lambda_s."""
     return int(math.ceil(C_LAMBDA * sigma_pc_s * STEPS_PER_LAMBDA))
 
-SCALES_DEFS = {
+SCALES_DEFS_GRID = {
     "small": {
         "scale_index": 0,
         "name": "small",
         "sigma_pc_s": 1.0,  # Place field size for scale-dependent reward propagation
         "num_pc": 2000,
-        "sigma_r": 1.0,
+        "sigma_r": 0.5, #0.5
         "sigma_theta": 1,
         "rcn_learning_rate": 0.1,
         # BVC parameters
@@ -151,21 +151,21 @@ SCALES_DEFS = {
         "w_in_init_ratio": 0.3,  # Proportion of BVC->PC weights active initially
         "w_grid_init_ratio": 0.3,  # Proportion of GC->PC weights active initially
         # Place cell recurrent inhibition parameters
-        "gamma_pp": 0.55,  # Place-to-place recurrent inhibition strength
-        "gamma_pb": 0.25,  # BVC-to-place afferent inhibition strength
+        "gamma_pp": 1.0,  # Place-to-place recurrent inhibition strength
+        "gamma_pb": 0.35,  # BVC-to-place afferent inhibition strength
         # Grid cell parameters
-        "grid_influence": 0.3, # 0.25
-        "gamma_pg": 0.4, # 0.3
+        "grid_influence": 0.3, # 0.3
+        "gamma_pg": 0.35, # 0.3
         "num_grid_cells": 800,
         "num_modules": 8,
         "cells_per_module": 100,
         "spread_range": (1.5, 1.5),
-        "scale_multiplier": 3.33,
+        "scale_multiplier": 4,
         "translation_scale": 2.0,
         "mask_resolution": 256,
-        "smooth_sigma": 1,
+        "smooth_sigma": 0.5,
         # Oja's learning normalization parameters
-        "alpha_pb": 0.548,  # np.sqrt(0.5) - BVC weight decay factor (default)
+        "alpha_pb": 0.447,  # np.sqrt(0.5) - BVC weight decay factor (default)
         "alpha_pg": 0.447,  # np.sqrt(0.3) - Grid weight decay factor (stronger decay = more selective)
         # Correlation-based weighting parameters
         "enable_correlation_weighting": False,
@@ -186,7 +186,7 @@ SCALES_DEFS = {
         "name": "medium",
         "sigma_pc_s": 1.5,  # Place field size for scale-dependent reward propagation
         "num_pc": 1000,
-        "sigma_r": 2.0,
+        "sigma_r": 1.0, #2
         "sigma_theta": 3,
         "rcn_learning_rate": 0.1,
         # BVC parameters
@@ -198,16 +198,16 @@ SCALES_DEFS = {
         "gamma_pp": 0.7,  # Place-to-place recurrent inhibition strength
         "gamma_pb": 0.35,  # BVC-to-place afferent inhibition strength
         # Grid cell parameters
-        "grid_influence": 0.35, #0.25
+        "grid_influence": 0.35, #0.35
         "gamma_pg": 0.35,
         "num_grid_cells": 400,
         "num_modules": 8,
         "cells_per_module": 50,
-        "spread_range": (2, 2),
-        "scale_multiplier": 5,
+        "spread_range": (1.5, 1.5),
+        "scale_multiplier": 5.5,
         "translation_scale": 2.0,
         "mask_resolution": 128,
-        "smooth_sigma": 1.5,
+        "smooth_sigma": 0.5,
         # Oja's learning normalization parameters
         "alpha_pb": 0.632,
         "alpha_pg": 0.632,
@@ -230,7 +230,7 @@ SCALES_DEFS = {
         "name": "large",
         "sigma_pc_s": 3.0,  # Place field size for scale-dependent reward propagation
         "num_pc": 500,
-        "sigma_r": 2.0,
+        "sigma_r": 1.5, # 2.0
         "sigma_theta": 5,
         "rcn_learning_rate": 0.1,
         # BVC parameters
@@ -239,19 +239,19 @@ SCALES_DEFS = {
         "w_in_init_ratio": 0.2,  # Proportion of BVC->PC weights active initially
         "w_grid_init_ratio": 0.2,  # Proportion of GC->PC weights active initially
         # Place cell recurrent inhibition parameters
-        "gamma_pp": 0.5,  # Place-to-place recurrent inhibition strength
+        "gamma_pp": 0.7,  # Place-to-place recurrent inhibition strength
         "gamma_pb": 0.25,  # BVC-to-place afferent inhibition strength
         # Grid cell parameters
-        "grid_influence": 0.35,  # 0.3
+        "grid_influence": 0.35,  # 0.35
         "gamma_pg": 0.25,
         "num_grid_cells": 400,
         "num_modules": 8,
         "cells_per_module": 50,
-        "spread_range": (2, 2),
-        "scale_multiplier": 7.5,
+        "spread_range": (1.5, 1.5),
+        "scale_multiplier": 7,
         "translation_scale": 2.0,
         "mask_resolution": 128,
-        "smooth_sigma": 1.5,
+        "smooth_sigma": 0.5,
         # Correlation-based weighting parameters
         "enable_correlation_weighting": False,
         "correlation_window": 18, #24, 20
@@ -307,12 +307,183 @@ SCALES_DEFS = {
     }
 }
 
+SCALES_DEFS_NO_GRID = {
+    "small": {
+        "scale_index": 0,
+        "name": "small",
+        "sigma_pc_s": 1.0,  # Place field size for scale-dependent reward propagation
+        "num_pc": 2000,
+        "sigma_r": 0.5, #0.5
+        "sigma_theta": 1,
+        "rcn_learning_rate": 0.1,
+        # BVC parameters
+        "num_bvc_per_dir": 100,  # Number of BVCs per head direction
+        # Weight initialization parameters
+        "w_in_init_ratio": 0.3,  # Proportion of BVC->PC weights active initially
+        "w_grid_init_ratio": 0.3,  # Proportion of GC->PC weights active initially
+        # Place cell recurrent inhibition parameters
+        "gamma_pp": 1.0,  # Place-to-place recurrent inhibition strength
+        "gamma_pb": 0.35,  # BVC-to-place afferent inhibition strength
+        # Grid cell parameters
+        "grid_influence": 0.0, # 0.3
+        "gamma_pg": 0.35, # 0.3
+        "num_grid_cells": 800,
+        "num_modules": 8,
+        "cells_per_module": 100,
+        "spread_range": (1.5, 1.5),
+        "scale_multiplier": 4,
+        "translation_scale": 2.0,
+        "mask_resolution": 256,
+        "smooth_sigma": 1,
+        # Oja's learning normalization parameters
+        "alpha_pb": 0.447,  # np.sqrt(0.5) - BVC weight decay factor (default)
+        "alpha_pg": 0.447,  # np.sqrt(0.3) - Grid weight decay factor (stronger decay = more selective)
+        # Correlation-based weighting parameters
+        "enable_correlation_weighting": False,
+        "correlation_window": 8, #12, 10
+        "correlation_update_freq": 1, #2
+        "correlation_scaling": 10, #2.5
+        "min_correlation_weight": 0.10, #0.03
+        "correlation_threshold": 0.005, #0.015
+        # Reward cell replay parameters
+        "replay_timesteps": 100,  # Number of timesteps for regular replay
+        "replay_decay_factor": 3,  # FAST decay - rewards diminish quickly with distance
+        "custom_replay_timesteps": _steps_for_sigma(1.0),  # Spread scaled to lambda_s
+        "initial_value_multiplier": 2.0,  # HIGHEST starting value - strongest near goal
+
+    },
+    "medium": {
+        "scale_index": 1,
+        "name": "medium",
+        "sigma_pc_s": 1.5,  # Place field size for scale-dependent reward propagation
+        "num_pc": 1000,
+        "sigma_r": 1.0, #2
+        "sigma_theta": 3,
+        "rcn_learning_rate": 0.1,
+        # BVC parameters
+        "num_bvc_per_dir": 50,  # Number of BVCs per head direction
+        # Weight initialization parameters
+        "w_in_init_ratio": 0.25,  # Proportion of BVC->PC weights active initially
+        "w_grid_init_ratio": 0.3,  # Proportion of GC->PC weights active initially
+        # Place cell recurrent inhibition parameters
+        "gamma_pp": 0.7,  # Place-to-place recurrent inhibition strength
+        "gamma_pb": 0.35,  # BVC-to-place afferent inhibition strength
+        # Grid cell parameters
+        "grid_influence": 0.0, #0.35
+        "gamma_pg": 0.35,
+        "num_grid_cells": 400,
+        "num_modules": 8,
+        "cells_per_module": 50,
+        "spread_range": (1.5, 1.5),
+        "scale_multiplier": 5.5,
+        "translation_scale": 2.0,
+        "mask_resolution": 128,
+        "smooth_sigma": 1.5,
+        # Oja's learning normalization parameters
+        "alpha_pb": 0.632,
+        "alpha_pg": 0.632,
+        # Correlation-based weighting parameters
+        "enable_correlation_weighting": False,
+        "correlation_window": 12, #18, 15
+        "correlation_update_freq": 1, #4
+        "correlation_scaling": 10, #3.0
+        "min_correlation_weight": 0.10, #0.06
+        "correlation_threshold": 0.05, #0.03
+        # Reward cell replay parameters
+        "replay_timesteps": 40,  # Number of timesteps for regular replay
+        "replay_decay_factor": 8,  # Medium decay - balanced propagation
+        "custom_replay_timesteps": _steps_for_sigma(1.5),  # Spread scaled to lambda_s
+        "initial_value_multiplier": 1.5,  # Medium starting value - strongest at medium distances
+
+    },
+    "large": {
+        "scale_index": 2,
+        "name": "large",
+        "sigma_pc_s": 3.0,  # Place field size for scale-dependent reward propagation
+        "num_pc": 500,
+        "sigma_r": 1.5, # 2.0
+        "sigma_theta": 5,
+        "rcn_learning_rate": 0.1,
+        # BVC parameters
+        "num_bvc_per_dir": 75,  # Number of BVCs per head direction
+        # Weight initialization parameters
+        "w_in_init_ratio": 0.2,  # Proportion of BVC->PC weights active initially
+        "w_grid_init_ratio": 0.2,  # Proportion of GC->PC weights active initially
+        # Place cell recurrent inhibition parameters
+        "gamma_pp": 0.7,  # Place-to-place recurrent inhibition strength
+        "gamma_pb": 0.25,  # BVC-to-place afferent inhibition strength
+        # Grid cell parameters
+        "grid_influence": 0.0,  # 0.35
+        "gamma_pg": 0.25,
+        "num_grid_cells": 400,
+        "num_modules": 8,
+        "cells_per_module": 50,
+        "spread_range": (1.5, 1.5),
+        "scale_multiplier": 7,
+        "translation_scale": 2.0,
+        "mask_resolution": 128,
+        "smooth_sigma": 1.5,
+        # Correlation-based weighting parameters
+        "enable_correlation_weighting": False,
+        "correlation_window": 18, #24, 20
+        "correlation_update_freq": 1, #6
+        "correlation_scaling": 10, #2.5
+        "min_correlation_weight": 0.10, #0.12
+        "correlation_threshold": 0.05, #0.05
+        # Reward cell replay parameters
+        "replay_timesteps": 40,  # Number of timesteps for regular replay
+        "replay_decay_factor": 20,  # SLOW decay - rewards persist over long distances
+        "custom_replay_timesteps": _steps_for_sigma(3.0),  # Spread scaled to lambda_s
+        "initial_value_multiplier": 1.0,  # LOWEST starting value - strongest far from goal
+    },
+    "xlarge": {
+        "scale_index": 3,
+        "name": "xlarge",
+        "sigma_pc_s": 5.0,  # Place field size for scale-dependent reward propagation
+        "num_pc": 200,
+        "sigma_r": 4,
+        "sigma_theta": 8,
+        "rcn_learning_rate": 0.005,
+        # BVC parameters
+        "num_bvc_per_dir": 50,  # Number of BVCs per head direction
+        # Weight initialization parameters
+        "w_in_init_ratio": 0.25,  # Proportion of BVC->PC weights active initially
+        "w_grid_init_ratio": 0.25,  # Proportion of GC->PC weights active initially
+        # Place cell recurrent inhibition parameters
+        "gamma_pp": 0.5,  # Place-to-place recurrent inhibition strength
+        "gamma_pb": 0.3,  # BVC-to-place afferent inhibition strength
+        # Grid cell parameters
+        "grid_influence": 0.0,  # 0.35
+        "gamma_pg": 0.32,
+        "num_grid_cells": 400,
+        "num_modules": 8,
+        "cells_per_module": 50,
+        "spread_range": (1.0, 1.0),
+        "scale_multiplier": 5.0,
+        "translation_scale": 1.0,
+        "mask_resolution": 96,
+        "smooth_sigma": 1.5,
+        # Correlation-based weighting parameters
+        "enable_correlation_weighting": True,
+        "correlation_window": 30,
+        "correlation_update_freq": 8,
+        "correlation_scaling": 2.0,
+        "min_correlation_weight": 0.18,
+        "correlation_threshold": 0.08,
+        # Reward cell replay parameters
+        "replay_timesteps": 20,  # Number of timesteps for regular replay
+        "replay_decay_factor": 25,  # Very slow decay - maximum persistence
+        "custom_replay_timesteps": _steps_for_sigma(5.0),  # Spread scaled to lambda_s
+        "initial_value_multiplier": 0.8,  # Very low starting value - only dominant at extreme distances
+    }
+}
+
 def compile_scales(scale_names):
     """
     Convert a list of scale names (e.g. ["small", "large"]) into a list of
     actual scale definitions from SCALES_DEFS.
     """
-    return [SCALES_DEFS[name] for name in scale_names]
+    return [SCALES_DEFS_GRID[name] for name in scale_names]
 
 
 #################################
@@ -1293,7 +1464,7 @@ if __name__ == "__main__":
         "PLOTTING_COVERAGE_AUTO": RobotMode.PLOTTING_COVERAGE_AUTO,
     }
 
-    SELECTED_MODE = "EXPLOIT_LOCATIONS_RANDOM"
+    SELECTED_MODE = "PLOTTING_AUTO"
     td_learning = False # keep off
     corners = [[8,-8]] # start point
     dmtp_start = [-9,9]
@@ -1310,7 +1481,7 @@ if __name__ == "__main__":
     large = ["large"]
 
     scale_names = multiscale # what scales you are using
-    run_time_hours = 6
+    run_time_hours = 15
     max_dist = 25
     plot_bvc = False
 
@@ -1354,7 +1525,7 @@ if __name__ == "__main__":
     path_failure_ratio = 10.0  # Fail if robot travels 2x optimal distance
 
     # Auto trial parameters (shared by both LEARN and EXPLOIT AUTO modes)
-    auto_trial_name = "GC_COR"  # Trial set name (creates pkl_{name} and stats_{name} folders)
+    auto_trial_name = "GC_FIXED"  # Trial set name (creates pkl_{name} and stats_{name} folders)
     num_auto_trials = 5  # Number of trials to run automatically
 
 

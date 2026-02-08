@@ -28,15 +28,15 @@ WORLD_CONFIGS = {
                 "type": "rectangle",
                 "name": "horizontal_wall",
                 # Wall at translation 0, z=-0.25, size 12x0.5 (horizontal)
-                # Bounds: x=[-6, 6], z=[-0.5, 0]
-                "bounds": [[-6.0, -0.5], [6.0, 0.0]]
+                # Bounds: x=[-6, 6], z=[-0.25, 0.25]
+                "bounds": [[-6.0, -0.25], [6.0, 0.25]]
             },
             {
                 "type": "rectangle",
                 "name": "vertical_wall",
                 # Wall at translation -0.25, z=0, size 12x0.5 (vertical, rotated 90°)
-                # Bounds: x=[-0.5, 0], z=[-6, 6]
-                "bounds": [[-0.5, -6.0], [0.0, 6.0]]
+                # Bounds: x=[-0.25, 0.25], z=[-6, 6]
+                "bounds": [[-0.25, -6.0], [0.25, 6.0]]
             }
         ]
     },
@@ -44,48 +44,53 @@ WORLD_CONFIGS = {
     "20x20_maze_multi_goal": {
         "size": [20.0, 20.0],
         "obstacles": [
-            # Internal maze walls extracted from 20x20_maze_multi_goal.wbt
             {
                 "type": "rectangle",
                 "name": "MazeMid_HorizLeft",
-                # Wall at translation -5.25, z=3, size 9.5x0.5 (horizontal)
-                # Bounds: x=[-10.0, -0.5], z=[2.75, 3.25]
-                "bounds": [[-10.0, 2.75], [-0.5, 3.25]]
+                # Wall at translation -5.25, z=3, rotated 0°, size 9.5x0.5
+                # Internal offset: +0.25 in Z → Box center at z=3.25
+                # Bounds: x=[-10, -0.5], z=[3.0, 3.5]
+                "bounds": [[-10.0, 3.0], [-0.5, 3.5]]
             },
             {
                 "type": "rectangle",
                 "name": "MazeMid_HorizRight",
-                # Wall at translation 5.25, z=-3.2, size 9.5x0.5 (horizontal)
-                # Bounds: x=[0.5, 10.0], z=[-3.45, -2.95]
-                "bounds": [[0.5, -3.45], [10.0, -2.95]]
+                # Wall at translation 5.25, z=-3.2, rotated 0°, size 9.5x0.5
+                # Internal offset: +0.25 in Z → Box center at z=-2.95
+                # Bounds: x=[0.5, 10], z=[-3.2, -2.7]
+                "bounds": [[0.5, -3.2], [10.0, -2.7]]
             },
             {
                 "type": "rectangle",
                 "name": "MazeMid_VertLeft",
-                # Wall at translation -4, z=-0.2, size 6.4x0.5 (vertical, rotated 90°)
-                # Bounds: x=[-4.25, -3.75], z=[-3.4, 3.0]
-                "bounds": [[-4.25, -3.4], [-3.75, 3.0]]
+                # Wall at translation -4, z=-0.2, rotated 90°, size 6.4x0.5
+                # Internal offset rotates: +0.25 in X → Box center at x=-3.75
+                # Bounds: x=[-4.0, -3.5], z=[-3.4, 3.0]
+                "bounds": [[-4.0, -3.4], [-3.5, 3.0]]
             },
             {
                 "type": "rectangle",
                 "name": "MazeMid_VertRight",
-                # Wall at translation 3, z=0.5, size 6.4x0.5 (vertical, rotated 90°)
-                # Bounds: x=[2.75, 3.25], z=[-2.7, 3.7]
-                "bounds": [[2.75, -2.7], [3.25, 3.7]]
+                # Wall at translation 3, z=0.5, rotated 90°, size 6.4x0.5
+                # Internal offset rotates: +0.25 in X → Box center at x=3.25
+                # Bounds: x=[3.0, 3.5], z=[-2.7, 3.7]
+                "bounds": [[3.0, -2.7], [3.5, 3.7]]
             },
             {
                 "type": "rectangle",
                 "name": "MazeBottom_VertCenter",
-                # Wall at translation 0.5, z=-8.5, size 3x0.5 (vertical, rotated 90°)
-                # Bounds: x=[0.25, 0.75], z=[-10.0, -7.0]
-                "bounds": [[0.25, -10.0], [0.75, -7.0]]
+                # Wall at translation 0.5, z=-8.5, rotated 90°, size 3x0.5
+                # Internal offset rotates: +0.25 in X → Box center at x=0.75
+                # Bounds: x=[0.5, 1.0], z=[-10, -7]
+                "bounds": [[0.5, -10.0], [1.0, -7.0]]
             },
             {
                 "type": "rectangle",
-                "name": "MazeTop_VertCenter",
-                # Wall at translation -1, z=8.5, size 3x0.5 (vertical, rotated 90°)
-                # Bounds: x=[-1.25, -0.75], z=[7.0, 10.0]
-                "bounds": [[-1.25, 7.0], [-0.75, 10.0]]
+                "name": "MazeBottom_VertTop",
+                # Wall at translation -1, z=8.5, rotated 90°, size 3x0.5
+                # Internal offset rotates: +0.25 in X → Box center at x=-0.75
+                # Bounds: x=[-1.0, -0.5], z=[7, 10]
+                "bounds": [[-1.0, 7.0], [-0.5, 10.0]]
             }
         ]
     }

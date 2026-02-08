@@ -16,7 +16,7 @@ WorldInfo {
 }
 Viewpoint {
   orientation -0.7071057814660382 0.7071077809056435 5.551115123136879e-17 3.1415966524690035
-  position 4.2553367072649017e-13 55.71962011395573 9.387921175801812e-15
+  position -3.121154668922112e-05 44.681563369469515 3.121163537818555e-05
   near 0.1
   follow "Create"
   followType "None"
@@ -100,7 +100,7 @@ Pose {
 DEF agent Create {
   translation 0 0.0441865 0
   rotation -0.6607352787486408 0.5303053028717288 0.5312298722427797 1.9727887896457816
-  controller "msg_test_v10"
+  controller "msg_controller"
   supervisor TRUE
   bodySlot [
     Solid {
