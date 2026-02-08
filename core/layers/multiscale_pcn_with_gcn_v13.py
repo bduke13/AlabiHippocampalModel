@@ -583,34 +583,6 @@ class MultiscalePlaceCellWithGrid:
 
         return place_cell_activations
 
-    def preplay_from_state(self, starting_activations: torch.Tensor, direction: int, num_steps: int = 1) -> torch.Tensor:
-        """Perform preplay starting from an arbitrary place cell activation state.
-
-        Args:
-            starting_activations: Place cell activations to start from (shape: num_pc)
-            direction: Index of head direction for exploiting recurrent weights (0-7)
-            num_steps: Number of preplay steps to simulate
-
-        Returns:
-            Updated place cell activations after preplay
-        """
-        # Copy starting activations
-        place_cell_activations = starting_activations.clone()
-
-        # Iterate preplay steps
-        for _ in range(num_steps):
-            previous_activations = place_cell_activations.clone()
-
-            # Use directional connections from the specified HD slice
-            updated = torch.matmul(
-                self.w_rec_tripartite[direction], previous_activations
-            )
-
-            updated = updated - previous_activations
-            place_cell_activations = torch.tanh(torch.relu(updated))
-
-        return place_cell_activations
-
     def _compute_learned_turn_probabilities_batched(self, activations: torch.Tensor, current_directions: torch.Tensor, temperature: float = 1.0) -> torch.Tensor:
         """Compute turn probabilities for batched trajectories using learned W_rec weights.
 

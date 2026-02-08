@@ -1464,7 +1464,7 @@ if __name__ == "__main__":
         "PLOTTING_COVERAGE_AUTO": RobotMode.PLOTTING_COVERAGE_AUTO,
     }
 
-    SELECTED_MODE = "PLOTTING_AUTO"
+    SELECTED_MODE = "LEARN_LOCATIONS_COVERAGE"
     td_learning = False # keep off
     corners = [[8,-8]] # start point
     dmtp_start = [-9,9]
