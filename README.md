@@ -8,6 +8,10 @@ B. FILL IN ANY MORE
 ## Overview
 This project explores the role of place cells in the hippocampus of rodents, focusing on how they encode physical space. This model is based off of research that studies place cells in rat hippocampuses. This model aims to further the research of place cell based navigational models.
 
+## Contributors
+- **Abdullahi Alabi** - Original research and model development
+- **bduke13** - Implementation and maintenance
+
 ## Usage
 1. **Initialize the Driver**: The `Driver` class controls the robot and its interactions with the environment. It handles the loading or initialization of neural networks (place cell network and reward cell network) and manages the robot's sensors and movements.
 
