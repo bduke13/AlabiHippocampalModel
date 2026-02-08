@@ -9,7 +9,7 @@ B. FILL IN ANY MORE
 This project explores the role of place cells in the hippocampus of rodents, focusing on how they encode physical space. This model is based off of research that studies place cells in rat hippocampuses. This model aims to further the research of place cell based navigational models.
 
 ## Contributors
-- **Abdullahi Alabi** - Original research and model development
+- **Abdullahi Alabi** - Original research (see Citations)
 - **bduke13** - Implementation and maintenance
 
 ## Usage
