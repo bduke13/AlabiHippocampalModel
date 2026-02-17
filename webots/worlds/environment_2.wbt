@@ -1,0 +1,98 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/Parquetry.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/robots/irobot/create/protos/Create.proto"
+EXTERNPROTO "../protos/Goal.proto"
+EXTERNPROTO "../protos/Wall.proto"
+
+WorldInfo {
+}
+Viewpoint {
+  orientation 0.5773502691896258 -0.5773502691896258 -0.5773502691896258 4.188785307179587
+  position 4.38659477195762e-10 4.386607135775057e-10 62.038035855419785
+}
+TexturedBackground {
+}
+TexturedBackgroundLight {
+}
+RectangleArena {
+  floorSize 20 20
+  floorAppearance Parquetry {
+    type "light strip"
+  }
+  wallThickness 0.06
+  wallHeight 0.5
+}
+Wall {
+  translation 0 3 0.5
+  rotation 0 0 1 1.5707996938995747
+  size 14 0.2 1
+}
+Wall {
+  name "wall2"
+  translation 0 -7.8 0.5
+  rotation 0 0 1 1.5707996938995747
+}
+Goal {
+  name "goal_1"
+  translation 9 9 0
+  radius 0.8
+  height 0.1
+}
+Goal {
+  name "goal_2"
+  translation -9 9 0
+  radius 0.8
+  height 0.1
+  color 0 1 0
+}
+Goal {
+  name "goal_3"
+  translation 9 -9 0
+  radius 0.8
+  height 0.1
+  color 0 0 1
+}
+Goal {
+  name "goal_4"
+  translation -9 -9 0
+  radius 0.8
+  height 0.1
+  color 1 1 0
+}
+DEF agent Create {
+  translation 0 0.0441865 0
+  controller "msg_controller"
+  supervisor TRUE
+  bodySlot [
+    Solid {
+      translation 0 0 0.04
+      children [
+        Display {
+          width 100
+          height 100
+        }
+        Compass {
+        }
+        DEF range-finder RangeFinder {
+          fieldOfView 6.28
+          width 720
+          height 1
+          projection "cylindrical"
+          maxRange 30
+        }
+        Shape {
+          appearance PBRAppearance {
+          }
+          geometry Cylinder {
+            height 0.04
+            radius 0.05
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -189,7 +189,7 @@ def plot_all_multi_scale_cells(
         plot_scale_cells(
             hmap_pcn=hmap_pcn_dict[scale],
             hmap_x=hmap_x,
-            hmap_y=hmap_y,
+            hmap_y=hmap_z,
             scale=scale,
             gridsize=gridsize,
             num_cells_to_sample=num_cells_to_sample,
@@ -204,7 +204,7 @@ def plot_all_multi_scale_cells(
             plot_scale_cells(
                 hmap_pcn=hmap_pcn_dict[scale],
                 hmap_x=hmap_x,
-                hmap_y=hmap_y,
+                hmap_y=hmap_z,
                 scale=scale,
                 gridsize=gridsize,
                 num_cells_to_sample=None,  # Plot all cells

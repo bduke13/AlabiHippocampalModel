@@ -8,7 +8,7 @@ This module handles:
 
 Note: World environment definitions are imported from core.robot.webots_worlds
 
-Author: Claude Code
+Author: Obadah and Alex
 """
 
 import numpy as np

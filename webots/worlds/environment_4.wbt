@@ -1,0 +1,124 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/Parquetry.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/robots/irobot/create/protos/Create.proto"
+EXTERNPROTO "../protos/Goal.proto"
+EXTERNPROTO "../protos/Wall.proto"
+
+WorldInfo {
+}
+Viewpoint {
+  orientation 0.5870595519222485 -0.5800515930504864 -0.5647134068679809 4.157432293085611
+  position 0.03484890608543678 2.0658002544295804 51.60958447600893
+}
+TexturedBackground {
+}
+TexturedBackgroundLight {
+}
+RectangleArena {
+  floorSize 20 20
+  floorAppearance Parquetry {
+    type "light strip"
+  }
+  wallThickness 0.06
+  wallHeight 0.5
+}
+Wall {
+  translation 0 3 0.5
+  rotation 0 0 1 1.5707996938995747
+  size 14 0.2 1
+}
+Wall {
+  name "wall2"
+  translation 0 -7.8 0.5
+  rotation 0 0 1 1.5707996938995747
+}
+Wall {
+  name "wall3"
+  translation 4 4.7 0.5
+  size 8 0.2 1
+}
+Wall {
+  name "wall4"
+  translation -6 4.7 0.5
+  size 8 0.2 1
+}
+Wall {
+  name "wall5"
+  translation -6 -3.3 0.5
+  rotation 0 0 1 1.5707996938995747
+  size 13 0.2 1
+}
+Wall {
+  name "wall6"
+  translation -3.9 -5.8 0.5
+}
+Wall {
+  name "wall7"
+  translation 5 -3.9 0.5
+  size 6 0.2 1
+}
+Goal {
+  name "goal_1"
+  translation 9 9 0
+  radius 0.8
+  height 0.1
+}
+Goal {
+  name "goal_2"
+  translation -9 9 0
+  radius 0.8
+  height 0.1
+  color 0 1 0
+}
+Goal {
+  name "goal_3"
+  translation 9 -9 0
+  radius 0.8
+  height 0.1
+  color 0 0 1
+}
+Goal {
+  name "goal_4"
+  translation -9 -9 0
+  radius 0.8
+  height 0.1
+  color 1 1 0
+}
+DEF agent Create {
+  translation 0 0.0441865 0
+  rotation 0 0 1 0
+  controller "multiscale_controller"
+  supervisor TRUE
+  bodySlot [
+    Solid {
+      translation 0 0 0.04
+      children [
+        Display {
+          width 100
+          height 100
+        }
+        Compass {
+        }
+        DEF range-finder RangeFinder {
+          fieldOfView 6.28
+          width 720
+          height 1
+          projection "cylindrical"
+          maxRange 30
+        }
+        Shape {
+          appearance PBRAppearance {
+          }
+          geometry Cylinder {
+            height 0.04
+            radius 0.05
+          }
+        }
+      ]
+    }
+  ]
+}

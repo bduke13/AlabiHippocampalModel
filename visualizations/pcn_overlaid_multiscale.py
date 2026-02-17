@@ -6,7 +6,7 @@ import pickle
 from typing import Optional, List
 
 # Hardcoded world name
-WORLD_NAME = "10x10"
+WORLD_NAME = "environment_1"
 CONTROLLER_NAME = "multiscale_controller"
 
 def load_pickle(file_path):

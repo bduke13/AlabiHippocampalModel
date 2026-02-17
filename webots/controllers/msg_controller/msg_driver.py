@@ -25,6 +25,8 @@ from core.layers.multiscale_pcn import PlaceCellLayer
 from core.layers.multiscale_pcn_with_gcn_v13 import MultiscalePlaceCellWithGrid
 from core.layers.grid_cell_layer_v13 import GridCellLayer
 from core.layers.reward_cell_layer_v11 import RewardCellLayerTest, C_LAMBDA
+from core.layers.unified_multiscale_pcn import UnifiedMultiScalePCN
+from core.layers.unified_multiscale_rcn import UnifiedMultiScaleRCN
 from core.robot.robot_mode import RobotMode
 from analysis.stats.stats_collector import stats_collector
 
@@ -99,6 +101,7 @@ class Driver(Supervisor):
         plot_bvc: Optional[bool] = False,
         td_learning: Optional[bool] = False,
         use_prox_mod: Optional[bool] = False,
+        use_unified_multiscale: Optional[bool] = False,
         environment_size: Optional[List[float]] = None,
         grid_size: Optional[float] = None,
         coverage_percentage: Optional[float] = None,
@@ -181,6 +184,10 @@ class Driver(Supervisor):
         self.goal_r = {"explore": 0.3, "exploit": 0.5}
         self.goal_location = goal_location if goal_location else [-3, 3]
         self.start_loc = start_loc
+        # Webots world coordinates in this project are treated as [x, z, y]
+        # with index 2 as vertical height.
+        self.spawn_ground_y = 0.044
+        self.upright_rotation = [0, 0, 1, 0]
 
         # Default single scale if none provided
         if not scales:
@@ -197,6 +204,7 @@ class Driver(Supervisor):
         self.rcn_learning_rates = rcn_learning_rates if rcn_learning_rates is not None else [0.1] * len(scales)
         self.td_learning = td_learning
         self.use_prox_mod = use_prox_mod
+        self.use_unified_multiscale = use_unified_multiscale
 
         # Store coverage parameters
         self.environment_size = environment_size
@@ -226,24 +234,26 @@ class Driver(Supervisor):
             while True:
                 candidate = [
                     random.uniform(-2.3, 2.3),
-                    0,
-                    random.uniform(-2.3, 2.3)
+                    random.uniform(-2.3, 2.3),
+                    self.spawn_ground_y
                 ]
                 # Check against all goals in unified system
                 min_dist = float('inf')
                 for goal in self.goals:
                     dist = np.sqrt(
                         (candidate[0] - goal["location"][0]) ** 2 +
-                        (candidate[2] - goal["location"][1]) ** 2
+                        (candidate[1] - goal["location"][1]) ** 2
                     )
                     min_dist = min(min_dist, dist)
                 if min_dist >= 1.0:
                     break
             self.robot.getField("translation").setSFVec3f(candidate)
+            self.robot.getField("rotation").setSFRotation(self.upright_rotation)
             self.robot.resetPhysics()
         else:
             if self.start_loc is not None:
-                self.robot.getField("translation").setSFVec3f([self.start_loc[0], 0, self.start_loc[1]])
+                self.robot.getField("translation").setSFVec3f([self.start_loc[0], self.start_loc[1], self.spawn_ground_y])
+                self.robot.getField("rotation").setSFRotation(self.upright_rotation)
                 self.robot.resetPhysics()
 
         # Initialize sensors
@@ -285,8 +295,14 @@ class Driver(Supervisor):
         self.rcns = []
         self.load_pcns(enable_ojas, enable_stdp)
         self.load_rcns()
-        print(f"[DRIVER] Using PCNs: {[f'pcn_scale_{scale_def['scale_index']}.pkl' for scale_def in self.scales]}")
-        print(f"[DRIVER] Using RCNs: {[f'rcn_scale_{scale_def['scale_index']}.pkl' for scale_def in self.scales]}")
+        if self.use_unified_multiscale:
+            print("[DRIVER] Using PCNs: ['unified_pcn.pkl']")
+            print("[DRIVER] Using RCNs: ['unified_rcn.pkl']")
+        else:
+            pcn_files = [f"pcn_scale_{scale_def['scale_index']}.pkl" for scale_def in self.scales]
+            rcn_files = [f"rcn_scale_{scale_def['scale_index']}.pkl" for scale_def in self.scales]
+            print(f"[DRIVER] Using PCNs: {pcn_files}")
+            print(f"[DRIVER] Using RCNs: {rcn_files}")
 
         # Head direction layer
         self.head_direction_layer = HeadDirectionLayer(num_cells=self.n_hd, device="cpu")
@@ -300,6 +316,7 @@ class Driver(Supervisor):
         self.hmap_loc = np.zeros((self.num_steps, 3))
         self.hmap_hdn = torch.zeros((self.num_steps, self.n_hd), device="cpu", dtype=torch.float32)
         self.hmap_prox = torch.zeros((self.num_steps,), device="cuda", dtype=torch.float32)
+        self.prox = 0.0
         self.hmap_scale_priority = torch.zeros(
             (self.num_steps, len(self.scales)),  # row per step, col per scale
             device="cuda", 
@@ -333,6 +350,9 @@ class Driver(Supervisor):
         
         # Number of steps to force exploration (init to 0)
         self.force_explore_count = 0
+        self.training_log_interval_steps = 100
+        self.coverage_incomplete_log_interval_steps = 500
+        self.last_coverage_incomplete_log_step = -10**9
 
         # Per-scale reliability tracking
         # Reset to None at start of each trial - will be re-initialized to 1.0 in exploit_v12
@@ -348,8 +368,30 @@ class Driver(Supervisor):
         # For EXPLOIT_LOCATIONS_RANDOM, load goal-specific RCNs
         if self.robot_mode in {RobotMode.EXPLOIT_LOCATIONS_RANDOM, RobotMode.EXPLOIT_LOCATIONS_RANDOM_AUTO} and hasattr(self, 'active_goal_name'):
             self._load_goal_specific_rcns(self.active_goal_name)
+        # Also enforce per-goal maps for unified exploit when multi-goal target is available.
+        self._ensure_goal_specific_rcn_loaded_for_exploit()
 
         self.plot_bvc = plot_bvc
+
+        if self.use_unified_multiscale:
+            print("[DRIVER] *** UNIFIED MULTI-SCALE MODE ENABLED ***")
+            print("[DRIVER] Using adaptive cross-scale inhibition and unified replay")
+
+        # Coverage-learning specific startup diagnostics.
+        if self.robot_mode in {RobotMode.LEARN_LOCATIONS_COVERAGE, RobotMode.LEARN_LOCATIONS_COVERAGE_AUTO}:
+            ojas_enabled, stdp_enabled = self._get_learning_flags()
+            print(
+                f"[TRAIN] Coverage learning start | unified={self.use_unified_multiscale} "
+                f"| OJAS={ojas_enabled} | STDP={stdp_enabled}"
+            )
+            if hasattr(self, "target_coverage_percentage"):
+                print(
+                    f"[TRAIN] Targets | coverage>={self.target_coverage_percentage*100:.1f}% "
+                    f"| min_goal_visits={self.min_goal_visits}"
+                )
+            if hasattr(self, "goal_visit_counts"):
+                goal_names = ", ".join(list(self.goal_visit_counts.keys()))
+                print(f"[TRAIN] Goals: {goal_names}")
 
         # Step once
         self.step(self.timestep)
@@ -362,25 +404,153 @@ class Driver(Supervisor):
     #                           PCN / RCN LOADING                            #
     ##########################################################################
     def load_pcns(self, enable_ojas: Optional[bool], enable_stdp: Optional[bool]):
-        self.pcns = []
-        for i, scale_def in enumerate(self.scales):
-            scale_idx = scale_def["scale_index"]
-            fname = f"pcn_scale_{scale_idx}.pkl"
-            path = os.path.join(self.network_dir, fname)
+        if self.use_unified_multiscale:
+            self._load_unified_pcn(enable_ojas, enable_stdp)
+        else:
+            self.pcns = []
+            for i, scale_def in enumerate(self.scales):
+                scale_idx = scale_def["scale_index"]
+                fname = f"pcn_scale_{scale_idx}.pkl"
+                path = os.path.join(self.network_dir, fname)
 
-            # Get corresponding grid cell network (may be None)
-            gcn = self.gcns[i]
-            num_grid_cells = scale_def.get("num_grid_cells", 0) if gcn else 0
+                # Get corresponding grid cell network (may be None)
+                gcn = self.gcns[i]
+                num_grid_cells = scale_def.get("num_grid_cells", 0) if gcn else 0
 
-            pcn = self._load_or_init_pcn_for_scale(
-                path,
-                scale_def,
-                num_grid_cells,
-                enable_ojas if enable_ojas else None,
-                enable_stdp if enable_stdp else None,
+                pcn = self._load_or_init_pcn_for_scale(
+                    path,
+                    scale_def,
+                    num_grid_cells,
+                    enable_ojas if enable_ojas else None,
+                    enable_stdp if enable_stdp else None,
+                )
+
+                self.pcns.append(pcn)
+
+    def _load_unified_pcn(self, enable_ojas, enable_stdp):
+        """Load or initialize the unified multi-scale PCN."""
+        path = os.path.join(self.network_dir, "unified_pcn.pkl")
+        scale_configs = list(self.scales)
+
+        # Unified parameters are derived from scale configs (no driver-side hardcoded defaults).
+        gamma_pp_values = [float(s["gamma_pp"]) for s in scale_configs]
+        gamma_pb_values = [float(s["gamma_pb"]) for s in scale_configs]
+        gamma_pg_values = [float(s["gamma_pg"]) for s in scale_configs]
+        grid_influences = [float(s["grid_influence"]) for s in scale_configs]
+        gamma_cross_values = [float(s["gamma_cross"]) for s in scale_configs]
+        gamma_cross = float(np.mean(gamma_cross_values))
+        sigma_tune = float(np.mean([s["sigma_tune"] for s in scale_configs]))
+        d_opt_values = [float(s["d_opt"]) for s in scale_configs]
+        w_in_init_ratio = float(np.mean([s["w_in_init_ratio"] for s in scale_configs]))
+
+        try:
+            with open(path, "rb") as f:
+                unified_pcn = pickle.load(f)
+            print(f"[DRIVER] Loaded existing unified PCN from {path}")
+
+            # Guard against older unified PCN pickles that do not include grid integration fields.
+            required_attrs = ["grid_influence", "alpha_pg_per_pc", "num_grid_total"]
+            if not all(hasattr(unified_pcn, attr) for attr in required_attrs):
+                raise pickle.UnpicklingError("Legacy unified PCN format detected; reinitializing with grid support.")
+            expected_num_pc = sum(s["num_pc"] for s in scale_configs)
+            expected_num_gc = sum(s.get("num_grid_cells", 0) for s in scale_configs)
+            if (
+                getattr(unified_pcn, "num_pc_total", None) != expected_num_pc
+                or getattr(unified_pcn, "num_grid_total", None) != expected_num_gc
+                or getattr(unified_pcn, "d_opt", torch.empty(0)).numel() != len(scale_configs)
+                or not hasattr(unified_pcn, "bvc_layers")
+                or len(getattr(unified_pcn, "bvc_layers", [])) != len(scale_configs)
+            ):
+                raise pickle.UnpicklingError("Unified PCN shape/config mismatch; reinitializing.")
+
+            unified_pcn.enable_ojas = bool(enable_ojas)
+            unified_pcn.enable_stdp = bool(enable_stdp)
+            if unified_pcn.enable_stdp:
+                # Loaded pickles may have STDP toggled off at save time and thus missing traces.
+                if getattr(unified_pcn, "place_cell_trace", None) is None:
+                    unified_pcn.place_cell_trace = torch.zeros(
+                        unified_pcn.num_pc_total,
+                        dtype=unified_pcn.dtype,
+                        device=unified_pcn.device,
+                    )
+                if getattr(unified_pcn, "hd_cell_trace", None) is None:
+                    unified_pcn.hd_cell_trace = torch.zeros(
+                        (self.n_hd, 1, 1),
+                        dtype=unified_pcn.dtype,
+                        device=unified_pcn.device,
+                    )
+            else:
+                unified_pcn.place_cell_trace = None
+                unified_pcn.hd_cell_trace = None
+            unified_pcn.gamma_pp_per_pc = torch.cat([
+                torch.full((cfg["num_pc"],), gamma_pp_values[i], dtype=unified_pcn.dtype, device=unified_pcn.device)
+                for i, cfg in enumerate(scale_configs)
+            ])
+            unified_pcn.gamma_pb_per_pc = torch.cat([
+                torch.full((cfg["num_pc"],), gamma_pb_values[i], dtype=unified_pcn.dtype, device=unified_pcn.device)
+                for i, cfg in enumerate(scale_configs)
+            ])
+            unified_pcn.gamma_pg_per_pc = torch.cat([
+                torch.full((cfg["num_pc"],), gamma_pg_values[i], dtype=unified_pcn.dtype, device=unified_pcn.device)
+                for i, cfg in enumerate(scale_configs)
+            ])
+            unified_pcn.grid_influence_per_pc = torch.cat([
+                torch.full((cfg["num_pc"],), grid_influences[i], dtype=unified_pcn.dtype, device=unified_pcn.device)
+                for i, cfg in enumerate(scale_configs)
+            ])
+            unified_pcn.gamma_pp = float(np.mean(gamma_pp_values))
+            unified_pcn.gamma_pb = float(np.mean(gamma_pb_values))
+            unified_pcn.gamma_pg = float(np.mean(gamma_pg_values))
+            unified_pcn.grid_influence = float(np.mean(grid_influences))
+            unified_pcn.gamma_cross_per_scale = torch.tensor(
+                gamma_cross_values, dtype=unified_pcn.dtype, device=unified_pcn.device
+            )
+            unified_pcn.gamma_cross = gamma_cross
+            unified_pcn.sigma_tune = sigma_tune
+            unified_pcn.d_opt = torch.tensor(d_opt_values, dtype=unified_pcn.dtype, device=unified_pcn.device)
+            unified_pcn.scale_configs = scale_configs
+            if hasattr(unified_pcn, "_build_d_opt_per_pc"):
+                unified_pcn._build_d_opt_per_pc()
+
+            print(f"[DRIVER] Updated unified PCN - enable_ojas: {unified_pcn.enable_ojas}, enable_stdp: {unified_pcn.enable_stdp}")
+
+        except (FileNotFoundError, pickle.UnpicklingError):
+            print("[DRIVER] Initializing new unified PCN")
+
+            # Build per-scale BVC layers so each scale only receives its own sensory basis.
+            bvc_layers = []
+            for scale_cfg in scale_configs:
+                bvc_layers.append(
+                    BoundaryVectorCellLayer(
+                        max_dist=self.max_dist,
+                        n_res=720,
+                        n_hd=self.n_hd,
+                        sigma_theta=scale_cfg["sigma_theta"],
+                        sigma_r=scale_cfg["sigma_r"],
+                        num_bvc_per_dir=int(scale_cfg["num_bvc_per_dir"]),
+                        device=self.device,
+                    )
+                )
+
+            unified_pcn = UnifiedMultiScalePCN(
+                scale_configs=scale_configs,
+                bvc_layers=bvc_layers,
+                timestep=self.timestep,
+                n_hd=self.n_hd,
+                enable_ojas=bool(enable_ojas),
+                enable_stdp=bool(enable_stdp),
+                w_in_init_ratio=w_in_init_ratio,
+                grid_influence=float(np.mean(grid_influences)),
+                gamma_pp=float(np.mean(gamma_pp_values)),
+                gamma_pb=float(np.mean(gamma_pb_values)),
+                gamma_pg=float(np.mean(gamma_pg_values)),
+                gamma_cross=gamma_cross_values,
+                sigma_tune=sigma_tune,
+                device=self.device,
             )
 
-            self.pcns.append(pcn)
+        self.unified_pcn = unified_pcn
+        self.pcns = [unified_pcn]
 
     def _load_or_init_pcn_for_scale(self, path, scale_def, num_grid_cells, enable_ojas, enable_stdp):
         try:
@@ -540,14 +710,17 @@ class Driver(Supervisor):
         return pcn
 
     def load_rcns(self):
-        self.rcns = []
-        for scale_def in self.scales:
-            scale_idx = scale_def["scale_index"]
-            fname = f"rcn_scale_{scale_idx}.pkl"
-            path = os.path.join(self.network_dir, fname)
-            learning_rate = scale_def["rcn_learning_rate"]
-            rcn = self._load_or_init_rcn_for_scale(path, scale_def, learning_rate)
-            self.rcns.append(rcn)
+        if self.use_unified_multiscale:
+            self._load_unified_rcn()
+        else:
+            self.rcns = []
+            for scale_def in self.scales:
+                scale_idx = scale_def["scale_index"]
+                fname = f"rcn_scale_{scale_idx}.pkl"
+                path = os.path.join(self.network_dir, fname)
+                learning_rate = scale_def["rcn_learning_rate"]
+                rcn = self._load_or_init_rcn_for_scale(path, scale_def, learning_rate)
+                self.rcns.append(rcn)
 
     def _load_or_init_rcn_for_scale(self, path, scale_def, learning_rate):
         try:
@@ -572,16 +745,66 @@ class Driver(Supervisor):
             )
         return rcn
 
+    def _load_unified_rcn(self):
+        """Load or initialize the unified multi-scale RCN."""
+        path = os.path.join(self.network_dir, "unified_rcn.pkl")
+        total_pc = sum(scale["num_pc"] for scale in self.scales)
+        anchor_scale = next((s for s in self.scales if s.get("name") == "medium"), self.scales[0])
+        learning_rate = float(anchor_scale["rcn_learning_rate"])
+        replay_timesteps = int(anchor_scale["replay_timesteps"])
+
+        try:
+            with open(path, "rb") as f:
+                unified_rcn = pickle.load(f)
+            print(f"[DRIVER] Loaded existing unified RCN from {path}")
+            if getattr(unified_rcn, "num_place_cells_total", None) != total_pc:
+                raise pickle.UnpicklingError("Unified RCN shape mismatch; reinitializing.")
+            unified_rcn.learning_rate = learning_rate
+            unified_rcn.replay_timesteps = replay_timesteps
+            if hasattr(unified_rcn, "reconfigure_from_scale_configs"):
+                unified_rcn.reconfigure_from_scale_configs(self.scales)
+        except (FileNotFoundError, pickle.UnpicklingError):
+            print("[DRIVER] Initializing new unified RCN")
+
+            unified_rcn = UnifiedMultiScaleRCN(
+                num_place_cells_total=total_pc,
+                scale_configs=self.scales,
+                num_replay=3,
+                learning_rate=learning_rate,
+                replay_timesteps=replay_timesteps,
+                device=self.device,
+            )
+
+        self.unified_rcn = unified_rcn
+        self.rcns = [unified_rcn]
+        self.loaded_goal_specific_rcn_goal = None
+
     def _load_goal_specific_rcns(self, goal_name):
         """Load goal-specific RCNs for EXPLOIT_LOCATIONS_RANDOM mode"""
         multi_goal_dir = os.path.join(self.network_dir, "multi_goal_rewards")
 
         if not os.path.exists(multi_goal_dir):
             print(f"[WARNING] Multi-goal rewards directory not found: {multi_goal_dir}")
-            print(f"[WARNING] Make sure to run LEARN_LOCATIONS_COVERAGE first!")
+            print(f"[WARNING] Make sure to run LEARN_HEBB or LEARN_LOCATIONS_COVERAGE first!")
             return
 
         print(f"[DRIVER] Loading goal-specific RCNs for goal: {goal_name}")
+
+        if self.use_unified_multiscale:
+            unified_goal_path = os.path.join(multi_goal_dir, f"unified_rcn_goal_{goal_name}.pkl")
+            try:
+                with open(unified_goal_path, "rb") as f:
+                    self.unified_rcn = pickle.load(f)
+                self.rcns = [self.unified_rcn]
+                self.rcn = self.unified_rcn
+                self.loaded_goal_specific_rcn_goal = goal_name
+                print(f"[DRIVER] Loaded goal-specific unified RCN: {unified_goal_path}")
+                return
+            except FileNotFoundError:
+                print(f"[ERROR] Goal-specific unified RCN not found: {unified_goal_path}")
+                print(f"[ERROR] Make sure LEARN_HEBB/LEARN_LOCATIONS_COVERAGE has produced unified goal maps.")
+                raise
+
         self.rcns = []
 
         for scale_def in self.scales:
@@ -597,11 +820,45 @@ class Driver(Supervisor):
                 self.rcns.append(rcn)
             except FileNotFoundError:
                 print(f"[ERROR] Goal-specific RCN not found: {goal_rcn_path}")
-                print(f"[ERROR] Make sure LEARN_LOCATIONS_COVERAGE has been run for this goal!")
+                print(f"[ERROR] Make sure LEARN_HEBB/LEARN_LOCATIONS_COVERAGE has been run for this goal!")
                 raise
 
         # Update single-scale reference
         self.rcn = self.rcns[0] if self.rcns else None
+
+    def _get_active_goal_name_for_exploit(self):
+        """Return active goal name if one is selected for exploit-style modes."""
+        if hasattr(self, "active_goal_name") and self.active_goal_name:
+            return self.active_goal_name
+        active_goals = [g for g in getattr(self, "goals", []) if g.get("active", False)]
+        if active_goals:
+            return active_goals[0]["name"]
+        return None
+
+    def _ensure_goal_specific_rcn_loaded_for_exploit(self):
+        """
+        Ensure exploit uses per-goal reward map when an active goal is defined.
+        Applies to unified architecture in exploit-style modes.
+        """
+        if not self.use_unified_multiscale:
+            return
+        if self.robot_mode not in {
+            RobotMode.EXPLOIT,
+            RobotMode.EXPLOIT_LOCATIONS_RANDOM,
+            RobotMode.EXPLOIT_LOCATIONS_RANDOM_AUTO,
+        }:
+            return
+        if not getattr(self, "multi_goal_mode", False):
+            return
+
+        active_goal_name = self._get_active_goal_name_for_exploit()
+        if not active_goal_name:
+            return
+
+        if getattr(self, "loaded_goal_specific_rcn_goal", None) == active_goal_name:
+            return
+
+        self._load_goal_specific_rcns(active_goal_name)
         print(f"[DRIVER] Loaded {len(self.rcns)} goal-specific RCNs for '{goal_name}'")
 
     ##########################################################################
@@ -708,7 +965,7 @@ class Driver(Supervisor):
             self.multi_goal_mode = True
 
             # Initialize goal tracking for learning modes
-            if self.robot_mode in {RobotMode.LEARN_LOCATIONS_COVERAGE, RobotMode.LEARN_LOCATIONS_COVERAGE_AUTO}:
+            if self.robot_mode in {RobotMode.LEARN_LOCATIONS_COVERAGE, RobotMode.LEARN_LOCATIONS_COVERAGE_AUTO, RobotMode.LEARN_HEBB}:
                 self.goal_place_cell_associations = {
                     goal["name"]: [None] * len(self.scales) for goal in self.goals
                 }
@@ -730,6 +987,7 @@ class Driver(Supervisor):
 
             # Initialize coverage tracking for modes that use it
             if self.robot_mode in {RobotMode.LEARN_LOCATIONS_COVERAGE, RobotMode.LEARN_LOCATIONS_COVERAGE_AUTO,
+                                   RobotMode.LEARN_HEBB,
                                    RobotMode.PLOTTING_COVERAGE_AUTO}:
                 if self.environment_size and self.grid_size and self.coverage_percentage:
                     self._setup_coverage_tracking(self.environment_size, self.grid_size, self.coverage_percentage)
@@ -804,11 +1062,57 @@ class Driver(Supervisor):
         """Check if target coverage percentage has been reached"""
         return self.current_coverage_percentage >= self.target_coverage_percentage
 
+    def _get_learning_flags(self):
+        """Return whether Oja/STDP are enabled in current architecture."""
+        if self.use_unified_multiscale and hasattr(self, "unified_pcn"):
+            return bool(getattr(self.unified_pcn, "enable_ojas", False)), bool(getattr(self.unified_pcn, "enable_stdp", False))
+        if self.pcns:
+            pcn0 = self.pcns[0]
+            return bool(getattr(pcn0, "enable_ojas", False)), bool(getattr(pcn0, "enable_stdp", False))
+        return False, False
+
+    def _maybe_log_training_progress(self):
+        """Periodic verbose diagnostics for coverage-learning runs."""
+        if self.robot_mode not in {RobotMode.LEARN_LOCATIONS_COVERAGE, RobotMode.LEARN_LOCATIONS_COVERAGE_AUTO}:
+            return
+        if self.step_count <= 0:
+            return
+        if self.step_count % self.training_log_interval_steps != 0:
+            return
+
+        elapsed = self.getTime() - self.trial_start_time
+        ojas_enabled, stdp_enabled = self._get_learning_flags()
+        coverage_pct = self.current_coverage_percentage * 100 if hasattr(self, "current_coverage_percentage") else 0.0
+        coverage_target = self.target_coverage_percentage * 100 if hasattr(self, "target_coverage_percentage") else 0.0
+
+        visit_summary = ""
+        if hasattr(self, "goal_visit_counts") and self.goal_visit_counts:
+            parts = []
+            for goal_name, cnt in self.goal_visit_counts.items():
+                parts.append(f"{goal_name}:{cnt}/{self.min_goal_visits}")
+            visit_summary = " | visits=" + ", ".join(parts)
+
+        activity_parts = []
+        for idx, act in enumerate(self.pcn_activations_list):
+            if act is None or act.numel() == 0:
+                continue
+            active_frac = float((act > 0.01).float().mean().item() * 100.0)
+            peak = float(torch.max(act).item())
+            activity_parts.append(f"s{idx}:act%={active_frac:.1f},peak={peak:.3f}")
+        activity_summary = " | " + " ; ".join(activity_parts) if activity_parts else ""
+
+        print(
+            f"[TRAIN] step={self.step_count} t={elapsed:.1f}s "
+            f"| coverage={coverage_pct:.1f}/{coverage_target:.1f}% "
+            f"| OJAS={ojas_enabled} STDP={stdp_enabled}"
+            f"{visit_summary}{activity_summary}"
+        )
+
     def _update_distance_tracking(self):
         """Update total distance traveled for random spawn mode"""
         if self.robot_mode in {RobotMode.EXPLOIT_LOCATIONS_RANDOM, RobotMode.EXPLOIT_LOCATIONS_RANDOM_AUTO}:
             current_pos = self.robot.getField("translation").getSFVec3f()
-            current_position_2d = [current_pos[0], current_pos[2]]  # [x, z]
+            current_position_2d = [current_pos[0], current_pos[1]]  # [x, y] planar
 
             if self.last_position is not None:
                 # Calculate distance moved since last update
@@ -818,6 +1122,52 @@ class Driver(Supervisor):
                 self.total_distance_traveled += distance_moved
 
             self.last_position = current_position_2d
+
+    def _is_robot_tipped(self, min_upright_cos: float = 0.25) -> bool:
+        """
+        Detect whether the robot is tipped over.
+
+        Uses orientation matrix when available; falls back to axis-angle rotation field.
+        """
+        # Primary guard: if vertical height deviates too much from ground, robot is likely tipped or airborne.
+        try:
+            curr_pos = self.robot.getField("translation").getSFVec3f()
+            if abs(float(curr_pos[2]) - float(self.spawn_ground_y)) > 0.12:
+                return True
+        except Exception:
+            pass
+
+        try:
+            orientation = self.robot.getOrientation()
+            # Conservative tilt heuristic from rotation matrix.
+            if orientation and len(orientation) == 9:
+                return float(orientation[8]) < min_upright_cos
+        except Exception:
+            pass
+
+        try:
+            rot = self.robot.getField("rotation").getSFRotation()
+            return abs(float(rot[0])) > 0.3 or abs(float(rot[1])) > 0.3
+        except Exception:
+            return False
+
+    def _recover_upright_pose(self, reason: str = "tilt detected"):
+        """Reset robot pose to upright at current x-z position."""
+        curr_pos = self.robot.getField("translation").getSFVec3f()
+        self.stop()
+        self.robot.getField("translation").setSFVec3f([
+            float(curr_pos[0]),
+            float(curr_pos[1]),
+            float(self.spawn_ground_y)
+        ])
+        self.robot.getField("rotation").setSFRotation(self.upright_rotation)
+        self.robot.resetPhysics()
+        print(f"[RECOVERY] Upright reset performed ({reason}) at x={curr_pos[0]:.2f}, z={curr_pos[1]:.2f}")
+
+    def _ensure_upright(self):
+        """Check and recover robot pose if it has tipped over."""
+        if self._is_robot_tipped():
+            self._recover_upright_pose(reason="robot tipped")
 
 
     ########################################### RUN LOOP ###########################################
@@ -889,12 +1239,14 @@ class Driver(Supervisor):
 
             # 7) Check goal, update hmaps, forward
             self.check_goal_reached()
+            self._maybe_log_training_progress()
 
             # Update coverage tracking if in LEARN_LOCATIONS_COVERAGE or PLOTTING_COVERAGE_AUTO mode
             if self.robot_mode in {RobotMode.LEARN_LOCATIONS_COVERAGE, RobotMode.LEARN_LOCATIONS_COVERAGE_AUTO,
+                                   RobotMode.LEARN_HEBB,
                                    RobotMode.PLOTTING_COVERAGE_AUTO}:
                 curr_pos = self.robot.getField("translation").getSFVec3f()
-                robot_pos = [curr_pos[0], curr_pos[2]]  # [x, z] coordinates
+                robot_pos = [curr_pos[0], curr_pos[1]]  # [x, y] planar coordinates
                 self._update_coverage(robot_pos)
 
             # Update distance tracking if in EXPLOIT_LOCATIONS_RANDOM mode
@@ -905,7 +1257,7 @@ class Driver(Supervisor):
                               update_pcn=True,
                               update_gcn=True,
                               update_scale_priority=True if self.robot_mode == RobotMode.EXPLOIT else False,
-                              update_prox=True if (self.use_prox_mod and self.robot_mode == RobotMode.LEARN_OJAS) else False)
+                              update_prox=True)
             self.forward()
 
         # A small random turn at the end
@@ -944,6 +1296,9 @@ class Driver(Supervisor):
 
         Parameters are defined at the top of the function for clarity.
         """
+        # In unified multi-goal exploit, always use goal-specific reward maps.
+        self._ensure_goal_specific_rcn_loaded_for_exploit()
+
         #===================================================================
         # EXPLOIT V12 PARAMETERS
         #===================================================================
@@ -1147,6 +1502,53 @@ class Driver(Supervisor):
             torch.min(boundaries_rolled[i * num_points_per_hd: (i + 1) * num_points_per_hd])
             for i in range(self.n_hd)
         ], device=self.device, dtype=self.dtype)
+
+        if self.use_unified_multiscale:
+            (
+                final_direction_deg,
+                expected_value,
+                combined_vector,
+                macro_returns,
+                sampling_variances,
+                direction_probs,
+            ) = self.unified_pcn.unified_preplay_sampling(
+                unified_rcn=self.unified_rcn,
+                n_hd=self.n_hd,
+                num_steps=num_preplay_steps,
+                discount_factor=discount_factor,
+                within_direction_beta=within_scale_beta,
+                num_samples=num_samples_per_direction,
+                sampling_strategy=sampling_strategy,
+                sampling_temperature=sampling_temperature,
+                debug=debug_enabled,
+            )
+
+            safe_mask = distances_per_hd >= min_safe_distance
+            safe_returns = macro_returns.clone()
+            safe_returns[~safe_mask] = 0.0
+
+            if torch.max(safe_returns).item() < 0.1:
+                self.explore()
+                return
+
+            safe_angles = torch.linspace(
+                0,
+                2 * np.pi * (1 - 1 / self.n_hd),
+                self.n_hd,
+                device=self.device,
+                dtype=self.dtype,
+            )
+            safe_sin = torch.sum(torch.sin(safe_angles) * safe_returns)
+            safe_cos = torch.sum(torch.cos(safe_angles) * safe_returns)
+            action_angle = torch.atan2(safe_sin, safe_cos)
+            if action_angle < 0:
+                action_angle += 2 * np.pi
+
+            self.action_heading_deg = float(torch.rad2deg(action_angle).item())
+            self.scale_idx = 0
+            self._execute_movement(self.action_heading_deg)
+
+            return
 
         #-------------------------------------------------------------------
         # 6) Build scales_data for hierarchical preplay
@@ -1466,6 +1868,9 @@ class Driver(Supervisor):
         """
         Uses sensors to update range-image, heading, boundary data, collision flags, etc.
         """
+        # Recover if physics left the robot tipped over.
+        self._ensure_upright()
+
         # Advance simulation one timestep
         self.step(self.timestep)
 
@@ -1522,9 +1927,41 @@ class Driver(Supervisor):
         Uses current boundary- and HD-activations to update place-cell activations
         and store relevant data for analysis/debugging.
         """
+        if self.use_unified_multiscale:
+            # Compute and pass concatenated grid activations across scales.
+            self.grid_activations_list = []
+            self.pcn_activations_list = []
+            curr_pos = self.robot.getField("translation").getSFVec3f()
+            position = [curr_pos[0], curr_pos[1]]  # [x, y] planar
+
+            for gcn in self.gcns:
+                if gcn is not None:
+                    self.grid_activations_list.append(
+                        gcn.get_grid_cell_activations(position, use_mask=True)
+                    )
+                else:
+                    self.grid_activations_list.append(None)
+
+            valid_grid = [g for g in self.grid_activations_list if g is not None]
+            concatenated_grid = torch.cat(valid_grid, dim=0) if valid_grid else None
+
+            min_distance = torch.min(self.boundaries).item()
+            self.prox = float(min_distance)
+            self.unified_pcn.get_place_cell_activations(
+                distances=self.boundaries,
+                grid_activations=concatenated_grid,
+                hd_activations=self.hd_activations,
+                collided=torch.any(self.collided),
+                proximity=min_distance,
+            )
+
+            self.pcn_activations_list = self.unified_pcn.get_activations_per_scale()
+            self.step(self.timestep)
+            return
+
         # Get robot position for grid cell computation
         curr_pos = self.robot.getField("translation").getSFVec3f()
-        position = [curr_pos[0], curr_pos[2]]  # [x, z]
+        position = [curr_pos[0], curr_pos[1]]  # [x, y] planar
 
         # Store grid cell activations
         self.grid_activations_list = []
@@ -1533,11 +1970,14 @@ class Driver(Supervisor):
         for gcn in self.gcns:
             if gcn is not None:
                 # Get grid cell activations for current position
-                grid_activations = gcn.get_grid_cell_activations(position, use_mask=False)
+                grid_activations = gcn.get_grid_cell_activations(position, use_mask=True)
                 self.grid_activations_list.append(grid_activations)
             else:
                 # If no grid cells for this scale, add None as placeholder
                 self.grid_activations_list.append(None)
+
+        # Proximity diagnostic for non-unified mode as well.
+        self.prox = float(torch.min(self.boundaries).item())
 
         # For convenience, store them in a list
         self.pcn_activations_list = []
@@ -1572,7 +2012,14 @@ class Driver(Supervisor):
         curr_pos = self.robot.getField("translation").getSFVec3f()
         time_limit = 120 # minutes
 
-        if self.robot_mode in (RobotMode.LEARN_OJAS, RobotMode.LEARN_HEBB, RobotMode.PLOTTING, RobotMode.PLOTTING_AUTO):
+        hebb_multi_goal_coverage = (
+            self.robot_mode == RobotMode.LEARN_HEBB
+            and self.multi_goal_mode
+            and hasattr(self, "goal_visit_counts")
+            and hasattr(self, "coverage_grid")
+        )
+
+        if self.robot_mode in (RobotMode.LEARN_OJAS, RobotMode.LEARN_HEBB, RobotMode.PLOTTING, RobotMode.PLOTTING_AUTO) and not hebb_multi_goal_coverage:
             # Use trial elapsed time to avoid cumulative time issues in AUTO modes
             trial_elapsed_time = self.getTime() - self.trial_start_time
             if trial_elapsed_time >= 60 * self.run_time_minutes:
@@ -1591,14 +2038,21 @@ class Driver(Supervisor):
 
         elif self.robot_mode == RobotMode.DMTP and torch.allclose(
             torch.tensor(self.goal_location, dtype=self.dtype, device=self.device),
-            torch.tensor([curr_pos[0], curr_pos[2]], dtype=self.dtype, device=self.device),
+            torch.tensor([curr_pos[0], curr_pos[1]], dtype=self.dtype, device=self.device),
             atol=self.goal_r["explore"]
         ):
             self.stop()
-            for pcn, rcn in zip(self.pcns, self.rcns):
-                rcn.update_reward_cell_activations(pcn.place_cell_activations, visit=True)
-                rcn.replay(pcn=pcn)
-            self.save(include_pcn=True, include_rcn=True, include_gcn=True)
+            if self.use_unified_multiscale:
+                self.unified_rcn.update_reward_cell_activations(
+                    self.unified_pcn.place_cell_activations, visit=True
+                )
+                self.unified_rcn.replay(self.unified_pcn)
+                self.save(include_pcn=True, include_rcn=True, include_gcn=False)
+            else:
+                for pcn, rcn in zip(self.pcns, self.rcns):
+                    rcn.update_reward_cell_activations(pcn.place_cell_activations, visit=True)
+                    rcn.replay(pcn=pcn)
+                self.save(include_pcn=True, include_rcn=True, include_gcn=True)
             self.done = True
             self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
             return
@@ -1607,7 +2061,7 @@ class Driver(Supervisor):
             # Check if either goal reached or time expired
             goal_reached = torch.allclose(
                 torch.tensor(self.goal_location, dtype=self.dtype, device=self.device),
-                torch.tensor([curr_pos[0], curr_pos[2]], dtype=self.dtype, device=self.device),
+                torch.tensor([curr_pos[0], curr_pos[1]], dtype=self.dtype, device=self.device),
                 atol=self.goal_r["exploit"]
             )
             time_expired = self.getTime() >= 30 * time_limit
@@ -1637,22 +2091,73 @@ class Driver(Supervisor):
                     return
                 else:
                     self.stop()
-                    for pcn, rcn in zip(self.pcns, self.rcns):
-                        rcn.update_reward_cell_activations(pcn.place_cell_activations, visit=True)
-                        rcn.replay(pcn=pcn)
-                    self.save(
-                        include_pcn=True if self.td_learning else False,
-                        include_rcn=True if self.td_learning else False,
-                        include_gcn=True if self.td_learning else False,
-                    )
+                    if self.use_unified_multiscale:
+                        self.unified_rcn.update_reward_cell_activations(
+                            self.unified_pcn.place_cell_activations, visit=True
+                        )
+                        self.unified_rcn.replay(self.unified_pcn)
+                        self.save(
+                            include_pcn=True if self.td_learning else False,
+                            include_rcn=True if self.td_learning else False,
+                            include_gcn=False,
+                        )
+                    else:
+                        for pcn, rcn in zip(self.pcns, self.rcns):
+                            rcn.update_reward_cell_activations(pcn.place_cell_activations, visit=True)
+                            rcn.replay(pcn=pcn)
+                        self.save(
+                            include_pcn=True if self.td_learning else False,
+                            include_rcn=True if self.td_learning else False,
+                            include_gcn=True if self.td_learning else False,
+                        )
                     self.done = True
                     self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
                     return
 
+        elif hebb_multi_goal_coverage:
+            # LEARN_HEBB multi-goal completion gate: require BOTH coverage and per-goal learning criteria.
+            trial_elapsed_time = self.getTime() - self.trial_start_time
+            current_position = torch.tensor([curr_pos[0], curr_pos[1]], dtype=self.dtype, device=self.device)
+
+            for goal in self.goals:
+                goal_position = torch.tensor(goal["location"], dtype=self.dtype, device=self.device)
+                distance = torch.norm(current_position - goal_position)
+
+                if distance <= goal["radius"]:
+                    if not goal["visited"]:
+                        print(f"[LEARN_HEBB] First visit to {goal['name']} goal at {goal['location']}")
+                        goal["visited"] = True
+                    if not self.goal_currently_in[goal["name"]]:
+                        self.goal_visit_counts[goal["name"]] += 1
+                        self.goal_currently_in[goal["name"]] = True
+                        print(f"[LEARN_HEBB] {goal['name']} visit #{self.goal_visit_counts[goal['name']]}")
+                    self._handle_goal_learning(goal)
+                else:
+                    if self.goal_currently_in[goal["name"]]:
+                        self.goal_currently_in[goal["name"]] = False
+
+            coverage_reached = self._check_coverage_complete()
+            learning_complete = self._check_multi_goal_learning_complete()
+
+            if coverage_reached and learning_complete:
+                print(f"[LEARN_HEBB] Coverage + learning complete. "
+                      f"Coverage: {self.current_coverage_percentage*100:.1f}%, "
+                      f"Time: {trial_elapsed_time:.1f}s")
+                self.stop()
+                self._create_multi_goal_reward_maps()
+                self._save_multi_goal_data()
+                self.save(include_pcn=True, include_rcn=True, include_gcn=True, include_hmaps=True)
+                self.done = True
+                self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
+            elif trial_elapsed_time >= 60 * self.run_time_minutes:
+                print(f"[LEARN_HEBB] Time limit reached but criteria unmet; continuing. "
+                      f"Coverage: {self.current_coverage_percentage*100:.1f}%, "
+                      f"Learning complete: {learning_complete}")
+
         elif self.robot_mode in {RobotMode.LEARN_LOCATIONS_COVERAGE, RobotMode.LEARN_LOCATIONS_COVERAGE_AUTO}:
             # Calculate trial elapsed time relative to trial start
             trial_elapsed_time = self.getTime() - self.trial_start_time
-            current_position = torch.tensor([curr_pos[0], curr_pos[2]], dtype=self.dtype, device=self.device)
+            current_position = torch.tensor([curr_pos[0], curr_pos[1]], dtype=self.dtype, device=self.device)
 
             # Check all goals for learning
             for goal in self.goals:
@@ -1705,10 +2210,14 @@ class Driver(Supervisor):
                     self.current_auto_trial == self.num_auto_trials):
                     self.simulationSetMode(self.SIMULATION_MODE_PAUSE)
             elif coverage_reached and not learning_complete:
-                print(f"[LEARN_LOCATIONS_COVERAGE] Coverage target reached ({self.current_coverage_percentage*100:.1f}%) "
-                      f"but learning incomplete, continuing...")
+                if (self.step_count - self.last_coverage_incomplete_log_step) >= self.coverage_incomplete_log_interval_steps:
+                    print(f"[LEARN_LOCATIONS_COVERAGE] Coverage target reached ({self.current_coverage_percentage*100:.1f}%) "
+                          f"but learning incomplete, continuing...")
+                    self.last_coverage_incomplete_log_step = self.step_count
             elif minimum_time_reached and not learning_complete:
-                print(f"[LEARN_LOCATIONS_COVERAGE] Time limit reached but learning incomplete, continuing...")
+                if (self.step_count - self.last_coverage_incomplete_log_step) >= self.coverage_incomplete_log_interval_steps:
+                    print(f"[LEARN_LOCATIONS_COVERAGE] Time limit reached but learning incomplete, continuing...")
+                    self.last_coverage_incomplete_log_step = self.step_count
 
         elif self.robot_mode == RobotMode.PLOTTING_COVERAGE_AUTO:
             # Coverage-based stopping for plotting mode (no learning, just exploration until coverage target)
@@ -1737,7 +2246,7 @@ class Driver(Supervisor):
         elif self.robot_mode in {RobotMode.EXPLOIT_LOCATIONS_RANDOM, RobotMode.EXPLOIT_LOCATIONS_RANDOM_AUTO}:
             # Calculate trial elapsed time relative to trial start
             trial_elapsed_time = self.getTime() - self.trial_start_time
-            current_position = torch.tensor([curr_pos[0], curr_pos[2]], dtype=self.dtype, device=self.device)
+            current_position = torch.tensor([curr_pos[0], curr_pos[1]], dtype=self.dtype, device=self.device)
 
             # Check only active goal for exploitation
             active_goals = [g for g in self.goals if g.get("active", False)]
@@ -1772,6 +2281,43 @@ class Driver(Supervisor):
 
     def _handle_goal_learning(self, goal):
         """Handle goal visits during learning mode - keep best place cell by connection strength"""
+        if self.use_unified_multiscale and hasattr(self, "unified_pcn"):
+            for scale_idx, scale_acts in enumerate(self.pcn_activations_list):
+                most_active_idx = torch.argmax(scale_acts).item()
+                activation_value = scale_acts[most_active_idx].item()
+
+                if activation_value <= 0.01:
+                    continue
+
+                stored_idx = self.goal_place_cell_associations[goal["name"]][scale_idx]
+
+                if stored_idx is None:
+                    self.goal_place_cell_associations[goal["name"]][scale_idx] = most_active_idx
+                    self.goal_association_step[goal["name"]][scale_idx] = self.step_count
+                    self.goal_place_cell_activations[goal["name"]][scale_idx] = activation_value
+                    continue
+
+                if stored_idx == most_active_idx:
+                    continue
+
+                stored_activation = self.goal_place_cell_activations[goal["name"]][scale_idx]
+                activation_ratio = activation_value / (stored_activation + 1e-6)
+
+                if activation_ratio > (1.0 + self.ACTIVATION_SIMILARITY_THRESHOLD):
+                    self.goal_place_cell_associations[goal["name"]][scale_idx] = most_active_idx
+                    self.goal_association_step[goal["name"]][scale_idx] = self.step_count
+                    self.goal_place_cell_activations[goal["name"]][scale_idx] = activation_value
+                elif activation_ratio < (1.0 - self.ACTIVATION_SIMILARITY_THRESHOLD):
+                    pass
+                else:
+                    old_strength = self._compute_place_cell_connection_strength(self.unified_pcn, stored_idx, scale_idx)
+                    new_strength = self._compute_place_cell_connection_strength(self.unified_pcn, most_active_idx, scale_idx)
+                    if new_strength >= old_strength:
+                        self.goal_place_cell_associations[goal["name"]][scale_idx] = most_active_idx
+                        self.goal_association_step[goal["name"]][scale_idx] = self.step_count
+                        self.goal_place_cell_activations[goal["name"]][scale_idx] = activation_value
+            return
+
         for scale_idx, pcn in enumerate(self.pcns):
             # Find most active place cell for this scale
             most_active_idx = torch.argmax(pcn.place_cell_activations).item()
@@ -1823,8 +2369,8 @@ class Driver(Supervisor):
 
                     # Step 2: Activations are similar - use connection strength as tiebreaker
                     else:
-                        old_strength = self._compute_place_cell_connection_strength(pcn, stored_idx)
-                        new_strength = self._compute_place_cell_connection_strength(pcn, most_active_idx)
+                        old_strength = self._compute_place_cell_connection_strength(pcn, stored_idx, scale_idx)
+                        new_strength = self._compute_place_cell_connection_strength(pcn, most_active_idx, scale_idx)
 
                         # Use recency bias: if new is >= old, take new
                         if new_strength >= old_strength:
@@ -1838,7 +2384,7 @@ class Driver(Supervisor):
                             print(f"[LEARN_LOCATIONS] {goal['name']} scale {scale_idx}: "
                                   f"Keeping PC {stored_idx} (similar activation, strength: {old_strength:.1f} > {new_strength:.1f})")
 
-    def _compute_place_cell_connection_strength(self, pcn, pc_idx):
+    def _compute_place_cell_connection_strength(self, pcn, pc_idx, scale_idx=0):
         """
         Compute place cell quality based on recurrent connection strength.
 
@@ -1849,6 +2395,15 @@ class Driver(Supervisor):
         Returns:
             float: Total recurrent connection strength
         """
+        if self.use_unified_multiscale and hasattr(pcn, "w_rec_unified"):
+            start = pcn.scale_boundaries[scale_idx]
+            end = pcn.scale_boundaries[scale_idx + 1]
+            global_idx = start + int(pc_idx)
+            w_rec = pcn.w_rec_unified
+            outgoing = torch.sum(torch.abs(w_rec[:, global_idx, start:end])).item()
+            incoming = torch.sum(torch.abs(w_rec[:, start:end, global_idx])).item()
+            return outgoing + incoming
+
         # w_rec_tripartite shape: (n_hd, num_pc, num_pc)
         # where w_rec[hd, i, j] is connection from PC i to PC j for head direction hd
 
@@ -1890,11 +2445,10 @@ class Driver(Supervisor):
         if not all(goal["visited"] for goal in self.goals):
             return False
 
-        # All goals must have place cell associations for all scales
+        # Each goal must have at least one place-cell association (not necessarily all scales).
         for goal_name, associations in self.goal_place_cell_associations.items():
-            for scale_idx, pc_idx in enumerate(associations):
-                if pc_idx is None:
-                    return False
+            if all(pc_idx is None for pc_idx in associations):
+                return False
 
         # All goals must have minimum number of visits
         for goal_name, visit_count in self.goal_visit_counts.items():
@@ -1908,7 +2462,53 @@ class Driver(Supervisor):
         multi_goal_dir = os.path.join(self.network_dir, "multi_goal_rewards")
         os.makedirs(multi_goal_dir, exist_ok=True)
 
-        print(f"[LEARN_LOCATIONS] Creating {len(self.goals)} goals × {len(self.scales)} scales reward maps")
+        if self.use_unified_multiscale:
+            print(f"[LEARN_LOCATIONS] Creating unified goal reward maps for {len(self.goals)} goals")
+            created_maps = 0
+            for goal in self.goals:
+                artificial_activations = torch.zeros_like(self.unified_pcn.place_cell_activations)
+                associations = self.goal_place_cell_associations[goal["name"]]
+                activations = self.goal_place_cell_activations[goal["name"]]
+                candidate_scales = [i for i, pc_idx in enumerate(associations) if pc_idx is not None]
+                if not candidate_scales:
+                    print(f"[WARNING] No place-cell association for goal {goal['name']}; skipping unified reward map.")
+                    continue
+
+                # Use a single best scale association per goal (highest stored activation).
+                best_scale_idx = max(
+                    candidate_scales,
+                    key=lambda i: float(activations[i]) if activations[i] is not None else 0.0,
+                )
+                local_pc_idx = int(associations[best_scale_idx])
+                start = self.unified_pcn.scale_boundaries[best_scale_idx]
+                artificial_activations[start + local_pc_idx] = 1.0
+
+                goal_rcn = copy.deepcopy(self.unified_rcn)
+                # Start each goal map from a clean reward state to avoid all-goal contamination.
+                goal_rcn.w_in = torch.zeros_like(goal_rcn.w_in)
+                goal_rcn.w_in_effective = goal_rcn.w_in.clone()
+                goal_rcn.reward_cell_activations = torch.zeros_like(goal_rcn.reward_cell_activations)
+                goal_rcn.update_reward_cell_activations(artificial_activations, visit=True)
+                if hasattr(goal_rcn, "replay_with_custom_activations"):
+                    goal_rcn.replay_with_custom_activations(
+                        self.unified_pcn, artificial_activations, use_scale_gate=False
+                    )
+                else:
+                    goal_rcn.replay(self.unified_pcn, use_scale_gate=False)
+
+                unified_goal_path = os.path.join(multi_goal_dir, f"unified_rcn_goal_{goal['name']}.pkl")
+                with open(unified_goal_path, "wb") as f:
+                    pickle.dump(goal_rcn, f)
+                created_maps += 1
+                print(
+                    f"[LEARN_LOCATIONS] Created unified reward map for goal '{goal['name']}' "
+                    f"using scale {best_scale_idx}, PC {local_pc_idx}"
+                )
+
+            print(f"[LEARN_LOCATIONS] Successfully created {created_maps} unified goal reward maps")
+            return
+
+        print(f"[LEARN_LOCATIONS] Creating {len(self.goals)} goals x {len(self.scales)} scales reward maps")
 
         created_maps = 0
         for goal in self.goals:
@@ -1919,27 +2519,22 @@ class Driver(Supervisor):
                     print(f"[WARNING] No place cell associated with {goal['name']} for scale {scale_idx}")
                     continue
 
-                # Create artificial activation pattern
                 artificial_activations = torch.zeros_like(pcn.place_cell_activations)
                 artificial_activations[pc_idx] = 1.0
-
                 print(f"[LEARN_LOCATIONS] Creating reward map for {goal['name']} scale {scale_idx}: using PC {pc_idx}")
 
-                # Create goal-specific RCN
                 goal_rcn = copy.deepcopy(rcn)
+                # Start each goal map from a clean reward state to avoid all-goal contamination.
+                goal_rcn.w_in = torch.zeros_like(goal_rcn.w_in)
+                goal_rcn.w_in_effective = goal_rcn.w_in.clone()
+                goal_rcn.reward_cell_activations = torch.zeros_like(goal_rcn.reward_cell_activations)
                 goal_rcn.update_reward_cell_activations(artificial_activations, visit=True)
-
-                # Use replay with custom activations if available, otherwise use standard replay
                 if hasattr(goal_rcn, 'replay_with_custom_activations'):
                     goal_rcn.replay_with_custom_activations(pcn=pcn, custom_activations=artificial_activations)
                 else:
-                    # Standard replay approach
                     goal_rcn.replay(pcn=pcn)
 
-                # Save goal-specific RCN
-                goal_rcn_path = os.path.join(
-                    multi_goal_dir, f"rcn_scale_{scale_idx}_goal_{goal['name']}.pkl"
-                )
+                goal_rcn_path = os.path.join(multi_goal_dir, f"rcn_scale_{scale_idx}_goal_{goal['name']}.pkl")
                 with open(goal_rcn_path, "wb") as f:
                     pickle.dump(goal_rcn, f)
 
@@ -1948,7 +2543,6 @@ class Driver(Supervisor):
                 print(f"[LEARN_LOCATIONS] Created: {scale_name}_goal_{goal['name']} (PC {pc_idx})")
 
         print(f"[LEARN_LOCATIONS] Successfully created {created_maps} reward maps")
-
     def _save_multi_goal_data(self):
         """Save multi-goal specific data"""
         multi_goal_dir = os.path.join(self.network_dir, "multi_goal_rewards")
@@ -2090,13 +2684,13 @@ class Driver(Supervisor):
         while not torch.allclose(
             torch.tensor(self.goal_location, dtype=self.dtype, device=self.device),
             torch.tensor(
-                [curr_pos[0], curr_pos[2]], dtype=self.dtype, device=self.device
+                [curr_pos[0], curr_pos[1]], dtype=self.dtype, device=self.device
             ),
             atol=self.goal_r["explore"],
         ):
             curr_pos = self.robot.getField("translation").getSFVec3f()
             delta_x = curr_pos[0] - self.goal_location[0]
-            delta_y = curr_pos[2] - self.goal_location[1]
+            delta_y = curr_pos[1] - self.goal_location[1]
 
             # Compute desired heading to face the goal
             if delta_x >= 0:
@@ -2507,8 +3101,14 @@ class Driver(Supervisor):
             self.hmap_scale_priority[self.step_count] = self.scale_idx
 
         # 6) Update proximity value if available
-        if update_prox and hasattr(self, 'prox'):
-            self.hmap_prox[self.step_count] = self.prox
+        if update_prox:
+            if hasattr(self, "prox") and self.prox is not None:
+                prox_value = float(self.prox)
+            elif hasattr(self, "boundaries") and self.boundaries is not None:
+                prox_value = float(torch.min(self.boundaries).item())
+            else:
+                prox_value = 0.0
+            self.hmap_prox[self.step_count] = prox_value
 
         self.step_count += 1
 
@@ -2527,7 +3127,7 @@ class Driver(Supervisor):
             torch.tensor(
                 [
                     curr_pos[0] - self.goal_location[0],
-                    curr_pos[2] - self.goal_location[1],
+                    curr_pos[1] - self.goal_location[1],
                 ],
                 dtype=self.dtype,
                 device=self.device,
@@ -2572,28 +3172,40 @@ class Driver(Supervisor):
         # 1) Save each scale's PCN (if requested)
         # ----------------------------------------------------------------------
         if include_pcn:
-            for scale_def, pcn in zip(self.scales, self.pcns):
-                scale_idx = scale_def["scale_index"]  # Get correct scale index
-                pcn_path = os.path.join(self.network_dir, f"pcn_scale_{scale_idx}.pkl")
+            if self.use_unified_multiscale:
+                pcn_path = os.path.join(self.network_dir, "unified_pcn.pkl")
                 with open(pcn_path, "wb") as f:
-                    pickle.dump(pcn, f)
+                    pickle.dump(self.unified_pcn, f)
                 files_saved.append(pcn_path)
+            else:
+                for scale_def, pcn in zip(self.scales, self.pcns):
+                    scale_idx = scale_def["scale_index"]  # Get correct scale index
+                    pcn_path = os.path.join(self.network_dir, f"pcn_scale_{scale_idx}.pkl")
+                    with open(pcn_path, "wb") as f:
+                        pickle.dump(pcn, f)
+                    files_saved.append(pcn_path)
 
         # ----------------------------------------------------------------------
         # 2) Save each scale's RCN (if requested)
         # ----------------------------------------------------------------------
         if include_rcn:
-            for scale_def, rcn in zip(self.scales, self.rcns):
-                scale_idx = scale_def["scale_index"]
-                rcn_path = os.path.join(self.network_dir, f"rcn_scale_{scale_idx}.pkl")
+            if self.use_unified_multiscale:
+                rcn_path = os.path.join(self.network_dir, "unified_rcn.pkl")
                 with open(rcn_path, "wb") as f:
-                    pickle.dump(rcn, f)
+                    pickle.dump(self.unified_rcn, f)
                 files_saved.append(rcn_path)
+            else:
+                for scale_def, rcn in zip(self.scales, self.rcns):
+                    scale_idx = scale_def["scale_index"]
+                    rcn_path = os.path.join(self.network_dir, f"rcn_scale_{scale_idx}.pkl")
+                    with open(rcn_path, "wb") as f:
+                        pickle.dump(rcn, f)
+                    files_saved.append(rcn_path)
 
         # ----------------------------------------------------------------------
         # 2.5) Save each scale's GCN (if requested)
         # ----------------------------------------------------------------------
-        if include_gcn:
+        if include_gcn and not self.use_unified_multiscale:
             for scale_def, gcn in zip(self.scales, self.gcns):
                 if gcn is not None:
                     scale_idx = scale_def["scale_index"]
@@ -2737,7 +3349,8 @@ class Driver(Supervisor):
                 # Delete pcn_scale_*, rcn_scale_*, or gcn_scale_* files
                 if (fname.startswith("pcn_scale_") or
                     fname.startswith("rcn_scale_") or
-                    fname.startswith("gcn_scale_")):
+                    fname.startswith("gcn_scale_") or
+                    fname in {"unified_pcn.pkl", "unified_rcn.pkl"}):
                     full_path = os.path.join(self.network_dir, fname)
                     try:
                         os.remove(full_path)

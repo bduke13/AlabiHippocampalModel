@@ -52,9 +52,9 @@ def compute_reward_function(rcn, hmap_pcn):
             f"but hmap_pcn has {hmap_pcn_float32.shape[0]}."
         )
 
-    # Compute reward function using dot product
-    sum_activations = torch.sum(hmap_pcn_float32, dim=0)
-    safe_denom = torch.where(sum_activations > 0, sum_activations, torch.ones_like(sum_activations))
+    # Match RewardCell forward equation:
+    # r_t = (w · p_t) / sum(|w|), not /(sum p_t)
+    safe_denom = torch.clamp(torch.sum(torch.abs(w_in_float32), dim=1, keepdim=True), min=1e-12)
     reward_function = torch.tensordot(w_in_float32, hmap_pcn_float32, dims=1) / safe_denom
     reward_function = torch.squeeze(reward_function)
     

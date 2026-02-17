@@ -92,6 +92,7 @@ def save_trial_parameters(world_name, trial_id, mode, **kwargs):
             "td_learning": kwargs.get("td_learning", False),
             "use_prox_mod": kwargs.get("use_prox_mod", False),
             "plot_bvc": kwargs.get("plot_bvc", False),
+            "use_unified_multiscale": kwargs.get("use_unified_multiscale", False),
         },
         "goal_config": kwargs.get("goal_config"),
         "trial_config": kwargs.get("trial_config"),
@@ -153,6 +154,14 @@ SCALES_DEFS_GRID = {
         # Place cell recurrent inhibition parameters
         "gamma_pp": 1.0,  # Place-to-place recurrent inhibition strength
         "gamma_pb": 0.35,  # BVC-to-place afferent inhibition strength
+        # Unified multi-scale parameters
+        "d_opt": 0.7,  # Optimal boundary distance for this scale
+        "gamma_cross": 0.4,  # Reduced to ease scale starvation
+        "sigma_tune": 1.1,  # Slightly broader tuning for softer scale transitions
+        # Optional per-cell d_opt jitter (biological heterogeneity around scale default)
+        "d_opt_jitter_std": 0.15,
+        "d_opt_jitter_range": 0.3,
+        "d_opt_jitter_seed": 5000,
         # Grid cell parameters
         "grid_influence": 0.3, # 0.3
         "gamma_pg": 0.35, # 0.3
@@ -197,6 +206,14 @@ SCALES_DEFS_GRID = {
         # Place cell recurrent inhibition parameters
         "gamma_pp": 0.7,  # Place-to-place recurrent inhibition strength
         "gamma_pb": 0.35,  # BVC-to-place afferent inhibition strength
+        # Unified multi-scale parameters
+        "d_opt": 2.5,
+        "gamma_cross": 0.43,
+        "sigma_tune": 1.1,
+        # Optional per-cell d_opt jitter (biological heterogeneity around scale default)
+        "d_opt_jitter_std": 0.25,
+        "d_opt_jitter_range": 0.5,
+        "d_opt_jitter_seed": 5001,
         # Grid cell parameters
         "grid_influence": 0.35, #0.35
         "gamma_pg": 0.35,
@@ -239,8 +256,16 @@ SCALES_DEFS_GRID = {
         "w_in_init_ratio": 0.2,  # Proportion of BVC->PC weights active initially
         "w_grid_init_ratio": 0.2,  # Proportion of GC->PC weights active initially
         # Place cell recurrent inhibition parameters
-        "gamma_pp": 0.7,  # Place-to-place recurrent inhibition strength
+        "gamma_pp": 0.55,  # Place-to-place recurrent inhibition strength
         "gamma_pb": 0.25,  # BVC-to-place afferent inhibition strength
+        # Unified multi-scale parameters
+        "d_opt": 5.0,
+        "gamma_cross": 0.43,
+        "sigma_tune": 1.1,
+        # Optional per-cell d_opt jitter (biological heterogeneity around scale default)
+        "d_opt_jitter_std": 0.35,
+        "d_opt_jitter_range": 0.7,
+        "d_opt_jitter_seed": 5002,
         # Grid cell parameters
         "grid_influence": 0.35,  # 0.35
         "gamma_pg": 0.25,
@@ -281,179 +306,16 @@ SCALES_DEFS_GRID = {
         # Place cell recurrent inhibition parameters
         "gamma_pp": 0.5,  # Place-to-place recurrent inhibition strength
         "gamma_pb": 0.3,  # BVC-to-place afferent inhibition strength
+        # Unified multi-scale parameters
+        "d_opt": 7.5,
+        "gamma_cross": 0.33,
+        "sigma_tune": 1.1,
+        # Optional per-cell d_opt jitter (biological heterogeneity around scale default)
+        "d_opt_jitter_std": 0.45,
+        "d_opt_jitter_range": 0.9,
+        "d_opt_jitter_seed": 5003,
         # Grid cell parameters
         "grid_influence": 0.35,  # 0.35
-        "gamma_pg": 0.32,
-        "num_grid_cells": 400,
-        "num_modules": 8,
-        "cells_per_module": 50,
-        "spread_range": (1.0, 1.0),
-        "scale_multiplier": 5.0,
-        "translation_scale": 1.0,
-        "mask_resolution": 96,
-        "smooth_sigma": 1.5,
-        # Correlation-based weighting parameters
-        "enable_correlation_weighting": True,
-        "correlation_window": 30,
-        "correlation_update_freq": 8,
-        "correlation_scaling": 2.0,
-        "min_correlation_weight": 0.18,
-        "correlation_threshold": 0.08,
-        # Reward cell replay parameters
-        "replay_timesteps": 20,  # Number of timesteps for regular replay
-        "replay_decay_factor": 25,  # Very slow decay - maximum persistence
-        "custom_replay_timesteps": _steps_for_sigma(5.0),  # Spread scaled to lambda_s
-        "initial_value_multiplier": 0.8,  # Very low starting value - only dominant at extreme distances
-    }
-}
-
-SCALES_DEFS_NO_GRID = {
-    "small": {
-        "scale_index": 0,
-        "name": "small",
-        "sigma_pc_s": 1.0,  # Place field size for scale-dependent reward propagation
-        "num_pc": 2000,
-        "sigma_r": 0.5, #0.5
-        "sigma_theta": 1,
-        "rcn_learning_rate": 0.1,
-        # BVC parameters
-        "num_bvc_per_dir": 100,  # Number of BVCs per head direction
-        # Weight initialization parameters
-        "w_in_init_ratio": 0.3,  # Proportion of BVC->PC weights active initially
-        "w_grid_init_ratio": 0.3,  # Proportion of GC->PC weights active initially
-        # Place cell recurrent inhibition parameters
-        "gamma_pp": 1.0,  # Place-to-place recurrent inhibition strength
-        "gamma_pb": 0.35,  # BVC-to-place afferent inhibition strength
-        # Grid cell parameters
-        "grid_influence": 0.0, # 0.3
-        "gamma_pg": 0.35, # 0.3
-        "num_grid_cells": 800,
-        "num_modules": 8,
-        "cells_per_module": 100,
-        "spread_range": (1.5, 1.5),
-        "scale_multiplier": 4,
-        "translation_scale": 2.0,
-        "mask_resolution": 256,
-        "smooth_sigma": 1,
-        # Oja's learning normalization parameters
-        "alpha_pb": 0.447,  # np.sqrt(0.5) - BVC weight decay factor (default)
-        "alpha_pg": 0.447,  # np.sqrt(0.3) - Grid weight decay factor (stronger decay = more selective)
-        # Correlation-based weighting parameters
-        "enable_correlation_weighting": False,
-        "correlation_window": 8, #12, 10
-        "correlation_update_freq": 1, #2
-        "correlation_scaling": 10, #2.5
-        "min_correlation_weight": 0.10, #0.03
-        "correlation_threshold": 0.005, #0.015
-        # Reward cell replay parameters
-        "replay_timesteps": 100,  # Number of timesteps for regular replay
-        "replay_decay_factor": 3,  # FAST decay - rewards diminish quickly with distance
-        "custom_replay_timesteps": _steps_for_sigma(1.0),  # Spread scaled to lambda_s
-        "initial_value_multiplier": 2.0,  # HIGHEST starting value - strongest near goal
-
-    },
-    "medium": {
-        "scale_index": 1,
-        "name": "medium",
-        "sigma_pc_s": 1.5,  # Place field size for scale-dependent reward propagation
-        "num_pc": 1000,
-        "sigma_r": 1.0, #2
-        "sigma_theta": 3,
-        "rcn_learning_rate": 0.1,
-        # BVC parameters
-        "num_bvc_per_dir": 50,  # Number of BVCs per head direction
-        # Weight initialization parameters
-        "w_in_init_ratio": 0.25,  # Proportion of BVC->PC weights active initially
-        "w_grid_init_ratio": 0.3,  # Proportion of GC->PC weights active initially
-        # Place cell recurrent inhibition parameters
-        "gamma_pp": 0.7,  # Place-to-place recurrent inhibition strength
-        "gamma_pb": 0.35,  # BVC-to-place afferent inhibition strength
-        # Grid cell parameters
-        "grid_influence": 0.0, #0.35
-        "gamma_pg": 0.35,
-        "num_grid_cells": 400,
-        "num_modules": 8,
-        "cells_per_module": 50,
-        "spread_range": (1.5, 1.5),
-        "scale_multiplier": 5.5,
-        "translation_scale": 2.0,
-        "mask_resolution": 128,
-        "smooth_sigma": 1.5,
-        # Oja's learning normalization parameters
-        "alpha_pb": 0.632,
-        "alpha_pg": 0.632,
-        # Correlation-based weighting parameters
-        "enable_correlation_weighting": False,
-        "correlation_window": 12, #18, 15
-        "correlation_update_freq": 1, #4
-        "correlation_scaling": 10, #3.0
-        "min_correlation_weight": 0.10, #0.06
-        "correlation_threshold": 0.05, #0.03
-        # Reward cell replay parameters
-        "replay_timesteps": 40,  # Number of timesteps for regular replay
-        "replay_decay_factor": 8,  # Medium decay - balanced propagation
-        "custom_replay_timesteps": _steps_for_sigma(1.5),  # Spread scaled to lambda_s
-        "initial_value_multiplier": 1.5,  # Medium starting value - strongest at medium distances
-
-    },
-    "large": {
-        "scale_index": 2,
-        "name": "large",
-        "sigma_pc_s": 3.0,  # Place field size for scale-dependent reward propagation
-        "num_pc": 500,
-        "sigma_r": 1.5, # 2.0
-        "sigma_theta": 5,
-        "rcn_learning_rate": 0.1,
-        # BVC parameters
-        "num_bvc_per_dir": 75,  # Number of BVCs per head direction
-        # Weight initialization parameters
-        "w_in_init_ratio": 0.2,  # Proportion of BVC->PC weights active initially
-        "w_grid_init_ratio": 0.2,  # Proportion of GC->PC weights active initially
-        # Place cell recurrent inhibition parameters
-        "gamma_pp": 0.7,  # Place-to-place recurrent inhibition strength
-        "gamma_pb": 0.25,  # BVC-to-place afferent inhibition strength
-        # Grid cell parameters
-        "grid_influence": 0.0,  # 0.35
-        "gamma_pg": 0.25,
-        "num_grid_cells": 400,
-        "num_modules": 8,
-        "cells_per_module": 50,
-        "spread_range": (1.5, 1.5),
-        "scale_multiplier": 7,
-        "translation_scale": 2.0,
-        "mask_resolution": 128,
-        "smooth_sigma": 1.5,
-        # Correlation-based weighting parameters
-        "enable_correlation_weighting": False,
-        "correlation_window": 18, #24, 20
-        "correlation_update_freq": 1, #6
-        "correlation_scaling": 10, #2.5
-        "min_correlation_weight": 0.10, #0.12
-        "correlation_threshold": 0.05, #0.05
-        # Reward cell replay parameters
-        "replay_timesteps": 40,  # Number of timesteps for regular replay
-        "replay_decay_factor": 20,  # SLOW decay - rewards persist over long distances
-        "custom_replay_timesteps": _steps_for_sigma(3.0),  # Spread scaled to lambda_s
-        "initial_value_multiplier": 1.0,  # LOWEST starting value - strongest far from goal
-    },
-    "xlarge": {
-        "scale_index": 3,
-        "name": "xlarge",
-        "sigma_pc_s": 5.0,  # Place field size for scale-dependent reward propagation
-        "num_pc": 200,
-        "sigma_r": 4,
-        "sigma_theta": 8,
-        "rcn_learning_rate": 0.005,
-        # BVC parameters
-        "num_bvc_per_dir": 50,  # Number of BVCs per head direction
-        # Weight initialization parameters
-        "w_in_init_ratio": 0.25,  # Proportion of BVC->PC weights active initially
-        "w_grid_init_ratio": 0.25,  # Proportion of GC->PC weights active initially
-        # Place cell recurrent inhibition parameters
-        "gamma_pp": 0.5,  # Place-to-place recurrent inhibition strength
-        "gamma_pb": 0.3,  # BVC-to-place afferent inhibition strength
-        # Grid cell parameters
-        "grid_influence": 0.0,  # 0.35
         "gamma_pg": 0.32,
         "num_grid_cells": 400,
         "num_modules": 8,
@@ -534,6 +396,7 @@ def _run_single_trial(bot, mode, trial_id, start_loc, target_goal, stats_collect
         plot_bvc=trial_kwargs.get("plot_bvc", False),
         td_learning=trial_kwargs.get("td_learning", False),
         use_prox_mod=trial_kwargs.get("use_prox_mod", False),
+        use_unified_multiscale=trial_kwargs.get("use_unified_multiscale", False),
         environment_size=trial_kwargs.get("environment_size", None),
         grid_size=trial_kwargs.get("grid_size", None),
         coverage_percentage=trial_kwargs.get("coverage_percentage", None),
@@ -933,6 +796,7 @@ def _run_learn_coverage_auto_trials(mode, **kwargs):
             plot_bvc=kwargs.get("plot_bvc", False),
             td_learning=kwargs.get("td_learning", False),
             use_prox_mod=kwargs.get("use_prox_mod", False),
+            use_unified_multiscale=kwargs.get("use_unified_multiscale", False),
             environment_size=kwargs.get("environment_size", None),
             grid_size=kwargs.get("grid_size", None),
             coverage_percentage=kwargs.get("coverage_percentage", None),
@@ -1230,6 +1094,7 @@ def _run_plotting_auto_trials(mode, **kwargs):
             plot_bvc=kwargs.get("plot_bvc", False),
             td_learning=False,
             use_prox_mod=False,
+            use_unified_multiscale=kwargs.get("use_unified_multiscale", False),
             environment_size=kwargs.get("environment_size", None),
             grid_size=kwargs.get("grid_size", None),
             coverage_percentage=kwargs.get("coverage_percentage", None),
@@ -1358,6 +1223,7 @@ def _run_plotting_coverage_auto_trials(mode, **kwargs):
             plot_bvc=kwargs.get("plot_bvc", False),
             td_learning=False,
             use_prox_mod=False,
+            use_unified_multiscale=kwargs.get("use_unified_multiscale", False),
             environment_size=kwargs.get("environment_size", None),
             grid_size=kwargs.get("grid_size", None),
             coverage_percentage=kwargs.get("coverage_percentage", None),
@@ -1475,13 +1341,20 @@ if __name__ == "__main__":
     randomize_start_loc = False
     use_prox_mod = False
 
+    # ========================================================================
+    # UNIFIED MULTI-SCALE FLAG
+    # Set to True to enable adaptive cross-scale inhibition and unified replay
+    # Set to False to use original independent scales (for rollback)
+    # ========================================================================
+    use_unified_multiscale = True
+
     multiscale = ["small", "medium", "large"]
     small = ["small"]
     medium = ["medium"]
     large = ["large"]
 
     scale_names = multiscale # what scales you are using
-    run_time_hours = 15
+    run_time_hours = 8
     max_dist = 25
     plot_bvc = False
 
@@ -1492,20 +1365,20 @@ if __name__ == "__main__":
     multi_goal_config = {
         "type": "multi",
         "goals": [
-            {"name": "red", "location": [7, 7], "radius": 1.0},
-            {"name": "green", "location": [-7, 7], "radius": 1.0},
-            {"name": "blue", "location": [7, -7], "radius": 1.0},
-            {"name": "yellow", "location": [-7, -7], "radius": 1.0}
+            {"name": "red", "location": [9, 9], "radius": 0.8},
+            {"name": "green", "location": [-9, 9], "radius": 0.8},
+            {"name": "blue", "location": [9, -9], "radius": 0.8},
+            {"name": "yellow", "location": [-9, -9], "radius": 0.8}
         ]
     }
 
     multi_goal_config_explore = {
         "type": "multi",
         "goals": [
-            {"name": "red", "location": [7, 7], "radius": 0.7},
-            {"name": "green", "location": [-7, 7], "radius": 0.7},
-            {"name": "blue", "location": [7, -7], "radius": 0.7},
-            {"name": "yellow", "location": [-7, -7], "radius": 0.7}
+            {"name": "red", "location": [9, 9], "radius": 0.8},
+            {"name": "green", "location": [-9, 9], "radius": 0.8},
+            {"name": "blue", "location": [9, -9], "radius": 0.8},
+            {"name": "yellow", "location": [-9, -9], "radius": 0.8}
         ]
     }
 
@@ -1542,12 +1415,13 @@ if __name__ == "__main__":
             "run_time_hours": run_time_hours,
             "num_loops": 1,
             "save_data": False,
-            "plot_bvc": plot_bvc
+            "plot_bvc": plot_bvc,
+            "use_unified_multiscale": use_unified_multiscale,
         },
         "LEARN_HEBB": {
             "corners": corners,
             "start_loc": start_loc,
-            "goal_location": goal_location,
+            "goal_config": multi_goal_config_explore,
             "max_dist": max_dist,
             "randomize_start_loc": randomize_start_loc,
             "scale_names": scale_names,
@@ -1556,7 +1430,12 @@ if __name__ == "__main__":
             "run_time_hours": run_time_hours,
             "num_loops": 1,
             "save_data": False,
-            "plot_bvc": plot_bvc
+            "plot_bvc": plot_bvc,
+            "environment_size": environment_size,
+            "grid_size": grid_size,
+            "coverage_percentage": coverage_percentage,
+            "min_goal_visits": min_goal_visits,
+            "use_unified_multiscale": use_unified_multiscale,
         },
         "DMTP": {
             "corners": corners,
@@ -1570,7 +1449,8 @@ if __name__ == "__main__":
             "run_time_hours": run_time_hours,
             "num_loops": 1,
             "save_data": False,
-            "plot_bvc": plot_bvc
+            "plot_bvc": plot_bvc,
+            "use_unified_multiscale": use_unified_multiscale,
         },
         "EXPLOIT": {
             "corners": corners,
@@ -1586,7 +1466,8 @@ if __name__ == "__main__":
             "save_data": False,
             "td_learning": td_learning,
             "use_prox_mod": use_prox_mod,
-            "plot_bvc": plot_bvc
+            "plot_bvc": plot_bvc,
+            "use_unified_multiscale": use_unified_multiscale,
         },
         "EXPLOIT_SAVE": {
             "corners": corners,
@@ -1600,6 +1481,7 @@ if __name__ == "__main__":
             "run_time_hours": run_time_hours,
             "num_loops": 20,
             "save_data": True,
+            "use_unified_multiscale": use_unified_multiscale,
         },
         "LEARNING_SAVE": {
             "corners": corners,
@@ -1614,6 +1496,7 @@ if __name__ == "__main__":
             "num_loops": 51,
             "save_data": True,
             "td_learning": td_learning,
+            "use_unified_multiscale": use_unified_multiscale,
         },
         "PLOTTING": {
             "corners": corners,
@@ -1627,7 +1510,8 @@ if __name__ == "__main__":
             "run_time_hours": run_time_hours,
             "num_loops": 1,
             "save_data": False,
-            "plot_bvc": plot_bvc
+            "plot_bvc": plot_bvc,
+            "use_unified_multiscale": use_unified_multiscale,
         },
         "LEARN_LOCATIONS_COVERAGE": {
             "corners": [[0, 0]],  # Single starting location for learning
@@ -1649,6 +1533,7 @@ if __name__ == "__main__":
             "grid_size": grid_size,
             "coverage_percentage": coverage_percentage,
             "min_goal_visits": min_goal_visits,
+            "use_unified_multiscale": use_unified_multiscale,
         },
         "LEARN_LOCATIONS_COVERAGE_AUTO": {
             "start_loc": start_loc,
@@ -1667,6 +1552,7 @@ if __name__ == "__main__":
             "grid_size": grid_size,
             "coverage_percentage": coverage_percentage,
             "min_goal_visits": min_goal_visits,
+            "use_unified_multiscale": use_unified_multiscale,
             # Auto trial specific parameters (use shared variables)
             "auto_trial_name": auto_trial_name,
             "num_auto_trials": num_auto_trials,
@@ -1697,7 +1583,8 @@ if __name__ == "__main__":
             "min_spawn_distance": min_spawn_distance,
             "wall_clearance": wall_clearance,
             "path_failure_ratio": path_failure_ratio,
-            "generate_path_plots": generate_path_plots
+            "generate_path_plots": generate_path_plots,
+            "use_unified_multiscale": use_unified_multiscale,
         },
         "EXPLOIT_LOCATIONS_RANDOM_AUTO": {
             "scale_names": scale_names,
@@ -1719,6 +1606,7 @@ if __name__ == "__main__":
             "wall_clearance": wall_clearance,
             "path_failure_ratio": path_failure_ratio,
             "generate_path_plots": generate_path_plots,
+            "use_unified_multiscale": use_unified_multiscale,
             # Auto trial specific parameters (use shared variables)
             "auto_trial_name": auto_trial_name,
             "num_auto_trials": num_auto_trials,
@@ -1739,6 +1627,7 @@ if __name__ == "__main__":
             "environment_size": environment_size,
             "grid_size": grid_size,
             "coverage_percentage": coverage_percentage,
+            "use_unified_multiscale": use_unified_multiscale,
             # Auto trial specific parameters (use shared variables)
             "auto_trial_name": auto_trial_name,
             "num_auto_trials": num_auto_trials,
@@ -1759,6 +1648,7 @@ if __name__ == "__main__":
             "environment_size": environment_size,
             "grid_size": grid_size,
             "coverage_percentage": coverage_percentage,
+            "use_unified_multiscale": use_unified_multiscale,
             # Auto trial specific parameters (use shared variables)
             "auto_trial_name": auto_trial_name,
             "num_auto_trials": num_auto_trials,
