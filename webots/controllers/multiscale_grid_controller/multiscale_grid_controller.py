@@ -15,8 +15,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.append(str(PROJECT_ROOT))
 
 # Import necessary modules
-from core.layers.reward_cell_layer_v11 import C_LAMBDA
-from msg_driver import Driver
+from core.layers.reward_cell_layer_test import C_LAMBDA
+from multiscale_grid_driver import Driver
 from core.robot.robot_mode import RobotMode
 from analysis.stats.stats_collector import stats_collector
 from path_planning import generate_spawn_locations, calculate_optimal_paths, save_path_visualizations
@@ -54,7 +54,7 @@ def save_trial_parameters(world_name, trial_id, mode, **kwargs):
         mode: Robot mode being used
         **kwargs: All parameters passed to the trial
     """
-    # Determine the correct folder based on mode (matching msg_driver_v10.py logic)
+    # Determine the correct folder based on mode (matching multiscale_grid_driver.py logic)
     auto_trial_name = kwargs.get("auto_trial_name")
     current_auto_trial = kwargs.get("current_auto_trial")
 
@@ -63,10 +63,10 @@ def save_trial_parameters(world_name, trial_id, mode, **kwargs):
         # Auto trial mode: pkl_{trial_name}/{world_name}_{trial_num}/
         base_folder = f"pkl_{auto_trial_name}"
         trial_folder = f"{world_name}_{current_auto_trial}"
-        save_folder = os.path.join(PROJECT_ROOT, "webots", "controllers", "msg_controller", base_folder, trial_folder)
+        save_folder = os.path.join(PROJECT_ROOT, "webots", "controllers", "multiscale_grid_controller", base_folder, trial_folder)
     else:
         # Standard mode: pkl/{world_name}/
-        save_folder = os.path.join(PROJECT_ROOT, "webots", "controllers", "msg_controller", "pkl", world_name)
+        save_folder = os.path.join(PROJECT_ROOT, "webots", "controllers", "multiscale_grid_controller", "pkl", world_name)
 
     os.makedirs(save_folder, exist_ok=True)
 

@@ -22,9 +22,9 @@ sys.path.append(str(PROJECT_ROOT))  # Add project root to sys.path
 from core.layers.multiscale_bvc import BoundaryVectorCellLayer
 from core.layers.head_direction_layer import HeadDirectionLayer
 from core.layers.multiscale_pcn import PlaceCellLayer
-from core.layers.multiscale_pcn_with_gcn_v13 import MultiscalePlaceCellWithGrid
-from core.layers.grid_cell_layer_v13 import GridCellLayer
-from core.layers.reward_cell_layer_v11 import RewardCellLayerTest, C_LAMBDA
+from core.layers.multiscale_pcn_with_gcn import MultiscalePlaceCellWithGrid
+from core.layers.grid_cell_layer import GridCellLayer
+from core.layers.reward_cell_layer_test import RewardCellLayerTest, C_LAMBDA
 from core.robot.robot_mode import RobotMode
 from analysis.stats.stats_collector import stats_collector
 
