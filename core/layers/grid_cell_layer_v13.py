@@ -28,6 +28,7 @@ class GridCellLayer:
         cells_per_module: int,
         spread_range: Tuple[float, float] = (1.2, 1.2),
         scale_multiplier: float = 1.0,
+        module_scale_ratio: float = 1.6,
         translation_scale: float = 1.0,
         threshold: float = 0.7,
         threshold_type: str = "soft",
@@ -49,6 +50,7 @@ class GridCellLayer:
         self.total_grid_cells = self.num_modules * self.cells_per_module
 
         self.scale_multiplier = float(scale_multiplier)
+        self.module_scale_ratio = float(max(1.0, module_scale_ratio))
         self.translation_scale = float(translation_scale)
         self.threshold = float(threshold)
         self.threshold_type = threshold_type
@@ -64,7 +66,17 @@ class GridCellLayer:
         # Module params
         torch.manual_seed(42)
         rot_per_module = torch.linspace(0.0, 360.0, steps=self.num_modules + 1, dtype=self.dtype)[:-1]
-        size_per_module = torch.full((self.num_modules,), self.scale_multiplier, dtype=self.dtype)
+        if self.num_modules == 1 or self.module_scale_ratio <= 1.0 + 1e-6:
+            size_per_module = torch.full((self.num_modules,), self.scale_multiplier, dtype=self.dtype)
+        else:
+            # Log-spaced frequency ladder around base scale to improve spatial disambiguation.
+            # Range is [base/ratio, base*ratio] across modules.
+            module_axis = torch.linspace(-0.5, 0.5, steps=self.num_modules, dtype=self.dtype)
+            multipliers = torch.pow(
+                torch.tensor(self.module_scale_ratio, dtype=self.dtype),
+                2.0 * module_axis,
+            )
+            size_per_module = self.scale_multiplier * multipliers
         spread_per_module = torch.empty(self.num_modules, dtype=self.dtype).uniform_(*spread_range)
 
         self.rotation_params = rot_per_module.repeat_interleave(self.cells_per_module).to(self.device)
@@ -523,3 +535,39 @@ class GridCellLayer:
             acts = acts * self._mask[yi, xi, :]
 
         return acts
+
+    def to(
+        self,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
+    ) -> "GridCellLayer":
+        """
+        Move internal tensors to target device/dtype.
+
+        This keeps loaded pickles compatible when runtime hardware differs
+        from the hardware used at save time.
+        """
+        target_device = self.device if device is None else torch.device(device)
+        target_dtype = self.dtype if dtype is None else dtype
+
+        tensor_attrs = [
+            "cell_min",
+            "cell_max",
+            "rotation_params",
+            "size_params",
+            "spread_params",
+            "x_trans_params",
+            "y_trans_params",
+            "cos_theta",
+            "sin_theta",
+            "_mask",
+        ]
+        for attr in tensor_attrs:
+            if hasattr(self, attr):
+                val = getattr(self, attr)
+                if isinstance(val, torch.Tensor):
+                    setattr(self, attr, val.to(device=target_device, dtype=target_dtype))
+
+        self.device = target_device
+        self.dtype = target_dtype
+        return self

@@ -10,8 +10,8 @@ EXTERNPROTO "../protos/Goal.proto"
 WorldInfo {
 }
 Viewpoint {
-  orientation -0.5754161353340318 0.5811992439891271 0.5754161189814847 2.088636151886487
-  position 0.00011440148693912005 0.00011440181057954812 50.458427154556816
+  orientation -0.5756915726987778 0.5741891930118563 0.5821391446656037 2.089307033243896
+  position -0.21578475425078741 -0.30443810293437457 58.82571661630824
 }
 TexturedBackground {
 }
@@ -26,36 +26,15 @@ RectangleArena {
   wallHeight 0.5
 }
 Goal {
-  name "goal_1"
-  translation 9 9 0
-  radius 0.8
-  height 0.1
-}
-Goal {
-  name "goal_2"
-  translation -9 9 0
-  radius 0.8
-  height 0.1
-  color 0 1 0
-}
-Goal {
-  name "goal_3"
-  translation 9 -9 0
-  radius 0.8
-  height 0.1
-  color 0 0 1
-}
-Goal {
-  name "goal_4"
   translation -9 -9 0
   radius 0.8
   height 0.1
   color 1 1 0
 }
 DEF agent Create {
-  translation 0 0.0441865 0
-  rotation 0 0 1 0
-  controller "multiscale_controller"
+  translation -6.279992875883504e-05 0.04418650123772151 0.044204093291493794
+  rotation -1.9699304368793043e-05 -0.9999999998059687 -1.84182429971235e-08 0.0013960373640514725
+  controller "msg_controller"
   supervisor TRUE
   bodySlot [
     Solid {

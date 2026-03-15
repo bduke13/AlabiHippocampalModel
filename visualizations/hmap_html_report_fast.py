@@ -20,7 +20,6 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
 from vis_utils import (
-    convert_xzy_hmaps,
     CONTROLLER_PATH_PREFIX,
     CONTROLLER_NAME,
     WORLD_NAME,
@@ -229,35 +228,21 @@ def generate_place_cells_report(
     assets_dir = os.path.join(output_dir, "html_assets")
     os.makedirs(assets_dir, exist_ok=True)
 
+    totals = np.sum(np.abs(hmap_pcn), axis=0)
     if activation_threshold is not None:
-        totals = np.sum(np.abs(hmap_pcn), axis=0)
         active_mask = totals > activation_threshold
         hmap_pcn = hmap_pcn[:, active_mask]
+        totals = totals[active_mask]
         print(
             f"[{label}] Filtered {np.sum(~active_mask)} cells below threshold {activation_threshold}. "
             f"Remaining: {hmap_pcn.shape[1]}"
         )
 
-    if isinstance(label, str) and label.startswith("Scale "):
-        try:
-            scale_idx = int(label.split()[-1])
-        except ValueError:
-            scale_idx = None
-    else:
-        scale_idx = None
-
-    if scale_idx is not None:
-        cells_csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"cells_scale_{scale_idx}.csv")
-    else:
-        cells_csv_path = ""
-
-    if cells_csv_path and os.path.exists(cells_csv_path):
-        cell_indices = np.loadtxt(cells_csv_path, dtype=int)
-        cell_indices = cell_indices[cell_indices < hmap_pcn.shape[1]]
-        print(f"[{label}] Loaded {len(cell_indices)} cell indices from {cells_csv_path}")
-    else:
-        cell_indices = np.arange(hmap_pcn.shape[1], dtype=int)
-        print(f"[{label}] No cells CSV found; using all {len(cell_indices)} cells")
+    # Sort cells by descending total activation so the best-formed fields appear first.
+    sort_order = np.argsort(totals)[::-1]
+    hmap_pcn = hmap_pcn[:, sort_order]
+    cell_indices = np.arange(hmap_pcn.shape[1], dtype=int)
+    print(f"[{label}] Showing {len(cell_indices)} cells sorted by activity")
 
     colors_rgb = _generate_vibrant_colors(hmap_pcn.shape[1])
 
@@ -329,13 +314,13 @@ def generate_multi_scale_reports(
         if hmap_loc is None or hmap_pcn is None:
             print(f"[Scale {scale}] Skipped (missing data)")
             continue
-        hmap_x, _, hmap_y = convert_xzy_hmaps(hmap_loc)
+        hmap_x, hmap_y = hmap_loc[:, 0], hmap_loc[:, 1]
         report_specs.append((f"Scale {scale}", f"scale_{scale}", f"place_cells_report_scale_{scale}.html", hmap_x, hmap_y, hmap_pcn))
 
     if len(report_specs) >= 2:
         hmap_loc_u, hmap_pcn_u = load_unified_hmaps(scales)
         if hmap_loc_u is not None and hmap_pcn_u is not None:
-            hmap_x_u, _, hmap_y_u = convert_xzy_hmaps(hmap_loc_u)
+            hmap_x_u, hmap_y_u = hmap_loc_u[:, 0], hmap_loc_u[:, 1]
             report_specs.insert(0, ("Unified (All Scales)", "unified", "place_cells_report_unified.html", hmap_x_u, hmap_y_u, hmap_pcn_u))
 
     nav_links = [(label, report_file) for (label, _token, report_file, *_rest) in report_specs]

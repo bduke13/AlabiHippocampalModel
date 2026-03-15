@@ -11,8 +11,8 @@ EXTERNPROTO "../protos/Wall.proto"
 WorldInfo {
 }
 Viewpoint {
-  orientation 0.6009502901158787 -0.5987779092328793 -0.5294561022637693 4.129608447157214
-  position 0.14468426373846077 5.124667989739547 43.54322474631539
+  orientation -0.5773502691896258 0.5773502691896258 0.5773502691896258 2.0944
+  position -3.887666233215769e-05 -3.887677226494587e-05 35.6559014170243
 }
 TexturedBackground {
 }
@@ -25,6 +25,153 @@ RectangleArena {
   }
   wallThickness 0.06
   wallHeight 0.5
+}
+Goal {
+  name "checkpoint_5"
+  translation -0.6 4.5 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
+}
+Goal {
+  name "checkpoint_10"
+  translation -4.95 5.3 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
+}
+Goal {
+  name "checkpoint_11"
+  translation -4.95 9.3 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
+}
+Goal {
+  name "checkpoint_6"
+  translation 1.1 4.5 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
+}
+Goal {
+  name "checkpoint_4"
+  translation -5.4 -4 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
+}
+Goal {
+  name "checkpoint_7"
+  translation -5.9 3.7 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
+}
+Goal {
+  name "checkpoint_8"
+  translation -9.4 -0.6 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
+}
+Goal {
+  name "checkpoint_9"
+  translation -6.6 -0.6 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
+}
+Goal {
+  name "checkpoint_3"
+  translation -0.6 -4 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
+}
+Goal {
+  name "checkpoint_1"
+  translation 0.1 -5 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
+}
+Goal {
+  name "checkpoint_15"
+  translation 1.3 -4 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
+}
+Goal {
+  name "checkpoint_16"
+  translation 5.1 -2.1 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
+}
+Goal {
+  name "checkpoint_17"
+  translation 5.8 -0.1 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
+}
+Goal {
+  name "checkpoint_19"
+  translation 5 3.7 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
+}
+Goal {
+  name "checkpoint_20"
+  translation 5 5.3 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
+}
+Goal {
+  name "checkpoint_21"
+  translation 5 9.3 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
+}
+Goal {
+  name "checkpoint_18"
+  translation 9.4 -0.1 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
+}
+Goal {
+  name "checkpoint_12"
+  translation 0.7 -6.2 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
+}
+Goal {
+  name "checkpoint_13"
+  translation 4.3 -6.2 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
+}
+Goal {
+  name "checkpoint_14"
+  translation 5.2 -9.6 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
+}
+Goal {
+  name "checkpoint_2"
+  translation -0.8 -6 0
+  radius 0.2
+  height 0.1
+  color 1 1 1
 }
 Wall {
   translation 0 3 0.5
@@ -156,27 +303,6 @@ Wall {
   size 9.3 0.2 1
 }
 Goal {
-  name "goal_1"
-  translation 9 9 0
-  radius 0.8
-  height 0.1
-}
-Goal {
-  name "goal_2"
-  translation -9 9 0
-  radius 0.8
-  height 0.1
-  color 0 1 0
-}
-Goal {
-  name "goal_3"
-  translation 9 -9 0
-  radius 0.8
-  height 0.1
-  color 0 0 1
-}
-Goal {
-  name "goal_4"
   translation -9 -9 0
   radius 0.8
   height 0.1

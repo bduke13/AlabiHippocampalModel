@@ -99,7 +99,7 @@ WORLD_CONFIGS = {
     # Progressive complexity for place field formation testing
     "environment_1": {
         "size": [20.0, 20.0],
-        "obstacles": []  # Open arena with 4 goals at corners
+        "obstacles": []  # Open arena, single goal
     },
 
     "environment_2": {

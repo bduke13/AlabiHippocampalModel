@@ -43,6 +43,7 @@ class RobotMode(Enum):
     LEARNING = auto()
     LEARN_LOCATIONS = auto()
     EXPLOIT_LOCATIONS = auto()
+    LEARN_LOCATIONS_TWO_PHASE = auto()
     LEARN_LOCATIONS_COVERAGE = auto()
     LEARN_LOCATIONS_COVERAGE_AUTO = auto()
     EXPLOIT_LOCATIONS_RANDOM = auto()

@@ -379,6 +379,54 @@ def get_available_multi_goal_combinations():
     
     return goals_list, scales_list, combinations
 
+# ── Per-environment spatial layout (extracted from .wbt files) ──────────────
+# Main goal position (x, y) for each environment — large colored circle.
+ENV_GOAL_POSITIONS = {
+    "environment_1": (-9.0, -9.0),
+    "environment_2": ( 9.0, -9.0),
+    "environment_3": ( 9.0,  9.0),
+    "environment_4": (-9.0,  9.0),
+    "environment_5": ( 9.0, -9.0),
+    "environment_6": (-9.0, -9.0),
+}
+
+# Checkpoint positions (x, y) per environment — small white circles named checkpoint_N.
+ENV_CHECKPOINT_POSITIONS = {
+    "environment_1": [],
+    "environment_2": [(0.1, -5.0)],
+    "environment_3": [(0.1, -5.0), (9.0, 4.4)],
+    "environment_4": [
+        (0.1, -5.0), (1.3, -4.2), (9.0, -4.2), (9.0,  4.5),
+        (-0.9, -6.0), (-0.9, 4.3), (-5.6,  3.6),
+    ],
+    "environment_5": [
+        (0.1, -5.0), (-0.5, -4.2), (-5.4, -4.2), (-6.1,  3.7),
+        (-1.1,  4.5), ( 9.0,  4.5), ( 9.1, -4.2), ( 1.4, -4.2),
+        (-1.1, -6.0), ( 5.0, -9.5),
+    ],
+    "environment_6": [
+        ( 0.1, -5.0), (-0.8, -6.0), (-0.6, -4.0), (-0.6,  4.5),
+        ( 1.1,  4.5), (-5.4, -4.0), (-5.9,  3.7), (-4.95, 5.3),
+        (-4.95, 9.3), (-9.4, -0.6), (-6.6, -0.6), ( 1.3, -4.0),
+        ( 0.7, -6.2), ( 4.3, -6.2), ( 5.2, -9.6), ( 5.1, -2.1),
+        ( 5.8, -0.1), ( 5.0,  3.7), ( 5.0,  5.3), ( 5.0,  9.3),
+        ( 9.4, -0.1),
+    ],
+}
+
+
+def get_env_goal_pos(world_name=None):
+    """Return (x, y) goal position for the given (or current) world, or None."""
+    wn = world_name or _get_world_name()
+    return ENV_GOAL_POSITIONS.get(wn)
+
+
+def get_env_checkpoint_positions(world_name=None):
+    """Return list of (x, y) checkpoint positions for the given (or current) world."""
+    wn = world_name or _get_world_name()
+    return ENV_CHECKPOINT_POSITIONS.get(wn, [])
+
+
 def load_multi_goal_hmaps(goal_name, scale_idx):
     """
     Load history map data for a specific goal-scale combination.

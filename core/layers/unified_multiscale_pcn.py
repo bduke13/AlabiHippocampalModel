@@ -4,11 +4,11 @@ Unified Multi-Scale Place Cell Network with adaptive cross-scale inhibition.
 This implementation combines all scales (small, medium, large) into a single unified
 network with:
 1. Gaussian boundary-based cross-scale inhibition
-2. Unified cross-scale STDP creating single 3250×3250 adjacency matrix
+2. Unified cross-scale STDP creating single 1750×1750 adjacency matrix
 3. Biologically plausible scale selection based on environmental context
 
 Key parameters:
-- Total cells: 3250 (2000 small + 1000 medium + 250 large)
+- Total cells: 1750 (1000 small + 500 medium + 250 large)
 - Optimal distances: d_opt^0 = 0.7m, d_opt^1 = 2.5m, d_opt^2 = 5.0m
 - Tuning width: σ_tune = 1.5m
 - Cross-scale inhibition strength: Γ^cross = 0.35
@@ -52,7 +52,8 @@ class UnifiedMultiScalePCN:
         gamma_pb: float = 0.3,
         gamma_pg: float = 0.3,
         gamma_cross: Union[float, List[float]] = 0.35,  # Cross-scale inhibition strength
-        sigma_tune: float = 1.5,    # Gaussian tuning width
+        sigma_tune: float = 1.5,    # Backward-compatible fallback
+        gate_mode: str = "normal",  # "normal" | "no_gate_no_inhibition" | "no_gate_with_inhibition"
     ):
         """
         Initialize unified multi-scale place cell network.
@@ -72,7 +73,7 @@ class UnifiedMultiScalePCN:
             gamma_pp: Within-scale recurrent inhibition
             gamma_pb: Afferent inhibition from BVCs
             gamma_cross: Cross-scale inhibition strength
-            sigma_tune: Gaussian tuning width for scale selection (meters)
+            sigma_tune: Backward-compatible fallback if per-scale tuning is absent.
         """
         self.device = device
         self.dtype = dtype
@@ -148,13 +149,34 @@ class UnifiedMultiScalePCN:
         )
         # Keep scalar mean for backward compatibility with existing code paths.
         self.gamma_cross = float(torch.mean(self.gamma_cross_per_scale).item())
-        self.sigma_tune = sigma_tune
+        # Per-scale Gaussian tuning width tied to sensory width:
+        # sigma_tune_s = sigma_tune_k_s * sigma_r_s
+        sigma_tune_k_values = [
+            float(cfg.get("sigma_tune_k", 1.0)) for cfg in scale_configs
+        ]
+        self.sigma_tune_k_per_scale = torch.tensor(
+            sigma_tune_k_values, dtype=dtype, device=device
+        )
+        self.sigma_tune_per_scale = torch.clamp(
+            self.sigma_tune_k_per_scale * self.sigma_r_per_scale, min=1e-3
+        )
+        # Keep scalar mean for backward compatibility/debugging.
+        self.sigma_tune = float(torch.mean(self.sigma_tune_per_scale).item())
         self.tau_p = 0.5
         self.tau = timestep / 1000.0
+        # Optional one-sided preference for the largest scale:
+        # preserve Gaussian approach to d_opt, but avoid decay beyond d_opt.
+        largest_cfg = scale_configs[-1] if len(scale_configs) > 0 else {}
+        self.large_scale_one_sided = bool(largest_cfg.get("large_scale_one_sided", False))
+        self.large_scale_plateau = float(largest_cfg.get("large_scale_plateau", 1.0))
+        self.large_scale_plateau = min(1.0, max(0.0, self.large_scale_plateau))
 
         # Learning parameters
         self.enable_ojas = enable_ojas
         self.enable_stdp = enable_stdp
+        assert gate_mode in ("normal", "no_gate_no_inhibition", "no_gate_with_inhibition"), \
+            f"Unknown gate_mode '{gate_mode}'"
+        self.gate_mode = gate_mode
         self.alpha_pb = np.sqrt(0.5)
         self.grid_influence = float(torch.mean(self.grid_influence_per_pc).item())
 
@@ -207,9 +229,20 @@ class UnifiedMultiScalePCN:
                 self.w_grid[pc_start:pc_end, gc_start:gc_end] = torch.tensor(
                     w_grid_block, dtype=dtype, device=device
                 )
+
+            # Block-diagonal mask: only scale-local connections are legal.
+            # Used to zero out any off-diagonal growth from Oja updates.
+            self.w_grid_block_mask = torch.zeros_like(self.w_grid, dtype=torch.bool)
+            for scale_idx in range(self.num_scales):
+                pc_s = sum(self.num_pc_per_scale[:scale_idx])
+                pc_e = pc_s + self.num_pc_per_scale[scale_idx]
+                gc_s = self.grid_boundaries[scale_idx]
+                gc_e = self.grid_boundaries[scale_idx + 1]
+                self.w_grid_block_mask[pc_s:pc_e, gc_s:gc_e] = True
         else:
             self.grid_boundaries = [0]
             self.w_grid = None
+            self.w_grid_block_mask = None
 
         # Unified recurrent weight matrix: (n_hd, num_pc_total, num_pc_total)
         # This single matrix connects ALL place cells across scales
@@ -248,6 +281,18 @@ class UnifiedMultiScalePCN:
                 dtype=dtype,
                 device=device
             )
+        self.last_grid_diagnostics = None
+
+        # Pre-allocated intermediate buffers for hot-path (avoid per-step GPU allocation)
+        self._buf_bvc_inh   = torch.zeros(self.num_pc_total, dtype=dtype, device=device)
+        self._buf_grid_inh  = torch.zeros(self.num_pc_total, dtype=dtype, device=device)
+        self._buf_rec_inh   = torch.zeros(self.num_pc_total, dtype=dtype, device=device)
+        self._buf_cross_inh = torch.zeros(self.num_pc_total, dtype=dtype, device=device)
+        self._buf_ones      = torch.ones(self.num_pc_total,  dtype=dtype, device=device)
+
+        # Grid diagnostics gating: run every _diag_interval steps to avoid per-step GPU sync
+        self._diag_interval  = 10
+        self._diag_step_count = 0
 
         # Eligibility traces for STDP
         self.place_cell_trace = None
@@ -298,7 +343,7 @@ class UnifiedMultiScalePCN:
         print(f"  Optimal distances: {self.d_opt.cpu().numpy()}")
         print(
             f"  Cross-scale inhibition per scale: {self.gamma_cross_per_scale.detach().cpu().numpy()}, "
-            f"mean={self.gamma_cross:.4f}, sigma_tune={self.sigma_tune}m"
+            f"mean={self.gamma_cross:.4f}, sigma_tune_per_scale={self.sigma_tune_per_scale.detach().cpu().numpy()}"
         )
 
     def get_scale_activations(self, scale_idx: int) -> torch.Tensor:
@@ -315,8 +360,16 @@ class UnifiedMultiScalePCN:
         where d is boundary proximity.
         """
         proximity_t = torch.as_tensor(proximity, dtype=self.dtype, device=self.device)
-        sigma2 = max(float(self.sigma_tune) ** 2, 1e-6)
+        sigma2 = torch.clamp(self.sigma_tune_per_scale ** 2, min=1e-6)
         pref = torch.exp(-((proximity_t - self.d_opt) ** 2) / (2.0 * sigma2))
+        if self.large_scale_one_sided and self.num_scales > 0:
+            last_idx = self.num_scales - 1
+            plateau = torch.as_tensor(self.large_scale_plateau, dtype=self.dtype, device=self.device)
+            pref[last_idx] = torch.where(
+                proximity_t >= self.d_opt[last_idx],
+                plateau,
+                pref[last_idx],
+            )
         return torch.clamp(pref, min=0.0, max=1.0)
 
     def _build_d_opt_per_pc(self) -> None:
@@ -362,8 +415,20 @@ class UnifiedMultiScalePCN:
         Compute per-place-cell Gaussian preference using d_opt_per_pc.
         """
         proximity_t = torch.as_tensor(proximity, dtype=self.dtype, device=self.device)
-        sigma2 = max(float(self.sigma_tune) ** 2, 1e-6)
+        sigma_tune_per_pc = self.expand_scale_values_to_pc(self.sigma_tune_per_scale)
+        sigma2 = torch.clamp(sigma_tune_per_pc ** 2, min=1e-6)
         pref_pc = torch.exp(-((proximity_t - self.d_opt_per_pc) ** 2) / (2.0 * sigma2))
+        if self.large_scale_one_sided and self.num_scales > 0:
+            last_start = self.scale_boundaries[-2]
+            last_end = self.scale_boundaries[-1]
+            plateau = torch.as_tensor(self.large_scale_plateau, dtype=self.dtype, device=self.device)
+            last_pref = pref_pc[last_start:last_end]
+            last_dopt = self.d_opt_per_pc[last_start:last_end]
+            pref_pc[last_start:last_end] = torch.where(
+                proximity_t >= last_dopt,
+                plateau,
+                last_pref,
+            )
         return torch.clamp(pref_pc, min=0.0, max=1.0)
 
     def expand_scale_values_to_pc(self, values_per_scale: torch.Tensor) -> torch.Tensor:
@@ -426,7 +491,11 @@ class UnifiedMultiScalePCN:
 
             # Apply inhibition to this scale
             gamma_cross_scale = self.gamma_cross_per_scale[scale_idx]
-            inhibition[start:end] = gamma_cross_scale * mismatch * other_scales_activation
+            inhibition[start:end] = (
+                gamma_cross_scale
+                * mismatch
+                * other_scales_activation
+            )
 
         return inhibition
 
@@ -478,6 +547,12 @@ class UnifiedMultiScalePCN:
                 self.grid_cell_activations = grid_activations.clone().detach().to(dtype=self.dtype, device=self.device)
             else:
                 self.grid_cell_activations = torch.tensor(grid_activations, dtype=self.dtype, device=self.device)
+            if int(self.grid_cell_activations.numel()) != int(self.num_grid_total):
+                raise ValueError(
+                    f"Unified grid activation length mismatch: "
+                    f"got={int(self.grid_cell_activations.numel())}, "
+                    f"expected={int(self.num_grid_total)}"
+                )
 
         # Afferent excitation terms
         bvc_afferent_excitation = torch.matmul(self.w_in, self.bvc_activations)
@@ -490,17 +565,30 @@ class UnifiedMultiScalePCN:
             (1.0 - self.grid_influence_per_pc) * bvc_afferent_excitation
             + self.grid_influence_per_pc * grid_afferent_excitation
         )
-        # Restore multiplicative distance-based scale gate.
+        self._update_grid_diagnostics(
+            bvc_afferent_excitation=bvc_afferent_excitation,
+            grid_afferent_excitation=grid_afferent_excitation,
+        )
+        # Proximity-based scale gate (always computed; used differently per gate_mode).
         scale_preference = self.compute_scale_preference(proximity)
         scale_preference_per_pc = self.compute_scale_preference_per_pc(proximity)
-        self.last_scale_preference = scale_preference.detach().clone()
-        self.last_scale_preference_per_pc = scale_preference_per_pc.detach().clone()
+        self.last_scale_preference = scale_preference.detach()
+        self.last_scale_preference_per_pc = scale_preference_per_pc.detach()
         self.last_proximity = float(proximity)
-        g_per_pc = scale_preference_per_pc
-        afferent_excitation = g_per_pc * afferent_excitation
+
+        if self.gate_mode == "normal":
+            # Standard behaviour: gate multiplies excitation and suppresses IIR bleed.
+            g_excitation = scale_preference_per_pc
+            g_iir        = scale_preference_per_pc
+        else:
+            # Both no-gate modes: remove the multiplicative gate on excitation/IIR.
+            g_excitation = self._buf_ones
+            g_iir        = self._buf_ones
+
+        afferent_excitation = g_excitation * afferent_excitation
 
         # Scale-local BVC afferent inhibition per PC block.
-        bvc_afferent_inhibition = torch.zeros_like(self.place_cell_activations)
+        bvc_afferent_inhibition = self._buf_bvc_inh.zero_()
         for scale_idx in range(self.num_scales):
             pc_start = self.scale_boundaries[scale_idx]
             pc_end = self.scale_boundaries[scale_idx + 1]
@@ -508,8 +596,8 @@ class UnifiedMultiScalePCN:
             bvc_end = self.bvc_boundaries[scale_idx + 1]
             bvc_sum_scale = torch.sum(self.bvc_activations[bvc_start:bvc_end])
             gamma_pb_scale = self.gamma_pb_per_pc[pc_start]
-            bvc_afferent_inhibition[pc_start:pc_end] = gamma_pb_scale * bvc_sum_scale
-        grid_afferent_inhibition = torch.zeros_like(self.place_cell_activations)
+            bvc_afferent_inhibition[pc_start:pc_end] = g_excitation[pc_start:pc_end] * gamma_pb_scale * bvc_sum_scale
+        grid_afferent_inhibition = self._buf_grid_inh.zero_()
         if self.grid_cell_activations is not None:
             for scale_idx in range(self.num_scales):
                 pc_start = self.scale_boundaries[scale_idx]
@@ -518,7 +606,7 @@ class UnifiedMultiScalePCN:
                 gc_end = self.grid_boundaries[scale_idx + 1]
                 gc_sum_scale = torch.sum(self.grid_cell_activations[gc_start:gc_end])
                 gamma_pg_scale = self.gamma_pg_per_pc[pc_start]
-                grid_afferent_inhibition[pc_start:pc_end] = gamma_pg_scale * gc_sum_scale
+                grid_afferent_inhibition[pc_start:pc_end] = g_excitation[pc_start:pc_end] * gamma_pg_scale * gc_sum_scale
 
         afferent_inhibition = (
             (1.0 - self.grid_influence_per_pc) * bvc_afferent_inhibition
@@ -526,7 +614,7 @@ class UnifiedMultiScalePCN:
         )
 
         # Scale-local recurrent inhibition (within-scale only).
-        recurrent_inhibition = torch.zeros_like(self.place_cell_activations)
+        recurrent_inhibition = self._buf_rec_inh.zero_()
         for scale_idx in range(self.num_scales):
             pc_start = self.scale_boundaries[scale_idx]
             pc_end = self.scale_boundaries[scale_idx + 1]
@@ -534,17 +622,26 @@ class UnifiedMultiScalePCN:
             gamma_pp_scale = self.gamma_pp_per_pc[pc_start]
             recurrent_inhibition[pc_start:pc_end] = gamma_pp_scale * scale_sum
 
-        # Cross-scale inhibition (NEW): Gaussian boundary-based
-        cross_scale_inhibition = self.compute_cross_scale_inhibition(proximity)
+        # Cross-scale inhibition: Gaussian boundary-based.
+        # "no_gate_no_inhibition"   → zeroed out entirely.
+        # "no_gate_with_inhibition" → computed normally using real proximity gate.
+        # "normal"                  → computed normally.
+        if self.gate_mode == "no_gate_no_inhibition":
+            cross_scale_inhibition = self._buf_cross_inh.zero_()
+        else:
+            cross_scale_inhibition = self.compute_cross_scale_inhibition(proximity)
 
-        # Update activation equation with cross-scale term
+        # Update activation equation.
         self.activation_update += self.tau_p * (
             -self.activation_update
             + afferent_excitation
             - afferent_inhibition
             - recurrent_inhibition
-            - cross_scale_inhibition  # NEW TERM
+            - cross_scale_inhibition
         )
+
+        # Suppress residual IIR bleed (g_iir = ones when gate disabled).
+        self.activation_update = self.activation_update * g_iir
 
         # Apply ReLU and tanh
         self.place_cell_activations = torch.tanh(torch.relu(self.activation_update))
@@ -555,7 +652,8 @@ class UnifiedMultiScalePCN:
             and torch.any(self.place_cell_activations != 0)
             and not collided
         ):
-            gated_pc_activations = self.place_cell_activations * g_per_pc
+            # No gate applied to STDP traces when gate is disabled.
+            gated_pc_activations = self.place_cell_activations * g_excitation
             # Update eligibility trace for place cells
             self.place_cell_trace += (self.tau / 3) * (
                 gated_pc_activations - self.place_cell_trace
@@ -582,7 +680,7 @@ class UnifiedMultiScalePCN:
 
         # Oja's rule for input weights
         if self.enable_ojas and torch.any(self.place_cell_activations != 0):
-            pc_activations_col = (self.place_cell_activations * g_per_pc).unsqueeze(1)
+            pc_activations_col = (self.place_cell_activations * g_excitation).unsqueeze(1)
             # BVC->PC Oja update (scale-local blocks only).
             alpha_pb_col = self.alpha_pb_per_pc.unsqueeze(1)
             weight_update_bvc = torch.zeros_like(self.w_in)
@@ -605,18 +703,83 @@ class UnifiedMultiScalePCN:
             self.w_in.data += weight_update_bvc
             self.w_in.data = torch.clamp(self.w_in.data, min=0.0)
 
-            # Grid->PC Oja update
+            # Grid->PC Oja update (scale-local blocks only — mirrors BVC update above).
+            # Full outer-product updates would grow off-diagonal entries (no Hebbian decay
+            # there since w=0), coupling each scale's PCs to the wrong GCN frequency.
             if self.grid_cell_activations is not None and self.w_grid is not None:
-                grid_activations_row = self.grid_cell_activations.unsqueeze(0)
                 alpha_pg_col = self.alpha_pg_per_pc.unsqueeze(1)
-                grid_mix_gc_col = self.grid_influence_per_pc.unsqueeze(1)
-                hebbian_gc = torch.matmul(pc_activations_col, grid_activations_row)
-                decay_gc = (1.0 / torch.clamp(alpha_pg_col, min=1e-6)) * (pc_activations_col**2) * self.w_grid
-                weight_update_gc = self.tau * (hebbian_gc - decay_gc) * grid_mix_gc_col
+                weight_update_gc = torch.zeros_like(self.w_grid)
+                for scale_idx in range(self.num_scales):
+                    pc_start = self.scale_boundaries[scale_idx]
+                    pc_end   = self.scale_boundaries[scale_idx + 1]
+                    gc_start = self.grid_boundaries[scale_idx]
+                    gc_end   = self.grid_boundaries[scale_idx + 1]
+                    if gc_end <= gc_start:
+                        continue
+                    pc_col       = pc_activations_col[pc_start:pc_end]
+                    gc_row       = self.grid_cell_activations[gc_start:gc_end].unsqueeze(0)
+                    w_block      = self.w_grid[pc_start:pc_end, gc_start:gc_end]
+                    alpha_block  = alpha_pg_col[pc_start:pc_end]
+                    grid_mix_col = self.grid_influence_per_pc[pc_start:pc_end].unsqueeze(1)
+                    hebbian_gc   = torch.matmul(pc_col, gc_row)
+                    decay_gc     = (1.0 / torch.clamp(alpha_block, min=1e-6)) * (pc_col**2) * w_block
+                    weight_update_gc[pc_start:pc_end, gc_start:gc_end] = \
+                        self.tau * (hebbian_gc - decay_gc) * grid_mix_col
                 self.w_grid.data += weight_update_gc
-                self.w_grid.data = torch.clamp(self.w_grid.data, min=0.0)
+                self.w_grid.data *= self.w_grid_block_mask.float()  # belt-and-suspenders
+                self.w_grid.data  = torch.clamp(self.w_grid.data, min=0.0)
 
         return self.place_cell_activations
+
+    def _update_grid_diagnostics(
+        self,
+        bvc_afferent_excitation: torch.Tensor,
+        grid_afferent_excitation: torch.Tensor,
+    ) -> None:
+        """Store lightweight diagnostics to verify GC contribution in unified mode."""
+        self._diag_step_count += 1
+        if self._diag_step_count % self._diag_interval != 0:
+            return  # Skip to avoid per-step GPU→CPU sync
+
+        bvc_abs_mean = float(torch.mean(torch.abs(bvc_afferent_excitation)).item())
+        grid_abs_mean = float(torch.mean(torch.abs(grid_afferent_excitation)).item())
+        denom = bvc_abs_mean + grid_abs_mean + 1e-12
+        grid_share = float(grid_abs_mean / denom)
+
+        if self.grid_cell_activations is not None and self.grid_cell_activations.numel() > 0:
+            gc_active_frac = float((self.grid_cell_activations > 1e-6).float().mean().item())
+            gc_mean = float(torch.mean(self.grid_cell_activations).item())
+            gc_max = float(torch.max(self.grid_cell_activations).item())
+        else:
+            gc_active_frac = 0.0
+            gc_mean = 0.0
+            gc_max = 0.0
+
+        per_scale = []
+        for scale_idx in range(self.num_scales):
+            pc_start = self.scale_boundaries[scale_idx]
+            pc_end = self.scale_boundaries[scale_idx + 1]
+            bvc_block = bvc_afferent_excitation[pc_start:pc_end]
+            grid_block = grid_afferent_excitation[pc_start:pc_end]
+            bvc_block_abs = float(torch.mean(torch.abs(bvc_block)).item())
+            grid_block_abs = float(torch.mean(torch.abs(grid_block)).item())
+            block_denom = bvc_block_abs + grid_block_abs + 1e-12
+            per_scale.append({
+                "scale_idx": int(scale_idx),
+                "bvc_abs_mean": bvc_block_abs,
+                "grid_abs_mean": grid_block_abs,
+                "grid_share": float(grid_block_abs / block_denom),
+            })
+
+        self.last_grid_diagnostics = {
+            "bvc_abs_mean": bvc_abs_mean,
+            "grid_abs_mean": grid_abs_mean,
+            "grid_share": grid_share,
+            "gc_active_frac": gc_active_frac,
+            "gc_mean": gc_mean,
+            "gc_max": gc_max,
+            "per_scale": per_scale,
+        }
 
     def get_activations_per_scale(self) -> List[torch.Tensor]:
         """
@@ -637,7 +800,7 @@ class UnifiedMultiScalePCN:
         Simple unified preplay using cross-scale recurrent weights.
 
         Simulates forward movement in a given direction using the unified
-        W_rec matrix (3250×3250). Cross-scale connections allow information
+        W_rec matrix (1750×1750). Cross-scale connections allow information
         to flow between scales during preplay, providing richer predictions.
 
         Args:
@@ -700,29 +863,22 @@ class UnifiedMultiScalePCN:
         for _ in range(num_steps):
             previous_activations = current_activations.clone()
 
-            # For each trajectory, use its specific direction's W_rec
-            # Shape: (batch_size, num_pc_total)
+            # Vectorized: loop over unique directions (typically 8), not over batch items.
+            # For each direction d, gather all trajectories assigned to it and do a
+            # single (n_pc × n_pc) @ (n_pc × K) matmul instead of K separate mv calls.
             updated_batch = torch.zeros_like(current_activations)
-
-            for i in range(batch_size):
-                direction = directions_batch[i].item()
-                # W_rec for this direction: (num_pc_total, num_pc_total)
-                # Activation for this trajectory: (num_pc_total,)
-                updated_batch[i] = torch.matmul(
-                    self.w_rec_unified[direction],
-                    previous_activations[i]
-                )
+            for d in torch.unique(directions_batch):
+                mask = directions_batch == d            # (K,) bool
+                # w_rec_unified[d]: (n_pc, n_pc),  prev[mask].T: (n_pc, K)
+                updated_batch[mask] = torch.matmul(
+                    self.w_rec_unified[d.item()], previous_activations[mask].T
+                ).T
 
             # Subtract previous activations
             updated_batch = updated_batch - previous_activations
 
             # Apply ReLU then tanh
             current_activations = torch.tanh(torch.relu(updated_batch))
-            if hasattr(self, "last_scale_preference") and self.last_scale_preference is not None:
-                current_activations = (
-                    current_activations
-                    * self.expand_scale_values_to_pc(self.last_scale_preference).unsqueeze(0)
-                )
 
         return current_activations
 

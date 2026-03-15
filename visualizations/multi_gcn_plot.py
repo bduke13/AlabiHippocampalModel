@@ -5,6 +5,7 @@ import os
 import sys
 from pathlib import Path
 import matplotlib.gridspec as gridspec
+import glob
 
 # Get the project root directory
 project_root = Path(__file__).resolve().parent.parent  # Adjust if needed
@@ -18,6 +19,54 @@ from vis_utils import (
     WORLD_NAME,
     OUTPUT_DIR
 )
+
+
+def _hmap_directory():
+    return os.path.join(
+        CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl", WORLD_NAME, "hmaps"
+    )
+
+
+def discover_available_gcn_scales():
+    """Discover all scales with saved GCN hmaps (supports prefixed trial files)."""
+    hmap_directory = _hmap_directory()
+    if not os.path.exists(hmap_directory):
+        return []
+
+    scales = set()
+    for file_path in glob.glob(os.path.join(hmap_directory, "*hmap_gcn_scale_*.pkl")):
+        stem = os.path.splitext(os.path.basename(file_path))[0]
+        try:
+            scales.add(int(stem.split("_")[-1]))
+        except ValueError:
+            continue
+    return sorted(scales)
+
+
+def _resolve_hmap_pair_for_scale(scale):
+    """
+    Resolve matching (loc, gcn) files for a scale.
+    Supports:
+    - non-prefixed: hmap_loc.pkl + hmap_gcn_scale_{scale}.pkl
+    - prefixed: {prefix}hmap_loc.pkl + {prefix}hmap_gcn_scale_{scale}.pkl
+    """
+    hmap_directory = _hmap_directory()
+    base_gcn = os.path.join(hmap_directory, f"hmap_gcn_scale_{scale}.pkl")
+    base_loc = os.path.join(hmap_directory, "hmap_loc.pkl")
+    if os.path.exists(base_gcn) and os.path.exists(base_loc):
+        return base_loc, base_gcn
+
+    matches = sorted(
+        glob.glob(os.path.join(hmap_directory, f"*hmap_gcn_scale_{scale}.pkl"))
+    )
+    for gcn_file in matches:
+        suffix = f"hmap_gcn_scale_{scale}.pkl"
+        prefix = os.path.basename(gcn_file)[: -len(suffix)]
+        loc_file = os.path.join(hmap_directory, f"{prefix}hmap_loc.pkl")
+        if os.path.exists(loc_file):
+            return loc_file, gcn_file
+
+    return None, None
 
 def load_grid_cell_data(scale):
     """
@@ -33,32 +82,30 @@ def load_grid_cell_data(scale):
     import os
     import numpy as np
     
-    # Define the path for hmaps
-    hmap_directory = os.path.join(
-        CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl", WORLD_NAME, "hmaps"
-    )
-    
-    # Load location data
-    hmap_file = "hmap_loc.pkl"
-    file_path = os.path.join(hmap_directory, hmap_file)
-    with open(file_path, "rb") as f:
-        hmap_loc = np.array(pickle.load(f))
-        # remove first element
-        hmap_loc = hmap_loc[1:]
-    print(f"Loaded hmap_loc from {file_path}")
-    
-    # Load GCN data for the specified scale
-    hmap_file = f"hmap_gcn_scale_{scale}.pkl"
-    file_path = os.path.join(hmap_directory, hmap_file)
-    try:
-        with open(file_path, "rb") as f:
-            hmap_gcn = np.array(pickle.load(f))
-            # remove first element
-            hmap_gcn = hmap_gcn[1:]
-            print(f"Loaded hmap_gcn_scale_{scale} from {file_path}")
-    except FileNotFoundError:
-        print(f"Error: {file_path} not found. Cannot process scale {scale}.")
+    loc_path, gcn_path = _resolve_hmap_pair_for_scale(scale)
+    if loc_path is None or gcn_path is None:
+        hmap_directory = _hmap_directory()
+        compact_path = os.path.join(hmap_directory, "hmap_compact_stats.pkl")
+        if os.path.exists(compact_path):
+            print(
+                f"Error: no full GCN hmap for scale {scale} in {hmap_directory}. "
+                f"Only compact stats found ({compact_path}); spatial GC plotting requires full hmaps."
+            )
+        else:
+            print(f"Error: no matching hmap_loc + hmap_gcn_scale_{scale} files found in {hmap_directory}.")
         return None, None
+
+    with open(loc_path, "rb") as f:
+        hmap_loc = np.array(pickle.load(f))
+        if len(hmap_loc) > 1:
+            hmap_loc = hmap_loc[1:]
+    print(f"Loaded hmap_loc from {loc_path}")
+
+    with open(gcn_path, "rb") as f:
+        hmap_gcn = np.array(pickle.load(f))
+        if len(hmap_gcn) > 1:
+            hmap_gcn = hmap_gcn[1:]
+    print(f"Loaded hmap_gcn_scale_{scale} from {gcn_path}")
     
     return hmap_loc, hmap_gcn
 
@@ -205,11 +252,15 @@ def plot_multi_scale_grid_activations(
         cmap: Colormap to use
     """
     if scales is None:
-        scales = [0, 1, 2]
+        scales = discover_available_gcn_scales()
+    if not scales:
+        print("No GCN hmap scales discovered. Nothing to plot.")
+        return None
     
     # Create figure
-    fig = plt.figure(figsize=(18, 12))
-    gs = gridspec.GridSpec(2, 3)
+    num_scales = len(scales)
+    fig = plt.figure(figsize=(6 * num_scales, 12))
+    gs = gridspec.GridSpec(2, num_scales)
     
     # Process each scale
     for i, scale in enumerate(scales):
@@ -283,9 +334,12 @@ if __name__ == "__main__":
     output_dir = os.path.join(OUTPUT_DIR, "grid_cells")
     os.makedirs(output_dir, exist_ok=True)
     
+    discovered = discover_available_gcn_scales()
+    print(f"Discovered GCN scales: {discovered}")
+
     # Generate and show the plot
     plot_multi_scale_grid_activations(
-        scales=[0, 1, 2],
+        scales=discovered if discovered else [0, 1, 2],
         save_path=os.path.join(output_dir, "grid_cell_activations_multi_scale.png"),
         show_plot=True,
         cmap='viridis',

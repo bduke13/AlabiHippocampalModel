@@ -19,7 +19,7 @@ from core.layers.reward_cell_layer_v11 import C_LAMBDA
 from msg_driver import Driver
 from core.robot.robot_mode import RobotMode
 from analysis.stats.stats_collector import stats_collector
-from path_planning import generate_spawn_locations, calculate_optimal_paths, save_path_visualizations
+from path_planning import generate_spawn_locations
 
 #################################
 # Utility Functions
@@ -93,6 +93,23 @@ def save_trial_parameters(world_name, trial_id, mode, **kwargs):
             "use_prox_mod": kwargs.get("use_prox_mod", False),
             "plot_bvc": kwargs.get("plot_bvc", False),
             "use_unified_multiscale": kwargs.get("use_unified_multiscale", False),
+            "gcn_scale_invariant": kwargs.get("gcn_scale_invariant", True),
+            "goal_assoc_unique_topk": kwargs.get("goal_assoc_unique_topk", 16),
+            "goal_assoc_max_activation_drop": kwargs.get("goal_assoc_max_activation_drop", 0.08),
+            "record_experience_transitions": kwargs.get("record_experience_transitions", True),
+            "two_phase_learning": kwargs.get("two_phase_learning", False),
+            "phase1_min_steps": kwargs.get("phase1_min_steps", 2500),
+            "phase1_bin_size": kwargs.get("phase1_bin_size", 0.5),
+            "phase1_min_revisit_bins": kwargs.get("phase1_min_revisit_bins", 15),
+            "phase1_revisit_cosine_threshold": kwargs.get("phase1_revisit_cosine_threshold", 0.90),
+            "phase1_revisit_window": kwargs.get("phase1_revisit_window", 200),
+            "defer_experience_build_until_phase2_end": kwargs.get("defer_experience_build_until_phase2_end", True),
+            "goal_map_replay_timesteps": kwargs.get("goal_map_replay_timesteps", 18),
+            "hybrid_path_replay_weight": kwargs.get("hybrid_path_replay_weight", 0.8),
+            "hybrid_diffusion_replay_weight": kwargs.get("hybrid_diffusion_replay_weight", 0.2),
+            "prune_experience_loops": kwargs.get("prune_experience_loops", True),
+            "loop_prune_min_top1": kwargs.get("loop_prune_min_top1", 0.08),
+            "loop_prune_min_top1_to_top2_ratio": kwargs.get("loop_prune_min_top1_to_top2_ratio", 1.15),
         },
         "goal_config": kwargs.get("goal_config"),
         "trial_config": kwargs.get("trial_config"),
@@ -101,6 +118,12 @@ def save_trial_parameters(world_name, trial_id, mode, **kwargs):
             "grid_size": kwargs.get("grid_size"),
             "coverage_percentage": kwargs.get("coverage_percentage"),
             "min_goal_visits": kwargs.get("min_goal_visits", 3),
+            "goal_visit_cooldown_seconds": kwargs.get("goal_visit_cooldown_seconds", 6.0),
+            "goal_exit_hysteresis": kwargs.get("goal_exit_hysteresis", 0.1),
+            "proximity_mode": kwargs.get("proximity_mode", "min"),
+            "proximity_trimmed_sigma": kwargs.get("proximity_trimmed_sigma", 2.5),
+            "proximity_pair_percentile": kwargs.get("proximity_pair_percentile", 25.0),
+            "pcn_gate_mode": kwargs.get("pcn_gate_mode", "normal"),
         },
         "path_planning_parameters": {
             "optimal_path_distance": kwargs.get("optimal_path_distance"),
@@ -137,12 +160,19 @@ def _steps_for_sigma(sigma_pc_s: float) -> int:
     """Derive custom replay timesteps proportional to lambda_s; sigma drives lambda_s."""
     return int(math.ceil(C_LAMBDA * sigma_pc_s * STEPS_PER_LAMBDA))
 
+# Per-scale tuning multipliers for unified scale selection:
+# sigma_tune_s = sigma_tune_k_s * sigma_r_s
+SIGMA_TUNE_K_SMALL = 1.2
+SIGMA_TUNE_K_MEDIUM = 0.8
+SIGMA_TUNE_K_LARGE = 0.75
+SIGMA_TUNE_K_XLARGE = 1.0
+
 SCALES_DEFS_GRID = {
     "small": {
         "scale_index": 0,
         "name": "small",
         "sigma_pc_s": 1.0,  # Place field size for scale-dependent reward propagation
-        "num_pc": 2000,
+        "num_pc": 1000,
         "sigma_r": 0.5, #0.5
         "sigma_theta": 1,
         "rcn_learning_rate": 0.1,
@@ -157,7 +187,7 @@ SCALES_DEFS_GRID = {
         # Unified multi-scale parameters
         "d_opt": 0.7,  # Optimal boundary distance for this scale
         "gamma_cross": 0.4,  # Reduced to ease scale starvation
-        "sigma_tune": 1.1,  # Slightly broader tuning for softer scale transitions
+        "sigma_tune_k": SIGMA_TUNE_K_SMALL,  # sigma_tune = sigma_tune_k * sigma_r
         # Optional per-cell d_opt jitter (biological heterogeneity around scale default)
         "d_opt_jitter_std": 0.15,
         "d_opt_jitter_range": 0.3,
@@ -170,6 +200,7 @@ SCALES_DEFS_GRID = {
         "cells_per_module": 100,
         "spread_range": (1.5, 1.5),
         "scale_multiplier": 4,
+        "module_scale_ratio": 1.8,
         "translation_scale": 2.0,
         "mask_resolution": 256,
         "smooth_sigma": 0.5,
@@ -194,7 +225,7 @@ SCALES_DEFS_GRID = {
         "scale_index": 1,
         "name": "medium",
         "sigma_pc_s": 1.5,  # Place field size for scale-dependent reward propagation
-        "num_pc": 1000,
+        "num_pc": 500,
         "sigma_r": 1.0, #2
         "sigma_theta": 3,
         "rcn_learning_rate": 0.1,
@@ -209,7 +240,7 @@ SCALES_DEFS_GRID = {
         # Unified multi-scale parameters
         "d_opt": 2.5,
         "gamma_cross": 0.43,
-        "sigma_tune": 1.1,
+        "sigma_tune_k": SIGMA_TUNE_K_MEDIUM,  # sigma_tune = sigma_tune_k * sigma_r
         # Optional per-cell d_opt jitter (biological heterogeneity around scale default)
         "d_opt_jitter_std": 0.25,
         "d_opt_jitter_range": 0.5,
@@ -222,6 +253,7 @@ SCALES_DEFS_GRID = {
         "cells_per_module": 50,
         "spread_range": (1.5, 1.5),
         "scale_multiplier": 5.5,
+        "module_scale_ratio": 1.8,
         "translation_scale": 2.0,
         "mask_resolution": 128,
         "smooth_sigma": 0.5,
@@ -246,7 +278,7 @@ SCALES_DEFS_GRID = {
         "scale_index": 2,
         "name": "large",
         "sigma_pc_s": 3.0,  # Place field size for scale-dependent reward propagation
-        "num_pc": 500,
+        "num_pc": 250,
         "sigma_r": 1.5, # 2.0
         "sigma_theta": 5,
         "rcn_learning_rate": 0.1,
@@ -261,11 +293,14 @@ SCALES_DEFS_GRID = {
         # Unified multi-scale parameters
         "d_opt": 5.0,
         "gamma_cross": 0.43,
-        "sigma_tune": 1.1,
+        "sigma_tune_k": SIGMA_TUNE_K_LARGE,  # sigma_tune = sigma_tune_k * sigma_r
         # Optional per-cell d_opt jitter (biological heterogeneity around scale default)
         "d_opt_jitter_std": 0.35,
         "d_opt_jitter_range": 0.7,
         "d_opt_jitter_seed": 5002,
+        # Keep largest scale recruited in deep open space once d_opt is reached.
+        "large_scale_one_sided": True,
+        "large_scale_plateau": 1.0,
         # Grid cell parameters
         "grid_influence": 0.35,  # 0.35
         "gamma_pg": 0.25,
@@ -274,6 +309,7 @@ SCALES_DEFS_GRID = {
         "cells_per_module": 50,
         "spread_range": (1.5, 1.5),
         "scale_multiplier": 7,
+        "module_scale_ratio": 1.8,
         "translation_scale": 2.0,
         "mask_resolution": 128,
         "smooth_sigma": 0.5,
@@ -309,11 +345,14 @@ SCALES_DEFS_GRID = {
         # Unified multi-scale parameters
         "d_opt": 7.5,
         "gamma_cross": 0.33,
-        "sigma_tune": 1.1,
+        "sigma_tune_k": SIGMA_TUNE_K_XLARGE,  # sigma_tune = sigma_tune_k * sigma_r
         # Optional per-cell d_opt jitter (biological heterogeneity around scale default)
         "d_opt_jitter_std": 0.45,
         "d_opt_jitter_range": 0.9,
         "d_opt_jitter_seed": 5003,
+        # Keep largest scale recruited in deep open space once d_opt is reached.
+        "large_scale_one_sided": True,
+        "large_scale_plateau": 1.0,
         # Grid cell parameters
         "grid_influence": 0.35,  # 0.35
         "gamma_pg": 0.32,
@@ -322,6 +361,7 @@ SCALES_DEFS_GRID = {
         "cells_per_module": 50,
         "spread_range": (1.0, 1.0),
         "scale_multiplier": 5.0,
+        "module_scale_ratio": 1.8,
         "translation_scale": 1.0,
         "mask_resolution": 96,
         "smooth_sigma": 1.5,
@@ -346,6 +386,26 @@ def compile_scales(scale_names):
     actual scale definitions from SCALES_DEFS.
     """
     return [SCALES_DEFS_GRID[name] for name in scale_names]
+
+
+# Per-environment single-goal positions (match the Goal proto in each .wbt file).
+WORLD_SINGLE_GOALS = {
+    "environment_1": {"name": "goal", "location": [-9.0, -9.0], "radius": 0.8},
+    "environment_2": {"name": "goal", "location": [ 9.0, -9.0], "radius": 0.8},
+    "environment_3": {"name": "goal", "location": [ 9.0,  9.0], "radius": 0.8},
+    "environment_4": {"name": "goal", "location": [-9.0,  9.0], "radius": 0.8},
+    "environment_5": {"name": "goal", "location": [ 9.0, -9.0], "radius": 0.8},
+    "environment_6": {"name": "goal", "location": [-9.0, -9.0], "radius": 0.8},
+}
+
+
+def _build_single_goal_config(world_name):
+    """Return a single-goal config dict for the given world."""
+    entry = WORLD_SINGLE_GOALS.get(world_name)
+    if entry is None:
+        print(f"[WARNING] No goal config found for world '{world_name}', using origin fallback")
+        entry = {"name": "goal", "location": [0.0, 0.0], "radius": 0.8}
+    return {"type": "multi", "goals": [entry]}
 
 
 #################################
@@ -401,6 +461,12 @@ def _run_single_trial(bot, mode, trial_id, start_loc, target_goal, stats_collect
         grid_size=trial_kwargs.get("grid_size", None),
         coverage_percentage=trial_kwargs.get("coverage_percentage", None),
         min_goal_visits=trial_kwargs.get("min_goal_visits", 3),
+        goal_visit_cooldown_seconds=trial_kwargs.get("goal_visit_cooldown_seconds", 6.0),
+        goal_exit_hysteresis=trial_kwargs.get("goal_exit_hysteresis", 0.1),
+        proximity_mode=trial_kwargs.get("proximity_mode", "min"),
+        proximity_trimmed_sigma=trial_kwargs.get("proximity_trimmed_sigma", 2.5),
+        proximity_pair_percentile=trial_kwargs.get("proximity_pair_percentile", 25.0),
+        pcn_gate_mode=trial_kwargs.get("pcn_gate_mode", "normal"),
         optimal_path_distance=trial_kwargs.get("optimal_path_distance", None),
         path_failure_ratio=trial_kwargs.get("path_failure_ratio", None),
         paths_folder=trial_kwargs.get("paths_folder", None),
@@ -408,6 +474,26 @@ def _run_single_trial(bot, mode, trial_id, start_loc, target_goal, stats_collect
         auto_trial_name=trial_kwargs.get("auto_trial_name", None),
         num_auto_trials=trial_kwargs.get("num_auto_trials", 5),
         current_auto_trial=trial_kwargs.get("current_auto_trial", 1),
+        lightweight_hmaps=trial_kwargs.get("lightweight_hmaps", False),
+        hmap_sample_stride=trial_kwargs.get("hmap_sample_stride", 10),
+        hmap_topk=trial_kwargs.get("hmap_topk", 8),
+        gcn_scale_invariant=trial_kwargs.get("gcn_scale_invariant", True),
+        goal_assoc_unique_topk=trial_kwargs.get("goal_assoc_unique_topk", 16),
+        goal_assoc_max_activation_drop=trial_kwargs.get("goal_assoc_max_activation_drop", 0.08),
+        record_experience_transitions=trial_kwargs.get("record_experience_transitions", True),
+        two_phase_learning=trial_kwargs.get("two_phase_learning", False),
+        phase1_min_steps=trial_kwargs.get("phase1_min_steps", 2500),
+        phase1_bin_size=trial_kwargs.get("phase1_bin_size", 0.5),
+        phase1_min_revisit_bins=trial_kwargs.get("phase1_min_revisit_bins", 15),
+        phase1_revisit_cosine_threshold=trial_kwargs.get("phase1_revisit_cosine_threshold", 0.90),
+        phase1_revisit_window=trial_kwargs.get("phase1_revisit_window", 200),
+        defer_experience_build_until_phase2_end=trial_kwargs.get("defer_experience_build_until_phase2_end", True),
+        goal_map_replay_timesteps=trial_kwargs.get("goal_map_replay_timesteps", 18),
+        hybrid_path_replay_weight=trial_kwargs.get("hybrid_path_replay_weight", 0.8),
+        hybrid_diffusion_replay_weight=trial_kwargs.get("hybrid_diffusion_replay_weight", 0.2),
+        prune_experience_loops=trial_kwargs.get("prune_experience_loops", True),
+        loop_prune_min_top1=trial_kwargs.get("loop_prune_min_top1", 0.08),
+        loop_prune_min_top1_to_top2_ratio=trial_kwargs.get("loop_prune_min_top1_to_top2_ratio", 1.15),
     )
 
     bot.trial_id = trial_id
@@ -433,6 +519,7 @@ def _run_simple_trials(mode, trial_config, **kwargs):
 
     bot = Driver()
     world_name = get_world_name(bot)
+    trial_kwargs["goal_config"] = _build_single_goal_config(world_name)
 
     # Setup stats if needed
     if save_data and mode == RobotMode.EXPLOIT:
@@ -448,11 +535,6 @@ def _run_simple_trials(mode, trial_config, **kwargs):
 
     for start_loc in start_locations:
         for trial_num in range(1, trials_per_start + 1):
-            # Skip if goal and start are the same
-            goal_config = kwargs.get("goal_config", {})
-            if goal_config.get("type") == "single" and goal_config["location"] == start_loc:
-                print(f"[INFO] Skipping trial - start location {start_loc} equals goal location")
-                continue
 
             # Get existing trial count
             if save_data:
@@ -530,7 +612,7 @@ def _run_combination_trials(mode, trial_config, **kwargs):
 
 
 def _run_random_spawn_trials(mode, trial_config, **kwargs):
-    """Handle random spawn trial execution with path planning"""
+    """Handle random spawn trial execution without precomputed path planning."""
     trials_per_goal = trial_config["trials_per_goal"]
     save_data = kwargs.get("save_data", False)
 
@@ -541,12 +623,13 @@ def _run_random_spawn_trials(mode, trial_config, **kwargs):
 
     bot = Driver()
     world_name = get_world_name(bot)
+    kwargs["goal_config"] = _build_single_goal_config(world_name)
 
     # Get goals from goal config
-    goal_config = kwargs.get("goal_config", {})
+    goal_config = kwargs["goal_config"]
     goals = goal_config.get("goals", [])
 
-    print(f"[RANDOM_SPAWN] Generating spawn locations and paths for {len(goals)} goals")
+    print(f"[RANDOM_SPAWN] Generating spawn locations for {len(goals)} goals")
 
     # Generate spawn locations using path planning module
     spawn_locations = generate_spawn_locations(
@@ -557,7 +640,7 @@ def _run_random_spawn_trials(mode, trial_config, **kwargs):
         wall_clearance=wall_clearance
     )
 
-    # Create spawn/goal combinations for path calculation
+    # Create spawn/goal trial combinations
     combinations = []
     for goal in goals:
         goal_name = goal["name"]
@@ -570,9 +653,6 @@ def _run_random_spawn_trials(mode, trial_config, **kwargs):
                 "goal_name": goal_name
             })
 
-    # Calculate optimal paths for all combinations
-    path_results = calculate_optimal_paths(world_name, combinations, wall_clearance)
-
     # Setup stats collection
     if save_data:
         scale_names = kwargs.get("scale_names", [])
@@ -583,28 +663,6 @@ def _run_random_spawn_trials(mode, trial_config, **kwargs):
         )
         os.makedirs(stats_folder, exist_ok=True)
 
-        # Create paths visualization folder and generate plots if enabled
-        generate_plots = kwargs.get("generate_path_plots", True)
-        if generate_plots:
-            paths_folder = os.path.join(
-                PROJECT_ROOT, "analysis", "stats_random", world_name, scale_name_str, "paths"
-            )
-            os.makedirs(paths_folder, exist_ok=True)
-
-            # Generate and save path visualizations
-            print("[RANDOM_SPAWN] Generating path visualizations...")
-            save_path_visualizations(
-                world_name=world_name,
-                combinations=combinations,
-                path_results=path_results,
-                output_dir=paths_folder,
-                wall_clearance=wall_clearance,
-                min_spawn_distance=min_spawn_distance
-            )
-        else:
-            print("[RANDOM_SPAWN] Path plot generation disabled, skipping visualizations...")
-            paths_folder = None
-
         # Create hmaps folder
         hmaps_folder = os.path.join(
             PROJECT_ROOT, "analysis", "stats_random", world_name, scale_name_str, "hmaps"
@@ -614,26 +672,20 @@ def _run_random_spawn_trials(mode, trial_config, **kwargs):
         stats_collector_instance = stats_collector(output_dir=stats_folder)
     else:
         stats_collector_instance = None
-        paths_folder = None
 
     print(f"[RANDOM_SPAWN] Running {len(combinations)} trials")
 
     # Execute trials using single-trial pattern
     successful_trials = 0
-    for i, (combination, path_result) in enumerate(zip(combinations, path_results)):
-        if not path_result["success"]:
-            print(f"[RANDOM_SPAWN] Skipping trial with failed path: {combination['goal_name']} trial {combination['trial_number']}")
-            continue
-
+    for i, combination in enumerate(combinations):
         start_pos = combination["start"]
         goal_name = combination["goal_name"]
         trial_number = combination["trial_number"]
-        optimal_distance = path_result["distance"]
 
         # Create trial ID
         trial_id = f"trial_{trial_number}_goal_{goal_name}_random"
 
-        print(f"[RANDOM_SPAWN] Running {trial_id}: Start {start_pos} -> Goal {goal_name} ({successful_trials + 1}/{len([p for p in path_results if p['success']])})")
+        print(f"[RANDOM_SPAWN] Running {trial_id}: Start {start_pos} -> Goal {goal_name} ({successful_trials + 1}/{len(combinations)})")
 
         # Prepare trial-specific kwargs
         trial_kwargs = kwargs.copy()
@@ -642,11 +694,10 @@ def _run_random_spawn_trials(mode, trial_config, **kwargs):
             "goals": goals,
             "target_goal": goal_name  # Set target goal for this trial
         }
-        trial_kwargs["optimal_path_distance"] = optimal_distance
+        trial_kwargs["optimal_path_distance"] = None
         trial_kwargs["path_failure_ratio"] = path_failure_ratio
-        trial_kwargs["paths_folder"] = paths_folder
+        trial_kwargs["paths_folder"] = None
         trial_kwargs["hmaps_folder"] = hmaps_folder if save_data else None
-        trial_kwargs["path_visualization"] = path_result.get("visualization_path", None)
 
         # Run single trial (fresh driver instance for each trial)
         _run_single_trial(bot, mode, trial_id, start_pos, goal_name, stats_collector_instance, **trial_kwargs)
@@ -736,6 +787,7 @@ def _run_learn_coverage_auto_trials(mode, **kwargs):
     # Create single Driver instance that will be reused for all trials
     bot = Driver()
     world_name = get_world_name(bot)
+    kwargs["goal_config"] = _build_single_goal_config(world_name)
 
     # Check for existing trials and find starting point
     first_incomplete_trial = None
@@ -804,6 +856,22 @@ def _run_learn_coverage_auto_trials(mode, **kwargs):
             auto_trial_name=auto_trial_name,
             num_auto_trials=num_auto_trials,
             current_auto_trial=trial_num,
+            gcn_scale_invariant=kwargs.get("gcn_scale_invariant", True),
+            goal_assoc_unique_topk=kwargs.get("goal_assoc_unique_topk", 16),
+            goal_assoc_max_activation_drop=kwargs.get("goal_assoc_max_activation_drop", 0.08),
+            record_experience_transitions=kwargs.get("record_experience_transitions", True),
+            two_phase_learning=kwargs.get("two_phase_learning", False),
+            phase1_min_steps=kwargs.get("phase1_min_steps", 2500),
+            phase1_stability_window=kwargs.get("phase1_stability_window", 600),
+            phase1_top1_stability_threshold=kwargs.get("phase1_top1_stability_threshold", 0.93),
+            phase1_cosine_stability_threshold=kwargs.get("phase1_cosine_stability_threshold", 0.992),
+            defer_experience_build_until_phase2_end=kwargs.get("defer_experience_build_until_phase2_end", True),
+            goal_map_replay_timesteps=kwargs.get("goal_map_replay_timesteps", 18),
+            hybrid_path_replay_weight=kwargs.get("hybrid_path_replay_weight", 0.8),
+            hybrid_diffusion_replay_weight=kwargs.get("hybrid_diffusion_replay_weight", 0.2),
+            prune_experience_loops=kwargs.get("prune_experience_loops", True),
+            loop_prune_min_top1=kwargs.get("loop_prune_min_top1", 0.08),
+            loop_prune_min_top1_to_top2_ratio=kwargs.get("loop_prune_min_top1_to_top2_ratio", 1.15),
         )
 
         # Run the trial (initialization() already reset self.done = False)
@@ -837,6 +905,7 @@ def _run_exploit_random_auto_trials(mode, **kwargs):
     # Create single Driver instance that will be reused for all trials
     bot = Driver()
     world_name = get_world_name(bot)
+    kwargs["goal_config"] = _build_single_goal_config(world_name)
 
     # Check which learning trials exist
     available_trials = []
@@ -858,7 +927,6 @@ def _run_exploit_random_auto_trials(mode, **kwargs):
     min_spawn_distance = kwargs.get("min_spawn_distance", 6.0)
     wall_clearance = kwargs.get("wall_clearance", 0.5)
     path_failure_ratio = kwargs.get("path_failure_ratio", 15.0)
-    generate_plots = kwargs.get("generate_path_plots", True)
 
     # Get goal config
     goal_config = kwargs.get("goal_config", {})
@@ -908,9 +976,6 @@ def _run_exploit_random_auto_trials(mode, **kwargs):
                 "goal_name": goal_name
             })
 
-    # Calculate optimal paths
-    path_results = calculate_optimal_paths(world_name, combinations, wall_clearance)
-
     # Loop through each learning trial that needs exploitation
     for trial_num in trials_to_run:
         print(f"\n{'='*60}")
@@ -926,26 +991,6 @@ def _run_exploit_random_auto_trials(mode, **kwargs):
         )
         os.makedirs(stats_folder, exist_ok=True)
 
-        # Create paths and hmaps folders
-        if generate_plots:
-            paths_folder = os.path.join(
-                PROJECT_ROOT, "analysis", stats_base, world_trial_folder, scale_name_str, "paths"
-            )
-            os.makedirs(paths_folder, exist_ok=True)
-
-            # Generate path visualizations (once per learning trial)
-            print(f"[AUTO_EXPLOIT] Generating path visualizations for trial {trial_num}...")
-            save_path_visualizations(
-                world_name=world_name,
-                combinations=combinations,
-                path_results=path_results,
-                output_dir=paths_folder,
-                wall_clearance=wall_clearance,
-                min_spawn_distance=min_spawn_distance
-            )
-        else:
-            paths_folder = None
-
         hmaps_folder = os.path.join(
             PROJECT_ROOT, "analysis", stats_base, world_trial_folder, scale_name_str, "hmaps"
         )
@@ -956,20 +1001,15 @@ def _run_exploit_random_auto_trials(mode, **kwargs):
 
         # Run all exploitation trials for this learning trial
         successful_trials = 0
-        for i, (combination, path_result) in enumerate(zip(combinations, path_results)):
-            if not path_result["success"]:
-                print(f"[AUTO_EXPLOIT] Skipping trial with failed path: {combination['goal_name']} trial {combination['trial_number']}")
-                continue
-
+        for i, combination in enumerate(combinations):
             start_pos = combination["start"]
             goal_name = combination["goal_name"]
             trial_number = combination["trial_number"]
-            optimal_distance = path_result["distance"]
 
             # Create trial ID
             trial_id = f"trial_{trial_number}_goal_{goal_name}_random"
 
-            print(f"[AUTO_EXPLOIT] Learning trial {trial_num}, Exploit trial {trial_id}: {start_pos} -> {goal_name} ({successful_trials + 1}/{len([p for p in path_results if p['success']])})")
+            print(f"[AUTO_EXPLOIT] Learning trial {trial_num}, Exploit trial {trial_id}: {start_pos} -> {goal_name} ({successful_trials + 1}/{len(combinations)})")
 
             # Prepare trial-specific kwargs
             trial_kwargs = kwargs.copy()
@@ -978,11 +1018,10 @@ def _run_exploit_random_auto_trials(mode, **kwargs):
                 "goals": goals,
                 "target_goal": goal_name
             }
-            trial_kwargs["optimal_path_distance"] = optimal_distance
+            trial_kwargs["optimal_path_distance"] = None
             trial_kwargs["path_failure_ratio"] = path_failure_ratio
-            trial_kwargs["paths_folder"] = paths_folder
+            trial_kwargs["paths_folder"] = None
             trial_kwargs["hmaps_folder"] = hmaps_folder
-            trial_kwargs["path_visualization"] = path_result.get("visualization_path", None)
             trial_kwargs["auto_trial_name"] = auto_trial_name
             trial_kwargs["current_auto_trial"] = trial_num
 
@@ -1102,6 +1141,22 @@ def _run_plotting_auto_trials(mode, **kwargs):
             auto_trial_name=auto_trial_name,
             num_auto_trials=num_auto_trials,
             current_auto_trial=trial_num,
+            gcn_scale_invariant=kwargs.get("gcn_scale_invariant", True),
+            goal_assoc_unique_topk=kwargs.get("goal_assoc_unique_topk", 16),
+            goal_assoc_max_activation_drop=kwargs.get("goal_assoc_max_activation_drop", 0.08),
+            record_experience_transitions=kwargs.get("record_experience_transitions", True),
+            two_phase_learning=kwargs.get("two_phase_learning", False),
+            phase1_min_steps=kwargs.get("phase1_min_steps", 2500),
+            phase1_stability_window=kwargs.get("phase1_stability_window", 600),
+            phase1_top1_stability_threshold=kwargs.get("phase1_top1_stability_threshold", 0.93),
+            phase1_cosine_stability_threshold=kwargs.get("phase1_cosine_stability_threshold", 0.992),
+            defer_experience_build_until_phase2_end=kwargs.get("defer_experience_build_until_phase2_end", True),
+            goal_map_replay_timesteps=kwargs.get("goal_map_replay_timesteps", 18),
+            hybrid_path_replay_weight=kwargs.get("hybrid_path_replay_weight", 0.8),
+            hybrid_diffusion_replay_weight=kwargs.get("hybrid_diffusion_replay_weight", 0.2),
+            prune_experience_loops=kwargs.get("prune_experience_loops", True),
+            loop_prune_min_top1=kwargs.get("loop_prune_min_top1", 0.08),
+            loop_prune_min_top1_to_top2_ratio=kwargs.get("loop_prune_min_top1_to_top2_ratio", 1.15),
         )
 
         # Run the plotting trial
@@ -1231,6 +1286,22 @@ def _run_plotting_coverage_auto_trials(mode, **kwargs):
             auto_trial_name=auto_trial_name,
             num_auto_trials=num_auto_trials,
             current_auto_trial=trial_num,
+            gcn_scale_invariant=kwargs.get("gcn_scale_invariant", True),
+            goal_assoc_unique_topk=kwargs.get("goal_assoc_unique_topk", 16),
+            goal_assoc_max_activation_drop=kwargs.get("goal_assoc_max_activation_drop", 0.08),
+            record_experience_transitions=kwargs.get("record_experience_transitions", True),
+            two_phase_learning=kwargs.get("two_phase_learning", False),
+            phase1_min_steps=kwargs.get("phase1_min_steps", 2500),
+            phase1_stability_window=kwargs.get("phase1_stability_window", 600),
+            phase1_top1_stability_threshold=kwargs.get("phase1_top1_stability_threshold", 0.93),
+            phase1_cosine_stability_threshold=kwargs.get("phase1_cosine_stability_threshold", 0.992),
+            defer_experience_build_until_phase2_end=kwargs.get("defer_experience_build_until_phase2_end", True),
+            goal_map_replay_timesteps=kwargs.get("goal_map_replay_timesteps", 18),
+            hybrid_path_replay_weight=kwargs.get("hybrid_path_replay_weight", 0.8),
+            hybrid_diffusion_replay_weight=kwargs.get("hybrid_diffusion_replay_weight", 0.2),
+            prune_experience_loops=kwargs.get("prune_experience_loops", True),
+            loop_prune_min_top1=kwargs.get("loop_prune_min_top1", 0.08),
+            loop_prune_min_top1_to_top2_ratio=kwargs.get("loop_prune_min_top1_to_top2_ratio", 1.15),
         )
 
         # Run the plotting trial with coverage-based stopping
@@ -1317,6 +1388,7 @@ if __name__ == "__main__":
     MODES_MAP = {
         "LEARN_OJAS": RobotMode.LEARN_OJAS,
         "LEARN_HEBB": RobotMode.LEARN_HEBB,
+        "LEARN_LOCATIONS_TWO_PHASE": RobotMode.LEARN_LOCATIONS_TWO_PHASE,
         "DMTP": RobotMode.DMTP,
         "EXPLOIT": RobotMode.EXPLOIT,
         "EXPLOIT_SAVE": RobotMode.EXPLOIT,
@@ -1347,6 +1419,38 @@ if __name__ == "__main__":
     # Set to False to use original independent scales (for rollback)
     # ========================================================================
     use_unified_multiscale = True
+    # Make GCN coding shared/scale-invariant across all active scales.
+    gcn_scale_invariant = False
+    # Goal association uniqueness: prefer near-top PCs that are not already reused by other goals.
+    goal_assoc_unique_topk = 16
+    goal_assoc_max_activation_drop = 0.08
+    record_experience_transitions = True
+    # Two-phase learning settings: OJAS stabilize -> STDP learn coverage/goals.
+    # Stability is measured by revisit consistency: the same spatial location
+    # must reliably produce the same place cell activation pattern.
+    two_phase_learning = False
+    phase1_min_steps = 2500
+    phase1_max_steps = 20000           # force phase-2 transition after this many steps
+    phase1_bin_size = 0.5              # spatial bin size in metres
+    phase1_min_revisit_bins = 15       # unique bins that must have been revisited
+    phase1_revisit_cosine_threshold = 0.90   # mean revisit cosine similarity required
+    phase1_revisit_window = 200        # rolling window size for revisit cosine history
+    defer_experience_build_until_phase2_end = True
+    goal_map_replay_timesteps = 18
+    hybrid_path_replay_weight = 0.8
+    hybrid_diffusion_replay_weight = 0.2
+    prune_experience_loops = True
+    loop_prune_min_top1 = 0.08
+    loop_prune_min_top1_to_top2_ratio = 1.15
+    # Proximity mode controls scale-selection distance signal.
+    # "local_minima": finds local minima in the LiDAR profile (parameter-free,
+    #   handles doorways/corners/open space; returns harmonic mean of two closest)
+    # "opposite_pair_percentile": corridor-aware opposite-pair half-width
+    # "min": classic nearest-wall minimum distance
+    proximity_mode = "local_minima"
+    proximity_pair_percentile = 25.0  # used only when proximity_mode == "opposite_pair_percentile"
+    # Gate mode for unified PCN: "normal", "no_gate_no_inhibition", "no_gate_with_inhibition"
+    pcn_gate_mode = "normal"
 
     multiscale = ["small", "medium", "large"]
     small = ["small"]
@@ -1372,23 +1476,11 @@ if __name__ == "__main__":
         ]
     }
 
-    multi_goal_config_explore = {
-        "type": "multi",
-        "goals": [
-            {"name": "red", "location": [9, 9], "radius": 0.8},
-            {"name": "green", "location": [-9, 9], "radius": 0.8},
-            {"name": "blue", "location": [9, -9], "radius": 0.8},
-            {"name": "yellow", "location": [-9, -9], "radius": 0.8}
-        ]
-    }
-
-    
-
     # Coverage parameters for LEARN_LOCATIONS_COVERAGE
     environment_size = [20.0, 20.0]  # 20x20 meter environment
     grid_size = 0.5  # 0.5 meter grid cells
-    coverage_percentage = 0.95  # 90% coverage target
-    min_goal_visits = 10  # Minimum number of visits required per goal
+    coverage_percentage = 0.99  # 90% coverage target
+    min_goal_visits = 10  # Minimum visits to the single goal before reward map is built
 
     # Random spawn parameters for EXPLOIT_LOCATIONS_RANDOM
     min_spawn_distance = 6.0  # 6 meters from goal
@@ -1421,7 +1513,7 @@ if __name__ == "__main__":
         "LEARN_HEBB": {
             "corners": corners,
             "start_loc": start_loc,
-            "goal_config": multi_goal_config_explore,
+            "goal_config": None,
             "max_dist": max_dist,
             "randomize_start_loc": randomize_start_loc,
             "scale_names": scale_names,
@@ -1516,7 +1608,7 @@ if __name__ == "__main__":
         "LEARN_LOCATIONS_COVERAGE": {
             "corners": [[0, 0]],  # Single starting location for learning
             "start_loc": start_loc,
-            "goal_config": multi_goal_config_explore,
+            "goal_config": None,
             "trial_config": {"type": "simple", "count": 1},
             "max_dist": max_dist,
             "randomize_start_loc": False,
@@ -1535,9 +1627,39 @@ if __name__ == "__main__":
             "min_goal_visits": min_goal_visits,
             "use_unified_multiscale": use_unified_multiscale,
         },
+        "LEARN_LOCATIONS_TWO_PHASE": {
+            "corners": [[0, 0]],
+            "start_loc": start_loc,
+            "goal_config": None,
+            "trial_config": {"type": "simple", "count": 1},
+            "max_dist": max_dist,
+            "randomize_start_loc": False,
+            "scale_names": scale_names,
+            "enable_ojas": True,
+            "enable_stdp": False,
+            "run_time_hours": run_time_hours,
+            "num_loops": 1,
+            "save_data": False,
+            "td_learning": False,
+            "use_prox_mod": False,
+            "plot_bvc": False,
+            "environment_size": environment_size,
+            "grid_size": grid_size,
+            "coverage_percentage": coverage_percentage,
+            "min_goal_visits": min_goal_visits,
+            "use_unified_multiscale": use_unified_multiscale,
+            "two_phase_learning": True,
+            "phase1_min_steps": phase1_min_steps,
+            "phase1_max_steps": phase1_max_steps,
+            "phase1_bin_size": phase1_bin_size,
+            "phase1_min_revisit_bins": phase1_min_revisit_bins,
+            "phase1_revisit_cosine_threshold": phase1_revisit_cosine_threshold,
+            "phase1_revisit_window": phase1_revisit_window,
+            "defer_experience_build_until_phase2_end": defer_experience_build_until_phase2_end,
+        },
         "LEARN_LOCATIONS_COVERAGE_AUTO": {
             "start_loc": start_loc,
-            "goal_config": multi_goal_config_explore,
+            "goal_config": None,
             "trial_config": {"type": "simple", "count": 1},
             "max_dist": max_dist,
             "randomize_start_loc": False,
@@ -1569,11 +1691,7 @@ if __name__ == "__main__":
             "clear_files": False,
             "action_mode": "exploit_locations",
             "save_data": True,
-            "goal_config": {
-                "type": "multi",
-                "goals": multi_goal_config["goals"]
-                # No target_goal - will be set per trial
-            },
+            "goal_config": None,  # set dynamically from world name at runtime
             "trial_config": {
                 "type": "random_spawns",
                 "trials_per_goal": trials_per_goal
@@ -1585,6 +1703,10 @@ if __name__ == "__main__":
             "path_failure_ratio": path_failure_ratio,
             "generate_path_plots": generate_path_plots,
             "use_unified_multiscale": use_unified_multiscale,
+            # Lightweight logging for fast exploit initialization + goal-save
+            "lightweight_hmaps": True,
+            "hmap_sample_stride": 10,
+            "hmap_topk": 8,
         },
         "EXPLOIT_LOCATIONS_RANDOM_AUTO": {
             "scale_names": scale_names,
@@ -1595,11 +1717,7 @@ if __name__ == "__main__":
             "td_learning": td_learning,
             "use_prox_mod": use_prox_mod,
             "plot_bvc": plot_bvc,
-            "goal_config": {
-                "type": "multi",
-                "goals": multi_goal_config["goals"]
-                # No target_goal - will be set per trial
-            },
+            "goal_config": None,  # set dynamically from world name at runtime
             # Random spawn specific parameters
             "trials_per_goal": trials_per_goal,
             "min_spawn_distance": min_spawn_distance,
@@ -1607,13 +1725,17 @@ if __name__ == "__main__":
             "path_failure_ratio": path_failure_ratio,
             "generate_path_plots": generate_path_plots,
             "use_unified_multiscale": use_unified_multiscale,
+            # Lightweight logging for fast exploit initialization + goal-save
+            "lightweight_hmaps": True,
+            "hmap_sample_stride": 10,
+            "hmap_topk": 8,
             # Auto trial specific parameters (use shared variables)
             "auto_trial_name": auto_trial_name,
             "num_auto_trials": num_auto_trials,
         },
         "PLOTTING_AUTO": {
             "start_loc": start_loc,
-            "goal_config": multi_goal_config_explore,
+            "goal_config": None,
             "trial_config": {"type": "simple", "count": 1},
             "max_dist": max_dist,
             "randomize_start_loc": False,
@@ -1634,7 +1756,7 @@ if __name__ == "__main__":
         },
         "PLOTTING_COVERAGE_AUTO": {
             "start_loc": start_loc,
-            "goal_config": multi_goal_config_explore,
+            "goal_config": None,
             "trial_config": {"type": "simple", "count": 1},
             "max_dist": max_dist,
             "randomize_start_loc": False,
@@ -1654,6 +1776,31 @@ if __name__ == "__main__":
             "num_auto_trials": num_auto_trials,
         }
     }
+
+    # Apply shared defaults across all modes from one place.
+    # Do not overwrite mode-specific two-phase settings.
+    for _mode_name in MODE_PARAMS:
+        MODE_PARAMS[_mode_name]["proximity_mode"] = proximity_mode
+        MODE_PARAMS[_mode_name]["proximity_pair_percentile"] = proximity_pair_percentile
+        MODE_PARAMS[_mode_name]["pcn_gate_mode"] = pcn_gate_mode
+        MODE_PARAMS[_mode_name]["gcn_scale_invariant"] = gcn_scale_invariant
+        MODE_PARAMS[_mode_name]["goal_assoc_unique_topk"] = goal_assoc_unique_topk
+        MODE_PARAMS[_mode_name]["goal_assoc_max_activation_drop"] = goal_assoc_max_activation_drop
+        MODE_PARAMS[_mode_name]["record_experience_transitions"] = record_experience_transitions
+        MODE_PARAMS[_mode_name].setdefault("two_phase_learning", two_phase_learning)
+        MODE_PARAMS[_mode_name].setdefault("phase1_min_steps", phase1_min_steps)
+        MODE_PARAMS[_mode_name].setdefault("phase1_max_steps", phase1_max_steps)
+        MODE_PARAMS[_mode_name].setdefault("phase1_bin_size", phase1_bin_size)
+        MODE_PARAMS[_mode_name].setdefault("phase1_min_revisit_bins", phase1_min_revisit_bins)
+        MODE_PARAMS[_mode_name].setdefault("phase1_revisit_cosine_threshold", phase1_revisit_cosine_threshold)
+        MODE_PARAMS[_mode_name].setdefault("phase1_revisit_window", phase1_revisit_window)
+        MODE_PARAMS[_mode_name].setdefault("defer_experience_build_until_phase2_end", defer_experience_build_until_phase2_end)
+        MODE_PARAMS[_mode_name]["goal_map_replay_timesteps"] = goal_map_replay_timesteps
+        MODE_PARAMS[_mode_name]["hybrid_path_replay_weight"] = hybrid_path_replay_weight
+        MODE_PARAMS[_mode_name]["hybrid_diffusion_replay_weight"] = hybrid_diffusion_replay_weight
+        MODE_PARAMS[_mode_name]["prune_experience_loops"] = prune_experience_loops
+        MODE_PARAMS[_mode_name]["loop_prune_min_top1"] = loop_prune_min_top1
+        MODE_PARAMS[_mode_name]["loop_prune_min_top1_to_top2_ratio"] = loop_prune_min_top1_to_top2_ratio
 
     if SELECTED_MODE not in MODE_PARAMS or SELECTED_MODE not in MODES_MAP:
         print("Invalid mode selected.")

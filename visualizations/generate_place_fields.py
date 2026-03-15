@@ -32,14 +32,10 @@ OUTPUT_DIR = PROJECT_ROOT / "place_field_plots"
 
 def generate_random_colors(n):
     """Generate n random vibrant colors."""
-    np.random.seed(42)  # For reproducibility
-    colors = []
-    for _ in range(n):
-        # Generate vibrant colors by ensuring at least one RGB component is high
-        color = np.random.rand(3)
-        max_idx = np.argmax(color)
-        color[max_idx] = np.random.uniform(0.7, 1.0)
-        colors.append(color)
+    rng = np.random.default_rng(42)  # For reproducibility
+    colors = rng.random((n, 3))
+    max_idx = np.argmax(colors, axis=1)
+    colors[np.arange(n), max_idx] = rng.uniform(0.7, 1.0, size=n)
     return colors
 
 
@@ -147,9 +143,12 @@ def plot_place_cells_overlay(env_name, scale, hmap_loc, hmap_pcn, num_cells=None
     hmap_x = hmap_loc[:, 0]
     hmap_y = hmap_loc[:, 1]
 
-    # Find cells with non-zero activation
+    # Find cells with meaningful peak activation.
+    # Using peak (not sum) avoids counting cells that fired once with near-zero activation
+    # (residual IIR bleed, random BVC input) as "active" — these appear as scattered noise.
     total_activation = np.sum(hmap_pcn, axis=0)
-    active_cells = np.where(total_activation > 0)[0]
+    peak_per_cell = np.max(hmap_pcn, axis=0)
+    active_cells = np.where(peak_per_cell > 0.1)[0]
 
     if len(active_cells) == 0:
         print(f"  WARNING: No active cells found for scale {scale}")
@@ -172,32 +171,49 @@ def plot_place_cells_overlay(env_name, scale, hmap_loc, hmap_pcn, num_cells=None
     xedges = np.linspace(xmin, xmax, gridsize + 1)
     yedges = np.linspace(ymin, ymax, gridsize + 1)
 
-    # Initialize grids
-    total_activations = np.zeros((gridsize, gridsize, num_to_plot))
-    counts = np.zeros((gridsize, gridsize, num_to_plot))
+    # --- Vectorized binning (replaces O(N * num_to_plot) Python loop) ---
 
-    # Bin the data
-    for i, (x, y) in enumerate(zip(hmap_x, hmap_y)):
-        xi = np.digitize(x, xedges) - 1
-        yi = np.digitize(y, yedges) - 1
+    # Assign all timesteps to grid bins at once
+    xi = np.digitize(hmap_x, xedges) - 1
+    yi = np.digitize(hmap_y, yedges) - 1
+    valid = (xi >= 0) & (xi < gridsize) & (yi >= 0) & (yi < gridsize)
 
-        if 0 <= xi < gridsize and 0 <= yi < gridsize:
-            for j, cell_idx in enumerate(cell_indices):
-                activation = hmap_pcn[i, cell_idx]
-                total_activations[xi, yi, j] += activation
-                counts[xi, yi, j] += 1
+    xi_v = xi[valid]
+    yi_v = yi[valid]
+    flat_idx = (xi_v * gridsize + yi_v).astype(np.intp)  # 1D bin index
 
-    # Calculate mean activations
-    mean_activations = np.divide(
-        total_activations,
-        counts,
-        where=counts > 0,
-        out=np.zeros_like(total_activations)
-    )
+    # Extract selected cells for valid timesteps only
+    hmap_valid = hmap_pcn[valid][:, cell_indices].astype(np.float32)  # (N_valid, num_to_plot)
+
+    # Per-bin visit count (identical for all cells)
+    counts_1d = np.bincount(flat_idx, minlength=gridsize * gridsize).astype(np.float32)
+
+    # Per-bin activation sum per cell — one np.bincount call per cell (C-speed inner loop)
+    total_flat = np.zeros((gridsize * gridsize, num_to_plot), dtype=np.float32)
+    for j in range(num_to_plot):
+        total_flat[:, j] = np.bincount(
+            flat_idx,
+            weights=hmap_valid[:, j].astype(np.float64),
+            minlength=gridsize * gridsize,
+        )
+
+    # Mean activation per bin per cell
+    safe_counts = np.maximum(counts_1d, 1.0)
+    mean_flat = total_flat / safe_counts[:, np.newaxis]
+    mean_flat[counts_1d == 0] = 0.0
+    mean_activations = mean_flat.reshape(gridsize, gridsize, num_to_plot)
 
     # Find cell with max activation per bin
     max_activation_per_bin = np.max(mean_activations, axis=2)
     cell_with_max = np.argmax(mean_activations, axis=2)
+
+    # Spatial coherence filter: suppress cells that never dominate a contiguous region.
+    # Noise activations dominate only 1–3 isolated bins; genuine place fields dominate
+    # contiguous regions (small-scale ~80 bins, large-scale ~700 bins in a 200×200 grid).
+    MIN_DOMINANT_BINS = 10
+    dominant_counts = np.bincount(cell_with_max.ravel(), minlength=num_to_plot)
+    max_activation_per_bin = max_activation_per_bin.copy()
+    max_activation_per_bin[~(dominant_counts >= MIN_DOMINANT_BINS)[cell_with_max]] = 0.0
 
     # Normalize
     max_val = np.max(max_activation_per_bin)
@@ -206,16 +222,10 @@ def plot_place_cells_overlay(env_name, scale, hmap_loc, hmap_pcn, num_cells=None
     else:
         normalized = max_activation_per_bin
 
-    # Generate colors
-    colors = generate_random_colors(num_to_plot)
-
-    # Create RGB image
-    image = np.zeros((gridsize, gridsize, 3))
-    for i in range(gridsize):
-        for j in range(gridsize):
-            if normalized[i, j] > 0:
-                cell_idx = cell_with_max[i, j]
-                image[i, j, :] = normalized[i, j] * np.array(colors[cell_idx])
+    # --- Vectorized RGB image creation (replaces O(gridsize²) Python loop) ---
+    colors = generate_random_colors(num_to_plot)  # (num_to_plot, 3)
+    image = normalized[:, :, np.newaxis] * colors[cell_with_max]  # (gridsize, gridsize, 3)
+    image[normalized == 0] = 0.0
 
     # Transpose for correct orientation
     image = np.transpose(image, (1, 0, 2))

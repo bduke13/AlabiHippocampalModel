@@ -28,14 +28,78 @@ plt.rcParams.update({
 })
 
 SCALE_NAMES = {0: 'Small', 1: 'Medium', 2: 'Large'}
+ENVIRONMENTS = [f"environment_{i}" for i in range(1, 7)]
+_CACHED_HMAPS_ROOT: Optional[str] = None
 
 
-def _hmaps_root() -> str:
-    return os.path.join(CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl", WORLD_NAME, "hmaps")
+def _pkl_root() -> Path:
+    return Path(CONTROLLER_PATH_PREFIX) / CONTROLLER_NAME / "pkl"
 
 
-def discover_available_scales() -> List[int]:
-    root = Path(_hmaps_root())
+def _hmaps_root(env_name: str) -> str:
+    return str(_pkl_root() / env_name / "hmaps")
+
+
+def _resolve_hmaps_root(env_name: Optional[str] = None, allow_fallback: bool = True) -> Optional[str]:
+    """
+    Resolve an existing hmaps root.
+    Priority:
+    1) configured world path from vis_utils
+    2) newest available */hmaps directory under controller pkl root containing hmap_loc.pkl
+    """
+    # Strict environment lookup mode (used by batch processing).
+    if env_name is not None:
+        strict = Path(_hmaps_root(env_name))
+        if strict.exists() and (strict / "hmap_loc.pkl").exists():
+            return str(strict)
+        return None
+
+    global _CACHED_HMAPS_ROOT
+    if _CACHED_HMAPS_ROOT is not None:
+        return _CACHED_HMAPS_ROOT
+
+    preferred = Path(_hmaps_root(WORLD_NAME))
+    if preferred.exists() and (preferred / "hmap_loc.pkl").exists():
+        _CACHED_HMAPS_ROOT = str(preferred)
+        return _CACHED_HMAPS_ROOT
+    if not allow_fallback:
+        return None
+
+    pkl_root = _pkl_root()
+    candidates = []
+    if pkl_root.exists():
+        for env_dir in pkl_root.iterdir():
+            if not env_dir.is_dir():
+                continue
+            hmaps_dir = env_dir / "hmaps"
+            hmap_loc = hmaps_dir / "hmap_loc.pkl"
+            if hmaps_dir.exists() and hmap_loc.exists():
+                candidates.append(hmaps_dir)
+
+    if not candidates:
+        return None
+
+    chosen = max(candidates, key=lambda p: p.stat().st_mtime)
+    print(
+        f"[INFO] Using discovered hmaps folder: {chosen} "
+        f"(configured WORLD_NAME='{WORLD_NAME}' not found)"
+    )
+    _CACHED_HMAPS_ROOT = str(chosen)
+    return _CACHED_HMAPS_ROOT
+
+
+def _default_output_dir(hmaps_root: str) -> str:
+    """
+    Default output next to the resolved environment data:
+      .../pkl/<env>/hmaps -> .../pkl/<env>/vis_outputs/paper_figures/msai
+    """
+    root = Path(hmaps_root)
+    env_dir = root.parent
+    return str(env_dir / "vis_outputs" / "paper_figures" / "msai")
+
+
+def discover_available_scales(hmaps_root: str) -> List[int]:
+    root = Path(hmaps_root)
     if not root.exists():
         return []
     out = []
@@ -47,8 +111,8 @@ def discover_available_scales() -> List[int]:
     return out
 
 
-def load_hmap_loc() -> Optional[np.ndarray]:
-    fp = os.path.join(_hmaps_root(), "hmap_loc.pkl")
+def load_hmap_loc(hmaps_root: str) -> Optional[np.ndarray]:
+    fp = os.path.join(hmaps_root, "hmap_loc.pkl")
     try:
         with open(fp, "rb") as f:
             arr = np.array(pickle.load(f))
@@ -58,8 +122,8 @@ def load_hmap_loc() -> Optional[np.ndarray]:
         return None
 
 
-def load_hmap_pcn(scale: int) -> Optional[np.ndarray]:
-    fp = os.path.join(_hmaps_root(), f"hmap_pcn_scale_{scale}.pkl")
+def load_hmap_pcn(hmaps_root: str, scale: int) -> Optional[np.ndarray]:
+    fp = os.path.join(hmaps_root, f"hmap_pcn_scale_{scale}.pkl")
     try:
         with open(fp, "rb") as f:
             arr = np.array(pickle.load(f))
@@ -69,13 +133,13 @@ def load_hmap_pcn(scale: int) -> Optional[np.ndarray]:
         return None
 
 
-def load_hmap_pcn_unified(scales: List[int]) -> Optional[np.ndarray]:
+def load_hmap_pcn_unified(hmaps_root: str, scales: List[int]) -> Optional[np.ndarray]:
     if not scales:
         return None
     per_scale = []
     min_steps = None
     for s in scales:
-        arr = load_hmap_pcn(s)
+        arr = load_hmap_pcn(hmaps_root, s)
         if arr is None:
             continue
         per_scale.append(arr)
@@ -211,9 +275,25 @@ def _plot_sai_panel(ax, xcenters, ycenters, sai_grid, cmap='jet', add_colorbar=F
     pts = np.column_stack([XX.ravel(), YY.ravel()])
     vals = sai_grid.T.ravel()
     ZI = griddata(pts, vals, (XI, YI), method='cubic', fill_value=0.0)
+    ZI = np.nan_to_num(ZI, nan=0.0, posinf=0.0, neginf=0.0)
 
-    cs = ax.contourf(XI, YI, ZI, levels=np.linspace(ZI.min(), ZI.max(), 25), cmap=cmap)
-    ax.contour(XI, YI, ZI, levels=10, colors='black', alpha=0.25, linewidths=0.5)
+    zmin = float(np.min(ZI))
+    zmax = float(np.max(ZI))
+
+    # Handle degenerate fields (all equal): contourf requires strictly increasing levels.
+    if not np.isfinite(zmin) or not np.isfinite(zmax):
+        zmin, zmax = 0.0, 1.0
+        ZI = np.zeros_like(ZI)
+
+    if zmax <= zmin + 1e-12:
+        eps = 1e-6
+        levels = np.linspace(zmin, zmin + eps, 25)
+    else:
+        levels = np.linspace(zmin, zmax, 25)
+
+    cs = ax.contourf(XI, YI, ZI, levels=levels, cmap=cmap)
+    if zmax > zmin + 1e-12:
+        ax.contour(XI, YI, ZI, levels=10, colors='black', alpha=0.25, linewidths=0.5)
 
     if add_colorbar:
         divider = make_axes_locatable(ax)
@@ -229,6 +309,7 @@ def _plot_sai_panel(ax, xcenters, ycenters, sai_grid, cmap='jet', add_colorbar=F
 
 
 def generate_msai_heatmaps(
+    env_name: Optional[str] = None,
     scales: Optional[List[int]] = None,
     include_unified: bool = True,
     gridsize: int = 240,
@@ -238,28 +319,36 @@ def generate_msai_heatmaps(
     output_dir: Optional[str] = None,
     fname: str = 'msai_all_scales.png',
 ) -> Tuple[str, Dict[str, float]]:
+    hmaps_root = _resolve_hmaps_root(env_name=env_name, allow_fallback=(env_name is None))
+    if hmaps_root is None:
+        raise FileNotFoundError(
+            f"No hmap data found for environment '{env_name}'."
+            if env_name
+            else "No hmap data found under controller pkl directory."
+        )
+
     if output_dir is None:
-        output_dir = os.path.join(OUTPUT_DIR, "paper_figures", "msai")
+        output_dir = _default_output_dir(hmaps_root)
     os.makedirs(output_dir, exist_ok=True)
 
     if scales is None:
-        scales = discover_available_scales() or [0, 1, 2]
+        scales = discover_available_scales(hmaps_root) or [0, 1, 2]
 
-    hmap_loc = load_hmap_loc()
+    hmap_loc = load_hmap_loc(hmaps_root)
     if hmap_loc is None:
-        raise FileNotFoundError("hmap_loc.pkl not found.")
+        raise FileNotFoundError(f"hmap_loc.pkl not found in {hmaps_root}")
 
     hmap_x, _, hmap_y = convert_xzy_hmaps(hmap_loc)
 
     panels: List[Tuple[str, np.ndarray]] = []
     for scale in scales:
-        pcn = load_hmap_pcn(scale)
+        pcn = load_hmap_pcn(hmaps_root, scale)
         if pcn is not None:
             n = min(hmap_x.shape[0], pcn.shape[0])
             panels.append((f"Scale {scale}", pcn[:n]))
 
     if include_unified and len(scales) >= 2:
-        pcn_u = load_hmap_pcn_unified(scales)
+        pcn_u = load_hmap_pcn_unified(hmaps_root, scales)
         if pcn_u is not None:
             n = min(hmap_x.shape[0], pcn_u.shape[0])
             panels.insert(0, ("Unified", pcn_u[:n]))
@@ -300,8 +389,44 @@ def generate_msai_heatmaps(
     return out_path, msai_per_panel
 
 
+def generate_msai_heatmaps_all_environments(
+    environments: Optional[List[str]] = None,
+    **kwargs,
+) -> Dict[str, Dict[str, float]]:
+    """
+    Generate MSAI plots/metrics for each environment with available data.
+    Missing environments are skipped (no crash).
+    """
+    if environments is None:
+        environments = ENVIRONMENTS
+
+    results: Dict[str, Dict[str, float]] = {}
+    for env_name in environments:
+        hmaps_root = _resolve_hmaps_root(env_name=env_name, allow_fallback=False)
+        if hmaps_root is None:
+            print(f"[SKIP] {env_name}: no hmap_loc.pkl found")
+            continue
+
+        try:
+            fname = f"msai_all_scales_{env_name}.png"
+            out_path, msai = generate_msai_heatmaps(
+                env_name=env_name,
+                fname=fname,
+                **kwargs,
+            )
+            results[env_name] = msai
+            print(f"[OK] {env_name}: {out_path}")
+        except FileNotFoundError as e:
+            print(f"[SKIP] {env_name}: {e}")
+
+    if not results:
+        print("[WARN] No environments with usable MSAI inputs were found.")
+    return results
+
+
 if __name__ == "__main__":
-    path, msai = generate_msai_heatmaps(
+    results = generate_msai_heatmaps_all_environments(
+        environments=ENVIRONMENTS,
         scales=None,
         include_unified=True,
         gridsize=120,
@@ -309,6 +434,5 @@ if __name__ == "__main__":
         dist_threshold=None,
         cmap='jet',
         output_dir=None,
-        fname='msai_all_scales.png',
     )
-    print("MSAI:", msai)
+    print("MSAI by environment:", results)

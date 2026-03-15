@@ -1,0 +1,35 @@
+{
+  "world_name": "environment_6",
+  "resolution": 64,
+  "n_rays": 720,
+  "prox_mode": "local_minima",
+  "scales": [
+    {
+      "name": "Small",
+      "d_opt": 0.7,
+      "sigma_r": 0.5,
+      "sigma_tune_k": 1.0,
+      "large_one_sided": false,
+      "plateau": 1.0,
+      "color": "#e74c3c"
+    },
+    {
+      "name": "Medium",
+      "d_opt": 2.5,
+      "sigma_r": 1.0,
+      "sigma_tune_k": 0.75,
+      "large_one_sided": false,
+      "plateau": 1.0,
+      "color": "#2ecc71"
+    },
+    {
+      "name": "Large",
+      "d_opt": 5.0,
+      "sigma_r": 1.5,
+      "sigma_tune_k": 0.7,
+      "large_one_sided": true,
+      "plateau": 1.0,
+      "color": "#3498db"
+    }
+  ]
+}
