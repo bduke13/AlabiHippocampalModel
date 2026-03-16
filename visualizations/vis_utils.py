@@ -12,8 +12,8 @@ project_root = Path(__file__).resolve().parent.parent  # Adjust this if needed
 sys.path.append(str(project_root))
 
 CONTROLLER_PATH_PREFIX = "webots/controllers/"
-CONTROLLER_NAME = "multiscale_grid_controller"
-WORLD_NAME = "20x20_maze_multi_goal"
+CONTROLLER_NAME = "multiscale_grid_controller_v2"
+WORLD_NAME = "20x20_cross_multi_goal"
 # "A_20x20_Maze_Multi_Goal"
 # "20x20_multi_goal"
 # Define output directories relative to project root

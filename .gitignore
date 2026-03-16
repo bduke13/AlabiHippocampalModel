@@ -44,3 +44,12 @@ main.py
 
 # Ignore JSON for now
 *.json
+
+# Generated Webots automation worlds
+webots/worlds/*_automation.wbt
+webots/worlds/*_smoke.wbt
+
+# Controller-local generated artifacts
+webots/controllers/multi_grid_simple/runs/
+webots/controllers/multi_grid_simple/visualizations/
+*scratchpad*
