@@ -12,8 +12,21 @@ def robot_position(robot_node) -> list[float]:
     return list(robot_node.getField("translation").getSFVec3f())
 
 
-def set_robot_pose(robot_node, start_loc, *, y: float = 0.0, reset_physics: bool = True) -> None:
+def robot_rotation(robot_node) -> list[float]:
+    return list(robot_node.getField("rotation").getSFRotation())
+
+
+def set_robot_pose(
+    robot_node,
+    start_loc,
+    *,
+    rotation=None,
+    y: float = 0.0,
+    reset_physics: bool = True,
+) -> None:
     robot_node.getField("translation").setSFVec3f([start_loc[0], y, start_loc[1]])
+    if rotation is not None:
+        robot_node.getField("rotation").setSFRotation(list(rotation))
     if reset_physics:
         robot_node.resetPhysics()
 
@@ -24,6 +37,7 @@ def randomize_robot_pose(
     goal_location,
     bounds: tuple[float, float] = (-2.3, 2.3),
     min_goal_distance: float = 1.0,
+    rotation=None,
     y: float = 0.0,
 ) -> list[float]:
     while True:
@@ -38,6 +52,8 @@ def randomize_robot_pose(
         )
         if dist_to_goal >= min_goal_distance:
             robot_node.getField("translation").setSFVec3f(candidate)
+            if rotation is not None:
+                robot_node.getField("rotation").setSFRotation(list(rotation))
             robot_node.resetPhysics()
             return candidate
 

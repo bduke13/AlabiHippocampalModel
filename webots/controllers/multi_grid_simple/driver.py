@@ -51,6 +51,7 @@ class Driver(Supervisor):
         run_time_hours: int = 2,
         randomize_start_loc: bool = True,
         start_loc: Optional[List[int]] = None,
+        start_rotation: Optional[List[float]] = None,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
         world_name: Optional[str] = None,
@@ -73,6 +74,8 @@ class Driver(Supervisor):
                 Defaults to 1.
             start_loc (Optional[List[int]], optional): Specific starting location coordinates [x,y].
                 Defaults to None.
+            start_rotation (Optional[List[float]], optional): Robot axis-angle rotation to restore
+                at trial start. Defaults to None.
             enable_ojas (Optional[bool], optional): Flag to enable Oja's learning rule.
                 If None, determined by robot mode. Defaults to None.
             enable_stdp (Optional[bool], optional): Flag to enable Spike-Timing-Dependent Plasticity.
@@ -93,6 +96,15 @@ class Driver(Supervisor):
         self.pause_on_completion = bool(pause_on_completion)
         self.export_image_on_completion = bool(export_image_on_completion)
         self.completion_image_path = completion_image_path
+        self.configured_start_loc = list(start_loc) if start_loc is not None else None
+        self.configured_start_rotation = (
+            list(start_rotation) if start_rotation is not None else None
+        )
+        self.configured_randomize_start_loc = bool(randomize_start_loc)
+        self.trial_completed = False
+        self.trial_completion_reason = None
+        self.last_saved_files: list[str] = []
+        self.trial_start_time_seconds = 0.0
 
         if world_name is None:
             world_name = current_world_name(self)
@@ -105,6 +117,7 @@ class Driver(Supervisor):
             run_time_hours=run_time_hours,
             randomize_start_loc=randomize_start_loc,
             start_loc=start_loc,
+            start_rotation=start_rotation,
             enable_ojas=enable_ojas,
             enable_stdp=enable_stdp,
             goal_location=goal_location,
@@ -123,6 +136,7 @@ class Driver(Supervisor):
             self,
             randomize_start_loc=randomize_start_loc,
             start_loc=start_loc,
+            start_rotation=start_rotation,
         )
         initialize_devices(self)
 
@@ -160,6 +174,7 @@ class Driver(Supervisor):
         self.sense()
         self.compute_pcn_activations()
         self.update_hmaps()
+        self.trial_start_time_seconds = float(self.getTime())
         write_metrics(self, status="initialized")
 
     def load_pcn(
@@ -278,7 +293,7 @@ class Driver(Supervisor):
         print(f"Starting robot in {self.robot_mode}")
         print(f"Goal at {self.goal_location}")
 
-        while True:
+        while not self.trial_completed:
             if (
                 self.robot_mode == RobotMode.LEARN_OJAS
                 or self.robot_mode == RobotMode.LEARN_HEBB
@@ -328,10 +343,17 @@ class Driver(Supervisor):
                 break
 
             self.check_goal_reached()
+            if self.trial_completed:
+                return
             self.compute_pcn_activations()
             self.update_hmaps()
             self.forward()
 
+            if self.trial_completed:
+                return
+
+        if self.trial_completed:
+            return
         self.turn(np.random.normal(0, np.deg2rad(30)))  # Choose a new random direction
 
     ########################################### EXPLOIT ###########################################
@@ -346,6 +368,8 @@ class Driver(Supervisor):
         self.compute_pcn_activations()
         self.update_hmaps()
         self.check_goal_reached()
+        if self.trial_completed:
+            return
 
         # -------------------------------------------------------------------
         # 2) Calculate potential reward for each possible head direction
@@ -479,6 +503,9 @@ class Driver(Supervisor):
         # self.step(self.timestep)
 
     ########################################### CHECK GOAL REACHED ###########################################
+    def elapsed_trial_time_seconds(self) -> float:
+        return max(0.0, float(self.getTime()) - float(self.trial_start_time_seconds))
+
     def check_goal_reached(self):
         """
         Check if the robot has reached its goal or if time has expired.
@@ -489,10 +516,11 @@ class Driver(Supervisor):
         if (
             self.robot_mode
             in (RobotMode.LEARN_OJAS, RobotMode.LEARN_HEBB, RobotMode.PLOTTING)
-            and self.getTime() >= 60 * self.run_time_minutes
+            and self.elapsed_trial_time_seconds() >= 60 * self.run_time_minutes
         ):
             self.stop()
-            self.save(
+            self.complete_trial(
+                reason="time_limit_reached",
                 include_pcn=self.robot_mode != RobotMode.PLOTTING,
                 include_rcn=self.robot_mode != RobotMode.PLOTTING,
                 include_hmaps=True,
@@ -511,8 +539,11 @@ class Driver(Supervisor):
             )
             self.rcn.replay(pcn=self.pcn)
 
-            self.stop()
-            self.save(include_rcn=True, include_hmaps=False)
+            self.complete_trial(
+                reason="goal_reached_dmtp",
+                include_rcn=True,
+                include_hmaps=False,
+            )
 
         elif self.robot_mode == RobotMode.EXPLOIT and torch.allclose(
             torch.tensor(self.goal_location, dtype=self.dtype, device=self.device),
@@ -526,8 +557,10 @@ class Driver(Supervisor):
             print(f"Total distance traveled: {self.compute_path_length()}")
             print(f"Time taken: {self.getTime()}")
 
-            self.stop()
-            self.save(include_rcn=True)  # EXPLOIT doesn't save anything
+            self.complete_trial(
+                reason="goal_reached_exploit",
+                include_rcn=True,
+            )  # EXPLOIT doesn't save anything
 
     ########################################### AUTO PILOT ###########################################
 
@@ -755,6 +788,10 @@ class Driver(Supervisor):
         include_pcn: bool = False,
         include_rcn: bool = False,
         include_hmaps: bool = False,
+        *,
+        status: str = "saved",
+        completion_reason: Optional[str] = None,
+        extra_metrics: Optional[dict] = None,
     ):
         """
         Saves the state of the PCN (Place Cell Network), RCN (Reward Cell Network), and optionally
@@ -767,7 +804,20 @@ class Driver(Supervisor):
             include_hmaps=include_hmaps,
         )
 
-        write_metrics(self, status="saved", files_saved=files_saved)
+        self.last_saved_files = files_saved
+        if completion_reason is not None:
+            self.trial_completion_reason = completion_reason
+
+        metrics_extra = dict(extra_metrics or {})
+        if completion_reason is not None:
+            metrics_extra["completion_reason"] = completion_reason
+
+        write_metrics(
+            self,
+            status=status,
+            files_saved=files_saved,
+            extra=metrics_extra or None,
+        )
 
         if self.export_image_on_completion:
             image_path = (
@@ -785,6 +835,30 @@ class Driver(Supervisor):
 
         print(f"Files Saved: {files_saved}")
         print("Saving Done!")
+
+    def complete_trial(
+        self,
+        *,
+        reason: str,
+        include_pcn: bool = False,
+        include_rcn: bool = False,
+        include_hmaps: bool = False,
+        extra_metrics: Optional[dict] = None,
+    ) -> None:
+        if self.trial_completed:
+            return
+
+        self.trial_completed = True
+        self.trial_completion_reason = reason
+        self.stop()
+        self.save(
+            include_pcn=include_pcn,
+            include_rcn=include_rcn,
+            include_hmaps=include_hmaps,
+            status="completed",
+            completion_reason=reason,
+            extra_metrics=extra_metrics,
+        )
 
     def clear(self):
         """

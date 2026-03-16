@@ -100,10 +100,12 @@ LAUNCH_CONFIG = {
 SMOKE_TEST_CONFIG = {
     "world": "10x10.wbt",
     "modes": ["PLOTTING", "LEARN_OJAS"],
+    "validation_modes": ["LEARN_HEBB", "DMTP", "EXPLOIT"],
     "run_time_hours": 0.001,
     "start_loc": [0, 0],
     "goal_location": [-3, 3],
     "max_dist": 10,
+    "series_num_trials": 2,
     "timeout_seconds": 120,
 }
 

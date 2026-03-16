@@ -35,14 +35,24 @@ def initialize_runtime_state(
     driver.goal_location = goal_location if goal_location is not None else [-3, 3]
 
 
-def initialize_robot_pose(driver, *, randomize_start_loc: bool, start_loc) -> None:
+def initialize_robot_pose(
+    driver,
+    *,
+    randomize_start_loc: bool,
+    start_loc,
+    start_rotation=None,
+) -> None:
     if randomize_start_loc:
-        randomize_robot_pose(driver.robot, goal_location=driver.goal_location)
+        randomize_robot_pose(
+            driver.robot,
+            goal_location=driver.goal_location,
+            rotation=start_rotation,
+        )
         return
 
     if start_loc is None:
         raise ValueError("start_loc must be provided when randomize_start_loc is False.")
-    set_robot_pose(driver.robot, start_loc)
+    set_robot_pose(driver.robot, start_loc, rotation=start_rotation)
 
 
 def initialize_devices(driver) -> None:

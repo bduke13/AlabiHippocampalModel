@@ -15,6 +15,7 @@ def initialize_run_artifacts(
     run_time_hours: int,
     randomize_start_loc: bool,
     start_loc,
+    start_rotation,
     enable_ojas,
     enable_stdp,
     goal_location,
@@ -50,6 +51,7 @@ def initialize_run_artifacts(
         "run_time_hours": run_time_hours,
         "randomize_start_loc": randomize_start_loc,
         "start_loc": start_loc,
+        "start_rotation": start_rotation,
         "enable_ojas": enable_ojas,
         "enable_stdp": enable_stdp,
         "goal_location": goal_location,
@@ -69,11 +71,19 @@ def write_metrics(driver, *, status: str, files_saved=None, extra=None) -> None:
         if getattr(driver, "robot_mode", None) is not None
         else None,
         "status": status,
+        "completion_reason": getattr(driver, "trial_completion_reason", None),
         "files_saved": files_saved or [],
         "step_count": getattr(driver, "step_count", 0),
         "simulation_time_seconds": float(driver.getTime())
         if hasattr(driver, "getTime")
         else 0.0,
+        "trial_elapsed_seconds": float(driver.elapsed_trial_time_seconds())
+        if hasattr(driver, "elapsed_trial_time_seconds")
+        else (
+            float(driver.getTime())
+            if hasattr(driver, "getTime")
+            else 0.0
+        ),
         "path_length": float(driver.compute_path_length())
         if hasattr(driver, "hmap_loc")
         else 0.0,
@@ -84,6 +94,13 @@ def write_metrics(driver, *, status: str, files_saved=None, extra=None) -> None:
 
     with open(driver.metrics_path, "w", encoding="utf-8") as metrics_file:
         json.dump(metrics, metrics_file, indent=2)
+
+    try:
+        from run_summary import update_run_summary
+    except ImportError:
+        from .run_summary import update_run_summary
+
+    update_run_summary(driver.run_dir, visualization_dir=driver.visualization_dir)
 
 
 def save_driver_state(

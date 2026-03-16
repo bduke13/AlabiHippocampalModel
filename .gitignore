@@ -48,6 +48,7 @@ main.py
 # Generated Webots automation worlds
 webots/worlds/*_automation.wbt
 webots/worlds/*_smoke.wbt
+webots/worlds/*_validation.wbt
 
 # Controller-local generated artifacts
 webots/controllers/multi_grid_simple/runs/
