@@ -39,7 +39,9 @@ class RobotMode(Enum):
     PLOTTING = auto()
     MANUAL_CONTROL = auto()
     RECORDING = auto()
-    # New
+    # Legacy/original-controller extensions.
+    # v2 scheduling uses execution configuration rather than dedicated AUTO modes,
+    # but the original controller still depends on these members.
     LEARNING = auto()
     LEARN_LOCATIONS = auto()
     EXPLOIT_LOCATIONS = auto()
@@ -49,5 +51,4 @@ class RobotMode(Enum):
     EXPLOIT_LOCATIONS_RANDOM_AUTO = auto()
     PLOTTING_AUTO = auto()
     PLOTTING_COVERAGE_AUTO = auto()
-    LEARN_OJAS_AUTO = auto()
 
