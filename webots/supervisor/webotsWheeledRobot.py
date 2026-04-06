@@ -1,6 +1,5 @@
 from controller import Supervisor
-import numpy as np
-from typing import Optional, List
+import torch
 
 # from core.robot.genericWheeledRobot import GenericWheeledRobot
 

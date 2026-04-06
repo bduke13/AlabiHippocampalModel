@@ -4,7 +4,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import rcParams
-from matplotlib.patches import Patch  # For custom legend patches
 
 # Use Times New Roman font for the plots
 rcParams['font.family'] = 'Times New Roman'

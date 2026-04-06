@@ -1,15 +1,12 @@
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import matplotlib.patches as patches
 import tkinter as tk
 from tkinter import ttk, messagebox
 import torch
 from dataclasses import dataclass
-from typing import Tuple, Optional, Dict, List
+from typing import Tuple, Optional, Dict
 from scipy import ndimage
-from skimage import measure
 
 # -----------------------------
 # World definitions (as given)

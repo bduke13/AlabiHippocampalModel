@@ -1,10 +1,8 @@
 # %%
 import numpy as np
 import matplotlib.pyplot as plt
-import pickle
 import os
 from scipy.interpolate import interp1d
-from scipy.sparse import base
 
 
 def plot_trajectory(

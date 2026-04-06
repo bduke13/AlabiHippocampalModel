@@ -4,16 +4,16 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.interpolate import griddata
 
 from vis_utils import (
-    convert_xzy_hmaps,
     CONTROLLER_PATH_PREFIX,
     CONTROLLER_NAME,
     WORLD_NAME,
-    OUTPUT_DIR,
 )
 
 plt.rcParams.update({
@@ -29,6 +29,11 @@ plt.rcParams.update({
 
 SCALE_NAMES = {0: 'Small', 1: 'Medium', 2: 'Large'}
 ENVIRONMENTS = [f"environment_{i}" for i in range(1, 7)]
+MULTI_GOAL_WORLDS = {
+    "20x20_multi_goal",
+    "20x20_cross_multi_goal",
+    "20x20_maze_multi_goal",
+}
 _CACHED_HMAPS_ROOT: Optional[str] = None
 
 
@@ -120,6 +125,34 @@ def load_hmap_loc(hmaps_root: str) -> Optional[np.ndarray]:
     except FileNotFoundError:
         print(f"[ERROR] {fp} not found.")
         return None
+
+
+def _extract_planar_xy(hmap_loc: np.ndarray, env_name: Optional[str]) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Return planar coordinates from current-controller hmap_loc.
+
+    Current msg_driver writes hmap_loc in canonical controller coordinates:
+      [planar_x, planar_y, height]
+
+    That is true for both:
+    - environment_1 .. environment_6
+    - 20x20_*_multi_goal worlds
+
+    For unknown worlds, fall back to a simple heuristic:
+    - treat the axis with the smallest range as height
+    - use the remaining two axes as the planar coordinates
+    """
+    known_world = (
+        env_name in ENVIRONMENTS
+        or env_name in MULTI_GOAL_WORLDS
+    )
+    if known_world:
+        return hmap_loc[:, 0], hmap_loc[:, 1]
+
+    spans = np.ptp(hmap_loc, axis=0)
+    height_axis = int(np.argmin(spans))
+    planar_axes = [idx for idx in range(hmap_loc.shape[1]) if idx != height_axis]
+    return hmap_loc[:, planar_axes[0]], hmap_loc[:, planar_axes[1]]
 
 
 def load_hmap_pcn(hmaps_root: str, scale: int) -> Optional[np.ndarray]:
@@ -338,7 +371,7 @@ def generate_msai_heatmaps(
     if hmap_loc is None:
         raise FileNotFoundError(f"hmap_loc.pkl not found in {hmaps_root}")
 
-    hmap_x, _, hmap_y = convert_xzy_hmaps(hmap_loc)
+    hmap_x, hmap_y = _extract_planar_xy(hmap_loc, env_name)
 
     panels: List[Tuple[str, np.ndarray]] = []
     for scale in scales:
@@ -425,8 +458,13 @@ def generate_msai_heatmaps_all_environments(
 
 
 if __name__ == "__main__":
-    results = generate_msai_heatmaps_all_environments(
-        environments=ENVIRONMENTS,
+    resolved_root = _resolve_hmaps_root(env_name=None, allow_fallback=True)
+    if resolved_root is None:
+        raise FileNotFoundError("No hmap data found under controller pkl directory.")
+
+    resolved_world = Path(resolved_root).parent.name
+    path, msai = generate_msai_heatmaps(
+        env_name=resolved_world,
         scales=None,
         include_unified=True,
         gridsize=120,
@@ -434,5 +472,7 @@ if __name__ == "__main__":
         dist_threshold=None,
         cmap='jet',
         output_dir=None,
+        fname=f"msai_all_scales_{resolved_world}.png",
     )
-    print("MSAI by environment:", results)
+    print(f"MSAI for {resolved_world}:", msai)
+    print(f"Saved: {path}")

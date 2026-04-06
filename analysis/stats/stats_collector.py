@@ -1,6 +1,5 @@
 import json
 import os
-from datetime import datetime
 
 class stats_collector:
     def __init__(self, output_dir):

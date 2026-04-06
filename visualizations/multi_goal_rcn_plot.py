@@ -4,7 +4,6 @@ import torch
 import numpy as np
 from matplotlib import cm, rcParams
 import matplotlib.gridspec as gridspec
-from typing import List, Optional, Dict
 import os
 import sys
 from pathlib import Path
@@ -22,9 +21,6 @@ from vis_utils import (
     get_available_multi_goal_combinations,
     load_multi_goal_hmaps,
     set_custom_paths,
-    CONTROLLER_PATH_PREFIX,
-    CONTROLLER_NAME,
-    WORLD_NAME,
     OUTPUT_DIR
 )
 
@@ -54,7 +50,11 @@ def compute_reward_function(rcn, hmap_pcn):
 
     # Match RewardCell forward equation:
     # r_t = (w · p_t) / sum(|w|), not /(sum p_t)
-    safe_denom = torch.clamp(torch.sum(torch.abs(w_in_float32), dim=1, keepdim=True), min=1e-12)
+    mode = str(getattr(rcn, "reward_normalization_mode", "input_l1")).strip().lower()
+    if mode in {"input_l1", "input", "l1", "v11"}:
+        safe_denom = torch.sum(torch.abs(hmap_pcn_float32), dim=0).clamp(min=1e-4)
+    else:
+        safe_denom = torch.clamp(torch.sum(torch.abs(w_in_float32), dim=1, keepdim=True), min=1e-12)
     reward_function = torch.tensordot(w_in_float32, hmap_pcn_float32, dims=1) / safe_denom
     reward_function = torch.squeeze(reward_function)
     

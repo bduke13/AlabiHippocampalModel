@@ -1,12 +1,11 @@
 import numpy as np
-import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import tkinter as tk
 from tkinter import ttk
 import torch
 from dataclasses import dataclass
-from typing import Tuple, Optional, Dict, List, Any, Union
+from typing import Tuple, Optional
 
 class GridCellLayer:
     """Simplified version of the grid cell layer from the reference code."""

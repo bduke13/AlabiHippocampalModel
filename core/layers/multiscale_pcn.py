@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 from numpy.random import default_rng
-from typing import Optional
 
 # Set a fixed seed similar to tf.random.set_seed(5)
 torch.manual_seed(5)

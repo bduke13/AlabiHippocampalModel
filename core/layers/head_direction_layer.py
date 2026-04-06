@@ -2,7 +2,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
-from torch._prims_common import dtype_or_default
 
 
 class HeadDirectionLayer:

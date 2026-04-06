@@ -13,7 +13,7 @@ sys.path.append(str(project_root))
 
 CONTROLLER_PATH_PREFIX = "webots/controllers/"
 CONTROLLER_NAME = "msg_controller"
-WORLD_NAME = "environment_2"
+WORLD_NAME = "environment_6"
 # "A_20x20_Maze_Multi_Goal"
 # "20x20_multi_goal"
 # Define output directories relative to project root
@@ -405,12 +405,8 @@ ENV_CHECKPOINT_POSITIONS = {
         (-1.1, -6.0), ( 5.0, -9.5),
     ],
     "environment_6": [
-        ( 0.1, -5.0), (-0.8, -6.0), (-0.6, -4.0), (-0.6,  4.5),
-        ( 1.1,  4.5), (-5.4, -4.0), (-5.9,  3.7), (-4.95, 5.3),
-        (-4.95, 9.3), (-9.4, -0.6), (-6.6, -0.6), ( 1.3, -4.0),
-        ( 0.7, -6.2), ( 4.3, -6.2), ( 5.2, -9.6), ( 5.1, -2.1),
-        ( 5.8, -0.1), ( 5.0,  3.7), ( 5.0,  5.3), ( 5.0,  9.3),
-        ( 9.4, -0.1),
+        ( 0.1, -5.0), ( 5.1, -2.1), (-0.6,  4.5), (-5.9,  3.7),
+        ( 5.0,  3.7), (-9.4, -0.6),
     ],
 }
 

@@ -19,16 +19,24 @@ import matplotlib.pyplot as plt
 project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
-from vis_utils import (
+from visualizations.place_cell_learning import load_place_cell_learning_scores
+
+from visualizations.vis_utils import (
     CONTROLLER_PATH_PREFIX,
     CONTROLLER_NAME,
     WORLD_NAME,
     OUTPUT_DIR,
 )
 
+CELL_SORT_MODE = "learning_strength"
+
 
 def _hmap_dir() -> str:
     return os.path.join(CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl", WORLD_NAME, "hmaps")
+
+
+def _network_dir() -> Path:
+    return Path(CONTROLLER_PATH_PREFIX) / CONTROLLER_NAME / "pkl" / WORLD_NAME / "networks"
 
 
 def discover_available_scales() -> List[int]:
@@ -89,6 +97,20 @@ def load_unified_hmaps(scales: List[int]):
     per_scale = [arr[:min_steps] for arr in per_scale]
     hmap_pcn_unified = np.concatenate(per_scale, axis=1)
     return hmap_loc_ref, hmap_pcn_unified
+
+
+def _load_learning_scores_for_label(label_token: str):
+    network_dir = _network_dir()
+    unified_exists = (network_dir / "unified_pcn.pkl").exists()
+
+    if label_token == "unified":
+        return load_place_cell_learning_scores(network_dir, scale=None, unified=True)
+
+    if label_token.startswith("scale_"):
+        scale = int(label_token.split("_")[-1])
+        return load_place_cell_learning_scores(network_dir, scale=scale, unified=unified_exists)
+
+    return None, {"error": f"unknown_label_token:{label_token}"}
 
 
 def _generate_vibrant_colors(n: int):
@@ -229,20 +251,42 @@ def generate_place_cells_report(
     os.makedirs(assets_dir, exist_ok=True)
 
     totals = np.sum(np.abs(hmap_pcn), axis=0)
+    cell_indices = np.arange(hmap_pcn.shape[1], dtype=int)
+
     if activation_threshold is not None:
         active_mask = totals > activation_threshold
-        hmap_pcn = hmap_pcn[:, active_mask]
+        cell_indices = cell_indices[active_mask]
         totals = totals[active_mask]
         print(
-            f"[{label}] Filtered {np.sum(~active_mask)} cells below threshold {activation_threshold}. "
-            f"Remaining: {hmap_pcn.shape[1]}"
+            f"[{label}] Filtered {np.sum(~active_mask)} cells below display threshold {activation_threshold}. "
+            f"Remaining: {len(cell_indices)}"
         )
 
-    # Sort cells by descending total activation so the best-formed fields appear first.
-    sort_order = np.argsort(totals)[::-1]
-    hmap_pcn = hmap_pcn[:, sort_order]
-    cell_indices = np.arange(hmap_pcn.shape[1], dtype=int)
-    print(f"[{label}] Showing {len(cell_indices)} cells sorted by activity")
+    cell_scores, score_meta = _load_learning_scores_for_label(label_token)
+    ranking_note = "activity fallback"
+    if (
+        CELL_SORT_MODE == "learning_strength"
+        and cell_scores is not None
+        and len(cell_scores) == hmap_pcn.shape[1]
+    ):
+        score_slice = np.asarray(cell_scores, dtype=np.float32)[cell_indices]
+        valid_mask = np.isfinite(score_slice) & (score_slice > 0)
+        if np.any(valid_mask):
+            cell_indices = cell_indices[valid_mask]
+            score_slice = score_slice[valid_mask]
+            sort_order = np.argsort(score_slice)[::-1]
+            cell_indices = cell_indices[sort_order]
+            ranking_note = "learning strength"
+            if score_meta.get("used_fallback"):
+                ranking_note += " [current-weight fallback]"
+        else:
+            sort_order = np.argsort(totals)[::-1]
+            cell_indices = cell_indices[sort_order]
+    else:
+        sort_order = np.argsort(totals)[::-1]
+        cell_indices = cell_indices[sort_order]
+
+    print(f"[{label}] Showing {len(cell_indices)} cells sorted by {ranking_note}")
 
     colors_rgb = _generate_vibrant_colors(hmap_pcn.shape[1])
 
@@ -296,7 +340,7 @@ def generate_multi_scale_reports(
     scales=None,
     output_dir=None,
     open_browser=True,
-    activation_threshold=0.1,
+    activation_threshold=None,
     gridsize=50,
     dpi=300,
     n_workers=None,
@@ -353,7 +397,7 @@ if __name__ == "__main__":
 
     reports = generate_multi_scale_reports(
         scales=None,
-        activation_threshold=0.2,
+        activation_threshold=None,
         open_browser=True,
         gridsize=50,
         dpi=300,

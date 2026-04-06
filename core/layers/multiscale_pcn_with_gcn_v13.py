@@ -875,6 +875,7 @@ class MultiscalePlaceCellWithGrid:
         num_samples: int = 10,
         sampling_strategy: str = "uniform",
         sampling_temperature: float = 1.0,
+        sample_aggregation: str = "mean",
         debug: bool = False
     ) -> tuple:
         """Perform hierarchical multi-scale preplay with STOCHASTIC TRAJECTORY SAMPLING.
@@ -884,7 +885,7 @@ class MultiscalePlaceCellWithGrid:
 
         Key differences from hierarchical_multiscale_preplay:
         1. Samples K trajectories per (scale, direction) instead of exhaustive branching
-        2. Aggregates via MEAN not SUM (unbiased Monte Carlo estimate)
+        2. Aggregates sampled trajectories per direction via MEAN or MAX
         3. Returns variance diagnostics for each trajectory
         4. More efficient for deeper planning (num_steps > 2)
 
@@ -906,6 +907,7 @@ class MultiscalePlaceCellWithGrid:
             num_samples: Number of trajectories to sample per (scale, direction) pair
             sampling_strategy: "uniform" (random turns) or "learned" (use W_rec probabilities)
             sampling_temperature: Softmax temperature for learned strategy (higher = more random)
+            sample_aggregation: "mean" or "max" over sampled trajectories per direction
             debug: Whether to print debug information
 
         Returns:
@@ -923,12 +925,21 @@ class MultiscalePlaceCellWithGrid:
             - sampling_variances: Per-(scale,direction) return variance (tensor, [num_scales, n_hd])
         """
 
+        sample_aggregation = str(sample_aggregation).strip().lower()
+        if sample_aggregation not in {"mean", "max"}:
+            raise ValueError(
+                f"Unknown sample_aggregation: {sample_aggregation}"
+            )
+
         num_scales = len(scales_data)
 
         if debug:
             print(f"[HIERARCHICAL-SAMPLING] Preplay: {num_scales} scales × {self.n_hd} dirs × {num_samples} samples × {num_steps} steps")
             print(f"[HIERARCHICAL-SAMPLING] Params: β={within_scale_beta} λ={ema_lambda}")
-            print(f"[HIERARCHICAL-SAMPLING] Sampling: strategy={sampling_strategy} temp={sampling_temperature} K={num_samples}")
+            print(
+                f"[HIERARCHICAL-SAMPLING] Sampling: strategy={sampling_strategy} "
+                f"temp={sampling_temperature} K={num_samples} agg={sample_aggregation}"
+            )
             print(f"[HIERARCHICAL-SAMPLING] OPTIMIZED: Batched processing with batch_size={self.n_hd * num_samples} per scale")
 
         # Build discount weights for all steps: [gamma^0, gamma^1, ..., gamma^(num_steps-1)]
@@ -1026,10 +1037,17 @@ class MultiscalePlaceCellWithGrid:
             # trajectory_vectors: (batch_size, 2) -> (n_hd, num_samples, 2)
             vectors_by_dir = trajectory_vectors.view(self.n_hd, num_samples, 2)
 
-            # Compute mean and variance across samples for each direction
-            # Means: (n_hd,) and (n_hd, 2)
-            macro_returns = torch.mean(returns_by_dir, dim=1)  # (n_hd,)
-            macro_vectors = torch.mean(vectors_by_dir, dim=1)  # (n_hd, 2)
+            # Aggregate sampled trajectories per direction.
+            if sample_aggregation == "max":
+                best_sample_idx = torch.argmax(returns_by_dir, dim=1)
+                macro_returns = torch.max(returns_by_dir, dim=1).values  # (n_hd,)
+                macro_vectors = vectors_by_dir[
+                    torch.arange(self.n_hd, device=self.device),
+                    best_sample_idx,
+                ]  # (n_hd, 2)
+            else:
+                macro_returns = torch.mean(returns_by_dir, dim=1)  # (n_hd,)
+                macro_vectors = torch.mean(vectors_by_dir, dim=1)  # (n_hd, 2)
 
             # Variances: (n_hd,)
             return_variances = torch.var(returns_by_dir, dim=1)  # (n_hd,)

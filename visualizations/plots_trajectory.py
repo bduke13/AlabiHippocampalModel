@@ -4,7 +4,7 @@ import os
 import matplotlib.pyplot as plt
 from pathlib import Path
 from PIL import Image, ImageOps
-from typing import Dict, Optional
+from typing import Dict
 import json
 
 # Set base directory for all strategies

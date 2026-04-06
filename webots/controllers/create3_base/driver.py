@@ -1,14 +1,11 @@
 import numpy as np
-from numpy.random import default_rng
 import pickle
 import os
 import tkinter as tk
-from tkinter import N, messagebox
-from typing import Optional, List, Union
+from tkinter import messagebox
+from typing import Optional, List
 import torch
-import torch.nn.functional as F
 from controller import Supervisor
-from astropy.stats import circmean
 import random
 
 # Add root directory to python to be able to import

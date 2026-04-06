@@ -11,13 +11,21 @@ project_root = Path(__file__).resolve().parent.parent  # Adjust if needed
 sys.path.append(str(project_root))
 
 # Import from vis_utils
-from vis_utils import (
+from visualizations.vis_utils import (
     convert_xzy_hmaps,
     CONTROLLER_PATH_PREFIX,
     CONTROLLER_NAME,
     WORLD_NAME,
     OUTPUT_DIR,
 )
+from visualizations.place_cell_learning import load_place_cell_learning_scores
+
+
+CELL_SORT_MODE = "learning_strength"
+
+
+def _network_dir() -> Path:
+    return Path(CONTROLLER_PATH_PREFIX) / CONTROLLER_NAME / "pkl" / WORLD_NAME / "networks"
 
 def load_scale_hmaps(scale):
     """
@@ -264,28 +272,57 @@ def generate_place_cells_report(
     num_cells = hmap_pcn.shape[1]
     colors_rgb = generate_vibrant_colors(num_cells)
 
-    # Filter out dead cells if threshold is provided
+    total_activations = np.sum(np.abs(hmap_pcn), axis=0)
+    candidate_indices = np.arange(hmap_pcn.shape[1], dtype=int)
     if activation_threshold is not None:
-        # Calculate total activation for each cell
-        total_activations = np.sum(np.abs(hmap_pcn), axis=0)
-        active_cells = total_activations > activation_threshold
-        hmap_pcn = hmap_pcn[:, active_cells]
+        active_mask = total_activations > activation_threshold
+        candidate_indices = candidate_indices[active_mask]
         print(
-            f"Scale {scale}: Filtered out {np.sum(~active_cells)} cells below activation threshold {activation_threshold}"
+            f"Scale {scale}: Filtered out {np.sum(~active_mask)} cells below display threshold {activation_threshold}"
         )
-        print(f"Scale {scale}: Remaining cells: {np.sum(active_cells)}")
+        print(f"Scale {scale}: Remaining cells: {len(candidate_indices)}")
 
     # Try to read cells.csv if it exists, otherwise use all cells
     cells_csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"cells_scale_{scale}.csv")
     if os.path.exists(cells_csv_path):
         cell_indices = np.loadtxt(cells_csv_path, dtype=int)
         if activation_threshold is not None:
-            # Filter the cell indices based on which cells remained after thresholding
-            cell_indices = cell_indices[cell_indices < hmap_pcn.shape[1]]
+            cell_indices = np.intersect1d(cell_indices, candidate_indices, assume_unique=False)
         print(f"Scale {scale}: Loaded {len(cell_indices)} cell indices from {cells_csv_path}")
     else:
-        print(f"Scale {scale}: No cells.csv found, using all cells")
-        cell_indices = np.arange(hmap_pcn.shape[1])
+        cell_indices = candidate_indices
+        print(f"Scale {scale}: No cells.csv found, using ranked cells")
+
+    ranking_note = "csv/fallback order"
+    network_dir = _network_dir()
+    unified_exists = (network_dir / "unified_pcn.pkl").exists()
+    cell_scores, score_meta = load_place_cell_learning_scores(
+        network_dir=network_dir,
+        scale=scale,
+        unified=unified_exists,
+    )
+    if (
+        CELL_SORT_MODE == "learning_strength"
+        and cell_scores is not None
+        and len(cell_scores) == hmap_pcn.shape[1]
+        and len(cell_indices) > 0
+    ):
+        score_slice = np.asarray(cell_scores, dtype=np.float32)[cell_indices]
+        valid_mask = np.isfinite(score_slice) & (score_slice > 0)
+        if np.any(valid_mask):
+            cell_indices = cell_indices[valid_mask]
+            score_slice = score_slice[valid_mask]
+            sort_order = np.argsort(score_slice)[::-1]
+            cell_indices = cell_indices[sort_order]
+            ranking_note = "learning strength"
+            if score_meta.get("used_fallback"):
+                ranking_note += " [current-weight fallback]"
+    elif len(cell_indices) > 0:
+        sort_order = np.argsort(total_activations[cell_indices])[::-1]
+        cell_indices = cell_indices[sort_order]
+        ranking_note = "activity fallback"
+
+    print(f"Scale {scale}: Sorted {len(cell_indices)} cells by {ranking_note}")
 
     # Generate and save plots in groups of 5
     for i in range(0, len(cell_indices), 5):
@@ -319,7 +356,7 @@ def generate_place_cells_report(
 
     print(f"Scale {scale}: Processed plots for {len(cell_indices)} cell(s)")
     if activation_threshold is not None:
-        print(f"Scale {scale}: Activation threshold: {activation_threshold}")
+        print(f"Scale {scale}: Display threshold: {activation_threshold}")
     print(f"Scale {scale}: HTML report: {html_path}")
     print(f"Scale {scale}: Images directory: {assets_dir}")
 
@@ -330,7 +367,7 @@ def generate_multi_scale_reports(
     scales=None,
     output_dir=None,
     open_browser=True,
-    activation_threshold=0.1
+    activation_threshold=None
 ):
     """
     Generate HTML reports for multiple scales of place cells.
@@ -393,7 +430,7 @@ if __name__ == "__main__":
     # Generate reports for scales 0, 1, and 2
     html_reports = generate_multi_scale_reports(
         scales=[0, 1, 2],
-        activation_threshold=0.1,  # Adjust this value as needed
+        activation_threshold=None,
         open_browser=True
     )
     

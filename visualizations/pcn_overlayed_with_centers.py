@@ -1,9 +1,6 @@
 # %%
 import numpy as np
 import matplotlib.pyplot as plt
-import os
-import matplotlib.colors as mcolors
-from typing import Optional, List
 
 
 # Custom function to calculate weighted mean

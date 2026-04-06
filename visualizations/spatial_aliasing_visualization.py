@@ -7,7 +7,6 @@ from pathlib import Path
 import matplotlib.gridspec as gridspec
 import pandas as pd
 import seaborn as sns
-from matplotlib.colors import Normalize
 
 # Get the project root directory
 project_root = Path(__file__).resolve().parent.parent  # Adjust if needed

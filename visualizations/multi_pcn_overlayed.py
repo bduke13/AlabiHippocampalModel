@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 import sys
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, List, Tuple
 import matplotlib.gridspec as gridspec
 from pathlib import Path
 

@@ -16,8 +16,9 @@ Key parameters:
 
 import numpy as np
 import torch
+from collections import deque
 from numpy.random import default_rng
-from typing import Optional, List, Dict, Union
+from typing import Optional, List, Dict, Union, Any
 
 # Set fixed seed for reproducibility
 torch.manual_seed(5)
@@ -54,6 +55,39 @@ class UnifiedMultiScalePCN:
         gamma_cross: Union[float, List[float]] = 0.35,  # Cross-scale inhibition strength
         sigma_tune: float = 1.5,    # Backward-compatible fallback
         gate_mode: str = "normal",  # "normal" | "no_gate_no_inhibition" | "no_gate_with_inhibition"
+        soft_scale_overlap: bool = False,
+        soft_scale_overlap_in_learning: bool = True,
+        learning_adaptation_mode: str = "gaussian_post_competition_expression",
+        learning_stdp_start_steps: int = 8000,
+        learning_cross_scale_coupling_start_steps: int = 8000,
+        learning_cross_scale_coupling_ramp_steps: int = 12000,
+        learning_cross_scale_coupling_min: float = 0.0,
+        enable_correlation_weighting: bool = True,
+        correlation_window: int = 100,
+        correlation_update_freq: int = 10,
+        correlation_scaling: float = 2.0,
+        min_correlation_weight: float = 0.1,
+        correlation_threshold: float = 0.01,
+        adjacency_learning_mode: str = "dense",
+        adjacency_topk: Optional[int] = None,
+        adjacency_activity_floor: float = 0.0,
+        enable_adaptive_stdp: bool = False,
+        adaptive_initial_lr: float = 0.1,
+        adaptive_final_lr: float = 0.03,
+        adaptive_decay_rate: float = 3.0,
+        stdp_learning_rate: float = 0.01,
+        tau_hd: float = 0.1,
+        enable_connection_decay: bool = True,
+        connection_decay_rate: float = 1e-5,
+        soft_scale_gate_floor: float = 0.20,
+        soft_scale_gate_floor_in_learning: Optional[float] = None,
+        soft_cross_inhibition_scale: float = 0.35,
+        soft_cross_inhibition_scale_in_learning: Optional[float] = None,
+        soft_cross_inhibition_cap: float = 0.75,
+        post_competition_expression_power: float = 1.0,
+        use_bvc_context_modulation: bool = True,
+        bvc_context_gain_floor: float = 0.15,
+        bvc_context_gain_strength: float = 1.0,
     ):
         """
         Initialize unified multi-scale place cell network.
@@ -77,6 +111,14 @@ class UnifiedMultiScalePCN:
         """
         self.device = device
         self.dtype = dtype
+        self.n_hd = int(n_hd)
+        # BVC Modulation Parameters
+        self.use_bvc_context_modulation = bool(use_bvc_context_modulation)
+        self.bvc_context_gain_floor = float(min(0.95, max(0.0, bvc_context_gain_floor)))
+        self.bvc_context_gain_strength = float(max(0.0, bvc_context_gain_strength))
+        self.last_bvc_context_gain_per_pc = None
+        self.last_bvc_context_gain_per_scale = None
+
         # Support per-scale BVC layers (preferred), with backward-compatible single-layer fallback.
         if bvc_layers is not None:
             self.bvc_layers = bvc_layers
@@ -164,12 +206,21 @@ class UnifiedMultiScalePCN:
         self.sigma_tune = float(torch.mean(self.sigma_tune_per_scale).item())
         self.tau_p = 0.5
         self.tau = timestep / 1000.0
-        # Optional one-sided preference for the largest scale:
-        # preserve Gaussian approach to d_opt, but avoid decay beyond d_opt.
+        # Optional delayed plateau for the largest scale:
+        # preserve the Gaussian near d_opt, then flatten only in very deep open space.
         largest_cfg = scale_configs[-1] if len(scale_configs) > 0 else {}
         self.large_scale_one_sided = bool(largest_cfg.get("large_scale_one_sided", False))
         self.large_scale_plateau = float(largest_cfg.get("large_scale_plateau", 1.0))
         self.large_scale_plateau = min(1.0, max(0.0, self.large_scale_plateau))
+        self.large_scale_plateau_onset_sigma = float(
+            max(0.0, largest_cfg.get("large_scale_plateau_onset_sigma", 1.0))
+        )
+        self.large_scale_plateau_full_sigma = float(
+            max(
+                self.large_scale_plateau_onset_sigma,
+                largest_cfg.get("large_scale_plateau_full_sigma", 2.0),
+            )
+        )
 
         # Learning parameters
         self.enable_ojas = enable_ojas
@@ -177,6 +228,71 @@ class UnifiedMultiScalePCN:
         assert gate_mode in ("normal", "no_gate_no_inhibition", "no_gate_with_inhibition"), \
             f"Unknown gate_mode '{gate_mode}'"
         self.gate_mode = gate_mode
+        self.soft_scale_overlap = bool(soft_scale_overlap)
+        self.soft_scale_overlap_in_learning = bool(soft_scale_overlap_in_learning)
+        learning_adaptation_mode = str(learning_adaptation_mode).strip().lower()
+        if learning_adaptation_mode != "gaussian_post_competition_expression":
+            raise ValueError(
+                "UnifiedMultiScalePCN now only supports "
+                "'gaussian_post_competition_expression'."
+            )
+        self.learning_adaptation_mode = learning_adaptation_mode
+        self.learning_stdp_start_steps = int(max(0, learning_stdp_start_steps))
+        self.learning_cross_scale_coupling_start_steps = int(
+            max(0, learning_cross_scale_coupling_start_steps)
+        )
+        self.learning_cross_scale_coupling_ramp_steps = int(
+            max(0, learning_cross_scale_coupling_ramp_steps)
+        )
+        self.learning_cross_scale_coupling_min = float(
+            min(1.0, max(0.0, learning_cross_scale_coupling_min))
+        )
+        self.enable_correlation_weighting = bool(enable_correlation_weighting)
+        self.correlation_window = int(max(10, correlation_window))
+        self.correlation_update_freq = int(max(1, correlation_update_freq))
+        self.correlation_scaling = float(correlation_scaling)
+        self.min_correlation_weight = float(
+            min(1.0, max(0.0, min_correlation_weight))
+        )
+        self.correlation_threshold = float(max(0.0, correlation_threshold))
+        self.adjacency_learning_mode = str(adjacency_learning_mode).strip().lower()
+        if self.adjacency_learning_mode not in {"dense", "topk"}:
+            self.adjacency_learning_mode = "dense"
+        self.adjacency_topk = (
+            int(adjacency_topk) if adjacency_topk is not None else None
+        )
+        self.adjacency_activity_floor = float(max(0.0, adjacency_activity_floor))
+        self.enable_adaptive_stdp = bool(enable_adaptive_stdp)
+        self.adaptive_initial_lr = float(max(0.0, adaptive_initial_lr))
+        self.adaptive_final_lr = float(max(0.0, adaptive_final_lr))
+        self.adaptive_decay_rate = float(max(0.0, adaptive_decay_rate))
+        self.stdp_learning_rate = float(max(0.0, stdp_learning_rate))
+        self.tau_hd = float(max(1e-6, tau_hd))
+        self.enable_connection_decay = bool(enable_connection_decay)
+        self.connection_decay_rate = float(
+            min(0.999999, max(0.0, connection_decay_rate))
+        )
+        self.learning_step_count = int(getattr(self, "learning_step_count", 0))
+        self.soft_scale_gate_floor = float(min(0.95, max(0.0, soft_scale_gate_floor)))
+        if soft_scale_gate_floor_in_learning is None:
+            soft_scale_gate_floor_in_learning = min(self.soft_scale_gate_floor, 0.08)
+        self.soft_scale_gate_floor_in_learning = float(
+            min(0.95, max(0.0, soft_scale_gate_floor_in_learning))
+        )
+        self.soft_cross_inhibition_scale = float(max(0.0, soft_cross_inhibition_scale))
+        if soft_cross_inhibition_scale_in_learning is None:
+            soft_cross_inhibition_scale_in_learning = min(
+                self.soft_cross_inhibition_scale, 0.25
+            )
+        self.soft_cross_inhibition_scale_in_learning = float(
+            max(0.0, soft_cross_inhibition_scale_in_learning)
+        )
+        self.soft_cross_inhibition_cap = float(max(0.0, soft_cross_inhibition_cap))
+        self.post_competition_expression_power = float(
+            max(1.0, post_competition_expression_power)
+        )
+        self.post_competition_expression_ema_decay = float(0.90)
+
         self.alpha_pb = np.sqrt(0.5)
         self.grid_influence = float(torch.mean(self.grid_influence_per_pc).item())
 
@@ -189,6 +305,7 @@ class UnifiedMultiScalePCN:
             torch.full((cfg["num_pc"],), float(cfg.get("alpha_pg", np.sqrt(0.5))), dtype=dtype, device=device)
             for cfg in scale_configs
         ])
+        self._configure_grid_balance_from_scale_configs()
         # Initialize unified weight matrices
         rng = default_rng()
 
@@ -222,13 +339,13 @@ class UnifiedMultiScalePCN:
                 if gc_end <= gc_start:
                     continue
 
-                ratio = float(cfg.get("w_grid_init_ratio", 0.25))
-                w_grid_block = rng.binomial(
-                    n=1, p=ratio, size=(cfg["num_pc"], gc_end - gc_start)
+                w_grid_block = self._initialize_grid_block_weights(
+                    rng=rng,
+                    scale_cfg=cfg,
+                    num_pc=int(cfg["num_pc"]),
+                    num_grid_cells=int(gc_end - gc_start),
                 )
-                self.w_grid[pc_start:pc_end, gc_start:gc_end] = torch.tensor(
-                    w_grid_block, dtype=dtype, device=device
-                )
+                self.w_grid[pc_start:pc_end, gc_start:gc_end] = w_grid_block
 
             # Block-diagonal mask: only scale-local connections are legal.
             # Used to zero out any off-diagonal growth from Oja updates.
@@ -251,6 +368,12 @@ class UnifiedMultiScalePCN:
             dtype=dtype,
             device=device
         )
+        self.within_scale_block_mask = None
+        # Optional spatial visibility mask over recurrent place-cell connections.
+        # Driver-side geometry code populates this from the active world's obstacle
+        # layout so replay/preplay can suppress across-wall transitions without
+        # hardcoding any environment-specific coordinates here.
+        self.recurrent_visibility_mask = None
 
         # Unified activation vector for all place cells
         self.place_cell_activations = torch.zeros(
@@ -308,6 +431,27 @@ class UnifiedMultiScalePCN:
                 dtype=dtype,
                 device=device
             )
+        self.eta_stdp = 0.3
+        self.activation_history = deque(maxlen=self.correlation_window)
+        self.correlation_matrix = torch.ones(
+            self.num_pc_total,
+            self.num_pc_total,
+            dtype=dtype,
+            device=device,
+        ) * 0.5
+        self.correlation_step_counter = 0
+        self._correlation_weights_cache = torch.ones(
+            self.num_pc_total,
+            self.num_pc_total,
+            dtype=dtype,
+            device=device,
+        )
+        self._correlation_weights_dirty = True
+        self.connection_strength_cache = torch.zeros(
+            self.n_hd, dtype=dtype, device=device
+        )
+        self.strength_update_counter = 0
+        self.strength_update_frequency = 10
 
         # Store scale boundaries for indexing
         self.scale_boundaries = [0]
@@ -335,6 +479,11 @@ class UnifiedMultiScalePCN:
                 w_in_block, dtype=dtype, device=device
             )
         self.w_in = torch.nn.Parameter(self.w_in, requires_grad=False)
+        self.initial_w_in = torch.clone(self.w_in.data)
+        if self.w_grid is not None:
+            self.initial_w_grid = torch.clone(self.w_grid.data)
+        else:
+            self.initial_w_grid = None
 
         print(f"[UnifiedMultiScalePCN] Initialized with {self.num_pc_total} total cells")
         print(f"  Grid cells (total): {self.num_grid_total}")
@@ -345,6 +494,544 @@ class UnifiedMultiScalePCN:
             f"  Cross-scale inhibition per scale: {self.gamma_cross_per_scale.detach().cpu().numpy()}, "
             f"mean={self.gamma_cross:.4f}, sigma_tune_per_scale={self.sigma_tune_per_scale.detach().cpu().numpy()}"
         )
+
+    def _ensure_learning_caches(self) -> None:
+        """Initialize or repair learning-time state for older loaded pickles."""
+        if not hasattr(self, "enable_correlation_weighting"):
+            self.enable_correlation_weighting = False
+        if not hasattr(self, "correlation_window"):
+            self.correlation_window = 100
+        if not hasattr(self, "correlation_update_freq"):
+            self.correlation_update_freq = 10
+        if not hasattr(self, "correlation_scaling"):
+            self.correlation_scaling = 2.0
+        if not hasattr(self, "min_correlation_weight"):
+            self.min_correlation_weight = 0.1
+        if not hasattr(self, "correlation_threshold"):
+            self.correlation_threshold = 0.01
+        if not hasattr(self, "adjacency_learning_mode"):
+            self.adjacency_learning_mode = "dense"
+        if not hasattr(self, "adjacency_topk"):
+            self.adjacency_topk = None
+        if not hasattr(self, "adjacency_activity_floor"):
+            self.adjacency_activity_floor = 0.0
+        if not hasattr(self, "enable_adaptive_stdp"):
+            self.enable_adaptive_stdp = False
+        if not hasattr(self, "adaptive_initial_lr"):
+            self.adaptive_initial_lr = 0.1
+        if not hasattr(self, "adaptive_final_lr"):
+            self.adaptive_final_lr = 0.03
+        if not hasattr(self, "adaptive_decay_rate"):
+            self.adaptive_decay_rate = 3.0
+        if not hasattr(self, "stdp_learning_rate"):
+            self.stdp_learning_rate = 0.01
+        if not hasattr(self, "tau_hd"):
+            self.tau_hd = 0.1
+        if not hasattr(self, "post_competition_expression_power"):
+            self.post_competition_expression_power = 1.0
+
+
+        if not isinstance(getattr(self, "activation_history", None), deque):
+            existing_history = list(getattr(self, "activation_history", []))
+            self.activation_history = deque(existing_history, maxlen=self.correlation_window)
+        elif self.activation_history.maxlen != self.correlation_window:
+            self.activation_history = deque(
+                self.activation_history, maxlen=self.correlation_window
+            )
+
+        corr_shape = (self.num_pc_total, self.num_pc_total)
+        if (
+            not hasattr(self, "correlation_matrix")
+            or self.correlation_matrix.shape != corr_shape
+            or self.correlation_matrix.device != self.device
+        ):
+            self.correlation_matrix = torch.ones(
+                corr_shape, dtype=self.dtype, device=self.device
+            ) * 0.5
+        else:
+            self.correlation_matrix = self.correlation_matrix.to(
+                device=self.device, dtype=self.dtype
+            )
+
+        if (
+            not hasattr(self, "_correlation_weights_cache")
+            or self._correlation_weights_cache.shape != corr_shape
+            or self._correlation_weights_cache.device != self.device
+        ):
+            self._correlation_weights_cache = torch.ones(
+                corr_shape, dtype=self.dtype, device=self.device
+            )
+        else:
+            self._correlation_weights_cache = self._correlation_weights_cache.to(
+                device=self.device, dtype=self.dtype
+            )
+
+        if not hasattr(self, "_correlation_weights_dirty"):
+            self._correlation_weights_dirty = True
+        if not hasattr(self, "correlation_step_counter"):
+            self.correlation_step_counter = 0
+        if (
+            not hasattr(self, "connection_strength_cache")
+            or self.connection_strength_cache.shape != (self.n_hd,)
+            or self.connection_strength_cache.device != self.device
+        ):
+            self.connection_strength_cache = torch.zeros(
+                self.n_hd, dtype=self.dtype, device=self.device
+            )
+        else:
+            self.connection_strength_cache = self.connection_strength_cache.to(
+                device=self.device, dtype=self.dtype
+            )
+        if not hasattr(self, "strength_update_counter"):
+            self.strength_update_counter = 0
+        if not hasattr(self, "strength_update_frequency"):
+            self.strength_update_frequency = 10
+        if (
+            not hasattr(self, "post_competition_expression_ema")
+            or self.post_competition_expression_ema.shape != (self.num_scales,)
+            or self.post_competition_expression_ema.device != self.device
+        ):
+            self.post_competition_expression_ema = torch.ones(
+                self.num_scales, dtype=self.dtype, device=self.device
+            )
+        else:
+            self.post_competition_expression_ema = self.post_competition_expression_ema.to(
+                device=self.device, dtype=self.dtype
+            )
+
+
+    def reset_activations(self):
+        """Reset activations and learning traces to match old non-unified behavior."""
+        self.place_cell_activations.zero_()
+        self.activation_update.zero_()
+        self.place_cell_trace = None
+        if hasattr(self, "post_competition_expression_ema"):
+            self.post_competition_expression_ema.fill_(1.0)
+        self._clear_gaussian_post_competition_diagnostics()
+        self._clear_learning_post_competition_diagnostics()
+
+
+        if getattr(self, "hd_cell_trace", None) is not None:
+            self.hd_cell_trace.zero_()
+        elif getattr(self, "enable_stdp", False):
+            self.hd_cell_trace = torch.zeros(
+                (self.n_hd, 1, 1), dtype=self.dtype, device=self.device
+            )
+
+        if hasattr(self, "connection_strength_cache"):
+            self.connection_strength_cache.zero_()
+            self.strength_update_counter = 0
+
+    def update_correlation_tracking(self, pc_activations: torch.Tensor) -> None:
+        """Update replay-correlation statistics used to weight STDP updates."""
+        if not bool(getattr(self, "enable_correlation_weighting", False)):
+            return
+
+        self._ensure_learning_caches()
+        threshold = float(getattr(self, "correlation_threshold", 0.01))
+        thresholded = pc_activations * (pc_activations > threshold)
+        self.activation_history.append(thresholded.clone().detach())
+
+        self.correlation_step_counter += 1
+        if (
+            self.correlation_step_counter
+            % int(max(1, getattr(self, "correlation_update_freq", 10)))
+            == 0
+            and len(self.activation_history) >= 10
+        ):
+            self.compute_correlation_matrix()
+
+    def compute_correlation_matrix(self) -> None:
+        """Compute the correlation matrix from recent unified PC activity."""
+        self._ensure_learning_caches()
+        if len(self.activation_history) < 10:
+            return
+
+        try:
+            history_matrix = torch.stack(list(self.activation_history), dim=0)
+            self.correlation_matrix = torch.corrcoef(history_matrix.T)
+            self.correlation_matrix = torch.nan_to_num(
+                self.correlation_matrix,
+                nan=0.0,
+                posinf=1.0,
+                neginf=-1.0,
+            )
+            diagonal_indices = torch.arange(self.num_pc_total, device=self.device)
+            self.correlation_matrix[diagonal_indices, diagonal_indices] = 1.0
+            self._correlation_weights_dirty = True
+        except Exception:
+            self.correlation_matrix = torch.ones(
+                self.num_pc_total,
+                self.num_pc_total,
+                dtype=self.dtype,
+                device=self.device,
+            ) * 0.5
+            self._correlation_weights_dirty = True
+
+    def get_correlation_weights(self) -> torch.Tensor:
+        """Convert the correlation matrix into multiplicative STDP weights."""
+        if not bool(getattr(self, "enable_correlation_weighting", False)):
+            return torch.ones(
+                self.num_pc_total,
+                self.num_pc_total,
+                dtype=self.dtype,
+                device=self.device,
+            )
+
+        self._ensure_learning_caches()
+        if not self._correlation_weights_dirty:
+            return self._correlation_weights_cache
+
+        sigmoid_corr = torch.sigmoid(
+            float(getattr(self, "correlation_scaling", 2.0)) * self.correlation_matrix
+        )
+        min_weight = float(getattr(self, "min_correlation_weight", 0.1))
+        self._correlation_weights_cache = min_weight + (
+            (1.0 - min_weight) * sigmoid_corr
+        )
+        self._correlation_weights_dirty = False
+        return self._correlation_weights_cache
+
+    def apply_correlation_weighting_to_stdp(
+        self, connection_update: torch.Tensor
+    ) -> torch.Tensor:
+        """Apply cached correlation weights to a unified STDP delta."""
+        if not bool(getattr(self, "enable_correlation_weighting", False)):
+            return connection_update
+        return connection_update * self.get_correlation_weights().unsqueeze(0)
+
+    def update_hd_eligibility_trace(
+        self, hd_activations: Optional[torch.Tensor]
+    ) -> None:
+        """Update head-direction eligibility traces using the old v2 dynamics."""
+        if hd_activations is None:
+            return
+        if getattr(self, "hd_cell_trace", None) is None:
+            self.hd_cell_trace = torch.zeros(
+                (self.n_hd, 1, 1), dtype=self.dtype, device=self.device
+            )
+
+        hd_activations_clean = torch.nan_to_num(hd_activations)
+        hd_activations_expanded = hd_activations_clean.unsqueeze(1).unsqueeze(2)
+        tau_hd = float(max(1e-6, getattr(self, "tau_hd", 0.1)))
+        self.hd_cell_trace += (self.tau / tau_hd) * (
+            hd_activations_expanded - self.hd_cell_trace
+        )
+
+    def compute_connection_strengths(
+        self, direction_connections_batch: torch.Tensor
+    ) -> torch.Tensor:
+        """Vectorized connection-strength summary for adaptive STDP."""
+        abs_connections = torch.abs(direction_connections_batch)
+        significance_threshold = 0.0001
+        significant_mask = abs_connections > significance_threshold
+        significant_counts = significant_mask.sum(dim=(1, 2))
+        significant_sums = (abs_connections * significant_mask).sum(dim=(1, 2))
+        return torch.where(
+            significant_counts > 0,
+            significant_sums
+            / torch.clamp(significant_counts.to(self.dtype), min=1.0),
+            torch.zeros_like(significant_sums),
+        )
+
+    def get_adaptive_learning_rates(
+        self, connection_strengths: torch.Tensor
+    ) -> torch.Tensor:
+        """Return one adaptive STDP learning rate per head-direction slice."""
+        if not bool(getattr(self, "enable_adaptive_stdp", False)):
+            return torch.full(
+                (self.n_hd,),
+                fill_value=float(getattr(self, "stdp_learning_rate", 0.01)),
+                dtype=self.dtype,
+                device=self.device,
+            )
+
+        decay_factor = torch.exp(
+            -connection_strengths * float(getattr(self, "adaptive_decay_rate", 3.0))
+        )
+        return float(getattr(self, "adaptive_final_lr", 0.03)) + (
+            float(getattr(self, "adaptive_initial_lr", 0.1))
+            - float(getattr(self, "adaptive_final_lr", 0.03))
+        ) * decay_factor
+
+    def _configure_grid_balance_from_scale_configs(self) -> None:
+        """
+        Configure per-scale BVC/GC homeostatic gains from scale configs.
+
+        Unified mode mixes BVC and GC drive inside one activation equation.
+        Without gain balancing, whichever modality has the larger raw afferent
+        magnitude dominates regardless of the configured `grid_influence`.
+        """
+        self.grid_balance_enabled_per_scale = [
+            bool(cfg.get("grid_balance_modalities", True))
+            for cfg in self.scale_configs
+        ]
+        self.grid_balance_ema_decay_per_scale = torch.tensor(
+            [
+                float(min(0.9999, max(0.0, cfg.get("grid_balance_ema", 0.95))))
+                for cfg in self.scale_configs
+            ],
+            dtype=self.dtype,
+            device=self.device,
+        )
+        self.grid_balance_min_gain_per_scale = torch.tensor(
+            [
+                float(max(1e-3, cfg.get("grid_balance_min_gain", 0.1)))
+                for cfg in self.scale_configs
+            ],
+            dtype=self.dtype,
+            device=self.device,
+        )
+        self.grid_balance_max_gain_per_scale = torch.tensor(
+            [
+                float(max(1.0, cfg.get("grid_balance_max_gain", 8.0)))
+                for cfg in self.scale_configs
+            ],
+            dtype=self.dtype,
+            device=self.device,
+        )
+        self.learning_grid_influence_scale_per_pc = torch.cat(
+            [
+                torch.full(
+                    (cfg["num_pc"],),
+                    float(max(0.0, cfg.get("learning_grid_influence_scale", 1.0))),
+                    dtype=self.dtype,
+                    device=self.device,
+                )
+                for cfg in self.scale_configs
+            ]
+        )
+        needs_reset = (
+            not hasattr(self, "grid_balance_bvc_ema")
+            or self.grid_balance_bvc_ema.numel() != self.num_scales
+            or not hasattr(self, "grid_balance_gc_ema")
+            or self.grid_balance_gc_ema.numel() != self.num_scales
+        )
+        if needs_reset:
+            self.grid_balance_bvc_ema = torch.ones(
+                self.num_scales, dtype=self.dtype, device=self.device
+            )
+            self.grid_balance_gc_ema = torch.ones(
+                self.num_scales, dtype=self.dtype, device=self.device
+            )
+            self.grid_balance_initialized = False
+        else:
+            self.grid_balance_bvc_ema = self.grid_balance_bvc_ema.to(
+                device=self.device, dtype=self.dtype
+            )
+            self.grid_balance_gc_ema = self.grid_balance_gc_ema.to(
+                device=self.device, dtype=self.dtype
+            )
+        self.last_grid_gain_per_scale = [
+            {"scale_idx": int(i), "bvc_gain": 1.0, "grid_gain": 1.0}
+            for i in range(self.num_scales)
+        ]
+
+    def _is_learning_active(self) -> bool:
+        """Return whether the online activation path is currently in learning mode."""
+        return bool(self.enable_ojas or self.enable_stdp)
+
+    def _use_soft_scale_overlap(self, learning_active: Optional[bool] = None) -> bool:
+        """Resolve whether softened overlap should be applied for the current mode."""
+        if not bool(getattr(self, "soft_scale_overlap", False)):
+            return False
+        if learning_active is None:
+            learning_active = self._is_learning_active()
+        if learning_active and not bool(getattr(self, "soft_scale_overlap_in_learning", False)):
+            return False
+        return True
+
+    def _compute_learning_cross_scale_coupling(
+        self,
+        learning_active: Optional[bool] = None,
+    ) -> float:
+        """
+        Smoothly ramp cross-scale coupling from a mostly within-scale regime to
+        full coupling as fields stabilize.
+        """
+        if learning_active is None:
+            learning_active = self._is_learning_active()
+        if not learning_active:
+            return 1.0
+
+        start = int(getattr(self, "learning_cross_scale_coupling_start_steps", 0))
+        ramp = int(getattr(self, "learning_cross_scale_coupling_ramp_steps", 0))
+        min_coupling = float(
+            getattr(self, "learning_cross_scale_coupling_min", 0.0)
+        )
+        step = int(getattr(self, "learning_step_count", 0))
+
+        if step <= start:
+            return min_coupling
+        if ramp <= 0:
+            return 1.0
+
+        alpha = float(min(1.0, max(0.0, (step - start) / max(ramp, 1))))
+        alpha = alpha * alpha * (3.0 - 2.0 * alpha)
+        return min_coupling + ((1.0 - min_coupling) * alpha)
+
+    def _is_stdp_learning_active(
+        self,
+        learning_active: Optional[bool] = None,
+    ) -> bool:
+        """
+        Delay recurrent STDP until afferent fields have had time to stabilize.
+        """
+        if learning_active is None:
+            learning_active = self._is_learning_active()
+        if not learning_active:
+            return True
+        step = int(getattr(self, "learning_step_count", 0))
+        start = int(getattr(self, "learning_stdp_start_steps", 0))
+        return step >= start
+
+    def _effective_grid_influence_per_pc(
+        self,
+        learning_active: Optional[bool] = None,
+    ) -> torch.Tensor:
+        """
+        Return the grid/BVC mixing vector for the current mode.
+
+        During learning we can modestly boost GC influence so place-field formation
+        retains more conjunctive anti-aliasing power, while keeping exploit/readout
+        closer to the configured base mixture.
+        """
+        if learning_active is None:
+            learning_active = self._is_learning_active()
+        if not learning_active:
+            return self.grid_influence_per_pc
+
+        scale = getattr(self, "learning_grid_influence_scale_per_pc", None)
+        if scale is None:
+            return self.grid_influence_per_pc
+        scale = scale.to(device=self.device, dtype=self.dtype)
+        return torch.clamp(self.grid_influence_per_pc * scale, min=0.0, max=1.0)
+
+    def _initialize_grid_block_weights(
+        self,
+        rng,
+        scale_cfg: Dict,
+        num_pc: int,
+        num_grid_cells: int,
+    ) -> torch.Tensor:
+        """
+        Initialize one scale-local GC->PC block.
+
+        Mirrors the non-unified model's `balanced_modules` strategy so each PC
+        starts with a diverse sample across GC modules rather than a purely
+        Bernoulli draw over all cells.
+        """
+        ratio = float(scale_cfg.get("w_grid_init_ratio", 0.25))
+        strategy = str(scale_cfg.get("w_grid_init_strategy", "balanced_modules")).strip().lower()
+        num_modules = int(scale_cfg.get("num_modules", 0) or 0)
+        cells_per_module = int(scale_cfg.get("cells_per_module", 0) or 0)
+        use_balanced = (
+            strategy == "balanced_modules"
+            and num_modules > 0
+            and cells_per_module > 0
+            and (num_modules * cells_per_module) >= num_grid_cells
+        )
+
+        if not use_balanced:
+            block = rng.binomial(n=1, p=ratio, size=(num_pc, num_grid_cells))
+            return torch.tensor(block, dtype=self.dtype, device=self.device)
+
+        total_gc = int(num_grid_cells)
+        total_active = int(round(ratio * total_gc))
+        total_active = max(0, min(total_active, total_gc))
+        w_grid_np = np.zeros((num_pc, total_gc), dtype=np.int8)
+        base_quota = total_active // num_modules
+        remainder = total_active - (base_quota * num_modules)
+
+        for pc_idx in range(num_pc):
+            for module_idx in range(num_modules):
+                module_start = module_idx * cells_per_module
+                if module_start >= total_gc:
+                    break
+                module_size = min(cells_per_module, total_gc - module_start)
+                quota = base_quota + (1 if module_idx < remainder else 0)
+                quota = min(quota, module_size)
+                if quota > 0:
+                    chosen = rng.choice(module_size, size=quota, replace=False)
+                    w_grid_np[pc_idx, module_start + chosen] = 1
+
+        return torch.tensor(w_grid_np, dtype=self.dtype, device=self.device)
+
+    def _balance_bvc_and_grid_drive(
+        self,
+        bvc_afferent_excitation: torch.Tensor,
+        grid_afferent_excitation: torch.Tensor,
+    ):
+        """
+        Homeostatically balance BVC and GC excitation per scale before mixing.
+
+        The target magnitude is the geometric mean of the running BVC and GC
+        excitation magnitudes, which keeps one modality from swamping the other
+        while preserving overall scale.
+        """
+        balanced_bvc = bvc_afferent_excitation.clone()
+        balanced_grid = grid_afferent_excitation.clone()
+        bvc_gain_per_pc = torch.ones_like(self.place_cell_activations)
+        grid_gain_per_pc = torch.ones_like(self.place_cell_activations)
+        gain_logs = []
+
+        if (
+            self.grid_cell_activations is None
+            or self.w_grid is None
+            or self.num_scales <= 0
+        ):
+            self.last_grid_gain_per_scale = gain_logs
+            return balanced_bvc, balanced_grid, bvc_gain_per_pc, grid_gain_per_pc
+
+        initialized = bool(getattr(self, "grid_balance_initialized", False))
+        for scale_idx in range(self.num_scales):
+            start = self.scale_boundaries[scale_idx]
+            end = self.scale_boundaries[scale_idx + 1]
+            raw_bvc = torch.mean(torch.abs(bvc_afferent_excitation[start:end]))
+            raw_grid = torch.mean(torch.abs(grid_afferent_excitation[start:end]))
+
+            enabled = bool(self.grid_balance_enabled_per_scale[scale_idx])
+            if enabled:
+                if not initialized:
+                    self.grid_balance_bvc_ema[scale_idx] = torch.clamp(raw_bvc, min=1e-6)
+                    self.grid_balance_gc_ema[scale_idx] = torch.clamp(raw_grid, min=1e-6)
+                else:
+                    ema_decay = self.grid_balance_ema_decay_per_scale[scale_idx]
+                    self.grid_balance_bvc_ema[scale_idx] = (
+                        (ema_decay * self.grid_balance_bvc_ema[scale_idx])
+                        + ((1.0 - ema_decay) * raw_bvc)
+                    )
+                    self.grid_balance_gc_ema[scale_idx] = (
+                        (ema_decay * self.grid_balance_gc_ema[scale_idx])
+                        + ((1.0 - ema_decay) * raw_grid)
+                    )
+
+                ema_bvc = torch.clamp(self.grid_balance_bvc_ema[scale_idx], min=1e-6)
+                ema_grid = torch.clamp(self.grid_balance_gc_ema[scale_idx], min=1e-6)
+                target = torch.sqrt(ema_bvc * ema_grid)
+                min_gain = self.grid_balance_min_gain_per_scale[scale_idx]
+                max_gain = self.grid_balance_max_gain_per_scale[scale_idx]
+                bvc_gain = torch.clamp(target / ema_bvc, min=min_gain, max=max_gain)
+                grid_gain = torch.clamp(target / ema_grid, min=min_gain, max=max_gain)
+            else:
+                bvc_gain = torch.tensor(1.0, dtype=self.dtype, device=self.device)
+                grid_gain = torch.tensor(1.0, dtype=self.dtype, device=self.device)
+
+            balanced_bvc[start:end] = balanced_bvc[start:end] * bvc_gain
+            balanced_grid[start:end] = balanced_grid[start:end] * grid_gain
+            bvc_gain_per_pc[start:end] = bvc_gain
+            grid_gain_per_pc[start:end] = grid_gain
+            gain_logs.append(
+                {
+                    "scale_idx": int(scale_idx),
+                    "bvc_gain": float(bvc_gain.item()),
+                    "grid_gain": float(grid_gain.item()),
+                }
+            )
+
+        self.grid_balance_initialized = True
+        self.last_grid_gain_per_scale = gain_logs
+        return balanced_bvc, balanced_grid, bvc_gain_per_pc, grid_gain_per_pc
 
     def get_scale_activations(self, scale_idx: int) -> torch.Tensor:
         """Get activations for a specific scale."""
@@ -364,13 +1051,57 @@ class UnifiedMultiScalePCN:
         pref = torch.exp(-((proximity_t - self.d_opt) ** 2) / (2.0 * sigma2))
         if self.large_scale_one_sided and self.num_scales > 0:
             last_idx = self.num_scales - 1
-            plateau = torch.as_tensor(self.large_scale_plateau, dtype=self.dtype, device=self.device)
-            pref[last_idx] = torch.where(
-                proximity_t >= self.d_opt[last_idx],
-                plateau,
-                pref[last_idx],
+            pref[last_idx] = self._apply_large_scale_plateau_ramp(
+                gaussian_pref=pref[last_idx],
+                proximity_t=proximity_t,
+                d_opt_t=self.d_opt[last_idx],
+                sigma_tune_t=self.sigma_tune_per_scale[last_idx],
             )
         return torch.clamp(pref, min=0.0, max=1.0)
+    
+    def _compute_bvc_context_gain_per_pc(self, proximity: float, learning_active: bool = False) -> torch.Tensor:
+        """
+        Context-dependent gain applied only to boundary-driven (BVC) input.
+
+        Uses the same bilateral-proximity Gaussian already used for scale preference,
+        but treats it as a smooth gain rather than a hard eligibility mask.
+        """
+        if not self.use_bvc_context_modulation:
+            return torch.ones(
+                self.num_pc_total,
+                dtype=self.dtype,
+                device=self.device,
+            )
+
+        scale_preference = self.compute_scale_preference(proximity)
+        gain_per_pc = self.expand_scale_values_to_pc(scale_preference)
+
+        # Optional softening so it behaves like gain, not hard suppression
+        floor = self.bvc_context_gain_floor
+        strength = self.bvc_context_gain_strength
+        gain_per_pc = floor + ((1.0 - floor) * gain_per_pc)
+        gain_per_pc = 1.0 + strength * (gain_per_pc - 1.0)
+
+        return torch.clamp(gain_per_pc, min=floor, max=1.0)
+
+    def _apply_large_scale_plateau_ramp(
+        self,
+        gaussian_pref: torch.Tensor,
+        proximity_t: torch.Tensor,
+        d_opt_t: torch.Tensor,
+        sigma_tune_t: torch.Tensor,
+    ) -> torch.Tensor:
+        """Blend the largest-scale Gaussian into a plateau only in deep open space."""
+        plateau = torch.as_tensor(
+            self.large_scale_plateau, dtype=self.dtype, device=self.device
+        )
+        onset = d_opt_t + self.large_scale_plateau_onset_sigma * sigma_tune_t
+        full = d_opt_t + self.large_scale_plateau_full_sigma * sigma_tune_t
+        denom = torch.clamp(full - onset, min=1e-6)
+        alpha = torch.clamp((proximity_t - onset) / denom, min=0.0, max=1.0)
+        # Smoothstep keeps the transition continuous without a hard switch at onset.
+        alpha = alpha * alpha * (3.0 - 2.0 * alpha)
+        return (1.0 - alpha) * gaussian_pref + alpha * plateau
 
     def _build_d_opt_per_pc(self) -> None:
         """
@@ -421,13 +1152,11 @@ class UnifiedMultiScalePCN:
         if self.large_scale_one_sided and self.num_scales > 0:
             last_start = self.scale_boundaries[-2]
             last_end = self.scale_boundaries[-1]
-            plateau = torch.as_tensor(self.large_scale_plateau, dtype=self.dtype, device=self.device)
-            last_pref = pref_pc[last_start:last_end]
-            last_dopt = self.d_opt_per_pc[last_start:last_end]
-            pref_pc[last_start:last_end] = torch.where(
-                proximity_t >= last_dopt,
-                plateau,
-                last_pref,
+            pref_pc[last_start:last_end] = self._apply_large_scale_plateau_ramp(
+                gaussian_pref=pref_pc[last_start:last_end],
+                proximity_t=proximity_t,
+                d_opt_t=self.d_opt_per_pc[last_start:last_end],
+                sigma_tune_t=sigma_tune_per_pc[last_start:last_end],
             )
         return torch.clamp(pref_pc, min=0.0, max=1.0)
 
@@ -450,7 +1179,37 @@ class UnifiedMultiScalePCN:
             return None
         return self.expand_scale_values_to_pc(self.last_scale_preference)
 
-    def compute_cross_scale_inhibition(self, proximity: float) -> torch.Tensor:
+    def _soften_scale_preference(
+        self,
+        preference: torch.Tensor,
+        learning_active: Optional[bool] = None,
+    ) -> torch.Tensor:
+        """
+        Convert strict scale preference into a softer overlap-friendly gate.
+
+        The preferred scale remains strongest, but non-preferred scales keep a
+        non-zero floor so the unified code does not collapse into a near
+        winner-take-all partition of the environment.
+        """
+        if not self._use_soft_scale_overlap(learning_active=learning_active):
+            return preference
+        floor_value = (
+            self.soft_scale_gate_floor_in_learning
+            if bool(learning_active)
+            else self.soft_scale_gate_floor
+        )
+        floor = torch.as_tensor(
+            floor_value, dtype=preference.dtype, device=preference.device
+        )
+        return floor + ((1.0 - floor) * preference)
+
+    def compute_cross_scale_inhibition(
+        self,
+        proximity: float,
+        afferent_excitation: Optional[torch.Tensor] = None,
+        learning_active: Optional[bool] = None,
+        from_activations: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """
         Compute Gaussian cross-scale inhibition based on boundary proximity.
 
@@ -469,15 +1228,21 @@ class UnifiedMultiScalePCN:
             inhibition: Tensor of shape (num_pc_total,) with inhibition for each cell
         """
         # Initialize inhibition tensor
-        inhibition = torch.zeros_like(self.place_cell_activations)
+        _ref_activations = from_activations if from_activations is not None else self.place_cell_activations
+        inhibition = torch.zeros_like(_ref_activations)
         scale_preference = self.compute_scale_preference(proximity)
+        effective_scale_preference = self._soften_scale_preference(
+            scale_preference,
+            learning_active=learning_active,
+        )
+        use_soft_overlap = self._use_soft_scale_overlap(learning_active=learning_active)
 
         # For each scale, compute how inappropriate the current distance is
         for scale_idx in range(self.num_scales):
             start = self.scale_boundaries[scale_idx]
             end = self.scale_boundaries[scale_idx + 1]
             # Mismatch derived from scale preference (high far from preferred d_opt).
-            mismatch = 1.0 - scale_preference[scale_idx]
+            mismatch = 1.0 - effective_scale_preference[scale_idx]
 
             # Sum activations from OTHER scales
             other_scales_activation = 0.0
@@ -486,18 +1251,387 @@ class UnifiedMultiScalePCN:
                     other_start = self.scale_boundaries[other_idx]
                     other_end = self.scale_boundaries[other_idx + 1]
                     other_scales_activation += torch.sum(
-                        self.place_cell_activations[other_start:other_end]
+                        _ref_activations[other_start:other_end]
                     )
 
             # Apply inhibition to this scale
             gamma_cross_scale = self.gamma_cross_per_scale[scale_idx]
-            inhibition[start:end] = (
+            scale_inhibition = (
                 gamma_cross_scale
                 * mismatch
                 * other_scales_activation
             )
+            if use_soft_overlap:
+                scale_factor = (
+                    float(getattr(self, "soft_cross_inhibition_scale_in_learning", 0.25))
+                    if bool(learning_active)
+                    else float(getattr(self, "soft_cross_inhibition_scale", 0.35))
+                )
+                scale_inhibition = (
+                    scale_factor
+                    * scale_inhibition
+                )
+                if afferent_excitation is not None:
+                    cap_ratio = float(getattr(self, "soft_cross_inhibition_cap", 0.0))
+                    if cap_ratio > 0.0:
+                        cap = cap_ratio * torch.clamp(
+                            afferent_excitation[start:end], min=0.0
+                        )
+                        scale_inhibition = torch.minimum(scale_inhibition, cap)
+
+            inhibition[start:end] = scale_inhibition
 
         return inhibition
+
+    def _compute_scale_evidence_from_activations(
+        self,
+        activations: torch.Tensor,
+        topk_mean_k: int = 1,
+    ) -> torch.Tensor:
+        """
+        Summarize post-competition evidence for each scale.
+
+        By default each scale reports the strength of its strongest currently
+        supported cell. When `topk_mean_k > 1`, the evidence becomes the mean of
+        the top-k active cells in that scale, which is more stable than a raw
+        single-cell maximum.
+        """
+        evidence = torch.zeros(
+            self.num_scales, dtype=activations.dtype, device=activations.device
+        )
+        k_req = int(max(1, topk_mean_k))
+        for scale_idx in range(self.num_scales):
+            start = self.scale_boundaries[scale_idx]
+            end = self.scale_boundaries[scale_idx + 1]
+            block = activations[start:end]
+            if block.numel() > 0:
+                if k_req <= 1:
+                    evidence[scale_idx] = torch.max(block)
+                else:
+                    positive = block[block > 0]
+                    source = positive if positive.numel() > 0 else block
+                    k = min(k_req, int(source.numel()))
+                    evidence[scale_idx] = torch.mean(torch.topk(source, k=k).values)
+        return evidence
+
+    def _expand_scale_pair_values_to_pc_matrix(
+        self,
+        scale_pair_values: torch.Tensor,
+    ) -> torch.Tensor:
+        """Expand a scale×scale matrix into a per-PC block matrix."""
+        pair_mask = torch.zeros(
+            (self.num_pc_total, self.num_pc_total),
+            dtype=scale_pair_values.dtype,
+            device=scale_pair_values.device,
+        )
+        for src_scale_idx in range(self.num_scales):
+            src_start = self.scale_boundaries[src_scale_idx]
+            src_end = self.scale_boundaries[src_scale_idx + 1]
+            for dst_scale_idx in range(self.num_scales):
+                weight = float(scale_pair_values[src_scale_idx, dst_scale_idx].item())
+                if abs(weight) <= 1e-12:
+                    continue
+                dst_start = self.scale_boundaries[dst_scale_idx]
+                dst_end = self.scale_boundaries[dst_scale_idx + 1]
+                pair_mask[src_start:src_end, dst_start:dst_end] = weight
+        return pair_mask
+
+    def _build_post_competition_recurrent_mask(self) -> torch.Tensor:
+        """Allow STDP for within-scale and adjacent-scale pairs (0↔1, 1↔2).
+
+        Non-adjacent pairs (e.g. 0↔2) are blocked because the Gaussian
+        eligibility competition makes those scales too dissimilar to
+        meaningfully co-activate at the same location.
+        """
+        mask = self._get_within_scale_block_mask().clone()
+        # Open adjacent-scale blocks
+        for s in range(self.num_scales - 1):
+            s0_start = self.scale_boundaries[s]
+            s0_end = self.scale_boundaries[s + 1]
+            s1_start = self.scale_boundaries[s + 1]
+            s1_end = self.scale_boundaries[s + 2]
+            mask[s0_start:s0_end, s1_start:s1_end] = 1.0
+            mask[s1_start:s1_end, s0_start:s0_end] = 1.0
+        return mask
+
+    def _clear_gaussian_post_competition_diagnostics(self) -> None:
+        """Clear Gaussian post-competition telemetry when the mechanism is inactive."""
+        self.last_gaussian_post_competition_scale_preference = None
+        self.last_gaussian_post_competition_raw_gain = None
+        self.last_gaussian_post_competition_gain = None
+        self.last_gaussian_post_competition_pair_weights = None
+
+    def _clear_learning_post_competition_diagnostics(self) -> None:
+        """Clear learning-only post-competition telemetry when inactive."""
+        self.last_learning_post_competition_alpha = None
+        self.last_learning_post_competition_eligibility_scale = None
+        self.last_learning_post_competition_mean_gain = None
+        self.last_learning_post_competition_survivor_fraction = None
+        self.last_learning_post_competition_survivor_count = None
+
+    def _compute_learning_gaussian_post_competition_expression_state(
+        self,
+        proximity: float,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Build a learning-only Gaussian post-competition eligibility state.
+
+        Each scale first completes its own within-scale competition. After that,
+        Gaussian boundary preference is used only to decide whether a scale is
+        eligible to remain expressed during learning. The Gaussian score is
+        sharpened, smoothed with the dedicated post-competition EMA, normalized,
+        and then converted into a smooth saturating scale-level eligibility:
+
+            raw_gain_s = G_s(d)^kappa / max_r G_r(d)^kappa
+            eligibility_s = 1 - (1 - gain_s)^kappa
+
+        All PCs within a scale receive the same eligibility factor. Activation
+        structure within an eligible scale is therefore set entirely by afferent
+        drive and competition, not by Gaussian per-cell amplitude modulation.
+        """
+        self._ensure_learning_caches()
+
+        scale_preference = self.compute_scale_preference(proximity)
+        pref_eps = torch.clamp(scale_preference, min=1e-6)
+        power_value = float(
+            max(1e-6, getattr(self, "post_competition_expression_power", 1.0))
+        )
+        power = torch.as_tensor(power_value, dtype=self.dtype, device=self.device)
+        sharpened = torch.pow(pref_eps, power)
+        raw_gain_scale = sharpened / torch.clamp(torch.max(sharpened), min=1e-6)
+
+        ema_decay = float(
+            min(
+                0.999999,
+                max(0.0, getattr(self, "post_competition_expression_ema_decay", 0.90)),
+            )
+        )
+        self.post_competition_expression_ema.mul_(ema_decay).add_(
+            raw_gain_scale * (1.0 - ema_decay)
+        )
+        gain_scale = self.post_competition_expression_ema / torch.clamp(
+            torch.max(self.post_competition_expression_ema), min=1e-6
+        )
+        gain_scale = torch.clamp(gain_scale, min=0.0, max=1.0)
+        eligibility_scale = 1.0 - torch.pow(
+            torch.clamp(1.0 - gain_scale, min=0.0, max=1.0),
+            power,
+        )
+        eligibility_scale = torch.clamp(eligibility_scale, min=0.0, max=1.0)
+        eligibility_per_pc = self.expand_scale_values_to_pc(eligibility_scale)
+
+        recurrent_mask = self._build_post_competition_recurrent_mask()
+
+        self.last_gaussian_post_competition_scale_preference = scale_preference.detach()
+        self.last_gaussian_post_competition_raw_gain = raw_gain_scale.detach()
+        self.last_gaussian_post_competition_gain = gain_scale.detach()
+        self.last_gaussian_post_competition_pair_weights = (
+            (gain_scale.unsqueeze(1) * gain_scale.unsqueeze(0)).detach()
+        )
+        self.last_learning_post_competition_alpha = power_value
+        self.last_learning_post_competition_eligibility_scale = (
+            eligibility_scale.detach()
+        )
+        self.last_learning_post_competition_mean_gain = float(
+            torch.mean(eligibility_scale).item()
+        )
+        self.last_learning_post_competition_survivor_fraction = None
+        self.last_learning_post_competition_survivor_count = None
+        return {
+            "scale_preference": scale_preference,
+            "raw_gain_scale": raw_gain_scale,
+            "gain_scale": gain_scale,
+            "eligibility_scale": eligibility_scale,
+            "eligibility_per_pc": eligibility_per_pc,
+            "recurrent_mask": recurrent_mask,
+        }
+
+    def _apply_competition_stage(
+        self,
+        afferent_excitation: torch.Tensor,
+        proximity: float,
+        current_activations: torch.Tensor,
+        activation_update_in: torch.Tensor,
+        learning_active: bool = False,
+        bvc_gain_per_pc: Optional[torch.Tensor] = None,
+        grid_gain_per_pc: Optional[torch.Tensor] = None,
+    ):
+        """
+        Stateless competition stage shared by normal inference and preplay.
+
+        Takes pre-computed afferent excitation (PC-space), applies scale gating,
+        afferent/recurrent/cross-scale inhibition, the IIR update, and normalization.
+        Reads current_activations for inhibition terms instead of self.place_cell_activations,
+        and uses activation_update_in as the IIR state instead of self.activation_update.
+        Returns (new_activations, new_activation_update, expression_state) without
+        modifying any model state.
+
+        Args:
+            afferent_excitation: Pre-computed PC-space afferent drive (N,).
+            proximity: Distance to nearest boundary in metres.
+            current_activations: Imagined or real current PC activations (N,).
+            activation_update_in: IIR integrator state to start from (N,).
+            learning_active: Whether plasticity rules are active this step.
+            bvc_gain_per_pc: Per-PC BVC gain from _balance_bvc_and_grid_drive (N,).
+                Defaults to ones when not provided (preplay path).
+            grid_gain_per_pc: Per-PC grid gain from _balance_bvc_and_grid_drive (N,).
+                Defaults to ones when not provided (preplay path).
+
+        Returns:
+            new_activations: Reconstructed place-cell state (N,).
+            new_activation_update: Updated IIR integrator state (N,).
+            expression_state: Dict from learning-only Gaussian post-competition
+                eligibility, or None. Caller needs this for the STDP
+                recurrent-learning mask.
+        """
+        if bvc_gain_per_pc is None:
+            bvc_gain_per_pc = self._buf_ones
+        if grid_gain_per_pc is None:
+            grid_gain_per_pc = self._buf_ones
+
+        effective_grid_influence_per_pc = self._effective_grid_influence_per_pc(
+            learning_active=learning_active
+        )
+
+        # --- Scale gate ---
+        scale_preference = self.compute_scale_preference(proximity)
+        scale_preference_per_pc = self.compute_scale_preference_per_pc(proximity)
+        self.last_scale_preference = scale_preference.detach()
+        self.last_scale_preference_per_pc = scale_preference_per_pc.detach()
+        self.last_proximity = float(proximity)
+        effective_scale_preference_per_pc = self._soften_scale_preference(
+            scale_preference_per_pc,
+            learning_active=learning_active,
+        )
+        self.last_learning_adaptation_mode = "gaussian_post_competition_expression"
+        learning_cross_scale_coupling = self._compute_learning_cross_scale_coupling(
+            learning_active=learning_active
+        )
+        self.last_learning_cross_scale_coupling = float(learning_cross_scale_coupling)
+
+        expression_state = None
+
+        # --- Scale gating (recall only) ---
+        # During learning, Gaussian scale preference does not gate excitation,
+        # inhibition, or the IIR integrator.  Competition relies solely on
+        # post-competition expression.  g_scale is only meaningful in recall
+        # with gate_mode == "normal".
+        apply_scale_gate = (not learning_active) and (self.gate_mode == "normal")
+        if apply_scale_gate:
+            g_scale = effective_scale_preference_per_pc
+            afferent_excitation = g_scale * afferent_excitation
+
+        # --- BVC afferent inhibition ---
+        bvc_afferent_inhibition = self._buf_bvc_inh.zero_()
+        for scale_idx in range(self.num_scales):
+            pc_start = self.scale_boundaries[scale_idx]
+            pc_end = self.scale_boundaries[scale_idx + 1]
+            bvc_start = self.bvc_boundaries[scale_idx]
+            bvc_end = self.bvc_boundaries[scale_idx + 1]
+            bvc_sum_scale = (
+                torch.sum(self.bvc_activations[bvc_start:bvc_end])
+                * bvc_gain_per_pc[pc_start]
+            )
+            gamma_pb_scale = self.gamma_pb_per_pc[pc_start]
+            if apply_scale_gate:
+                bvc_afferent_inhibition[pc_start:pc_end] = (
+                    g_scale[pc_start:pc_end] * gamma_pb_scale * bvc_sum_scale
+                )
+            else:
+                bvc_afferent_inhibition[pc_start:pc_end] = (
+                    gamma_pb_scale * bvc_sum_scale
+                )
+
+        # --- Grid afferent inhibition ---
+        grid_afferent_inhibition = self._buf_grid_inh.zero_()
+        if self.grid_cell_activations is not None:
+            for scale_idx in range(self.num_scales):
+                pc_start = self.scale_boundaries[scale_idx]
+                pc_end = self.scale_boundaries[scale_idx + 1]
+                gc_start = self.grid_boundaries[scale_idx]
+                gc_end = self.grid_boundaries[scale_idx + 1]
+                gc_sum_scale = (
+                    torch.sum(self.grid_cell_activations[gc_start:gc_end])
+                    * grid_gain_per_pc[pc_start]
+                )
+                gamma_pg_scale = self.gamma_pg_per_pc[pc_start]
+                if apply_scale_gate:
+                    grid_afferent_inhibition[pc_start:pc_end] = (
+                        g_scale[pc_start:pc_end] * gamma_pg_scale * gc_sum_scale
+                    )
+                else:
+                    grid_afferent_inhibition[pc_start:pc_end] = (
+                        gamma_pg_scale * gc_sum_scale
+                    )
+
+        afferent_inhibition = (
+            (1.0 - effective_grid_influence_per_pc) * bvc_afferent_inhibition
+            + effective_grid_influence_per_pc * grid_afferent_inhibition
+        )
+
+        # --- Within-scale recurrent inhibition (uses current_activations, not self.*) ---
+        recurrent_inhibition = self._buf_rec_inh.zero_()
+        for scale_idx in range(self.num_scales):
+            pc_start = self.scale_boundaries[scale_idx]
+            pc_end = self.scale_boundaries[scale_idx + 1]
+            scale_sum = torch.sum(current_activations[pc_start:pc_end])
+            gamma_pp_scale = self.gamma_pp_per_pc[pc_start]
+            recurrent_inhibition[pc_start:pc_end] = gamma_pp_scale * scale_sum
+
+        # --- Cross-scale inhibition (active in both learning and recall; ramped during learning) ---
+        cross_scale_inhibition = self._buf_cross_inh.zero_()
+        if self.gate_mode != "no_gate_no_inhibition":
+            cross_scale_inhibition = self.compute_cross_scale_inhibition(
+                proximity,
+                afferent_excitation=afferent_excitation,
+                learning_active=learning_active,
+                from_activations=current_activations,
+            )
+            cross_scale_inhibition = learning_cross_scale_coupling * cross_scale_inhibition
+
+        self.last_post_competition_scale_evidence = None
+        self.last_post_competition_scale_theta = None
+
+        # --- IIR update (stateless: operates on activation_update_in) ---
+        activation_update = activation_update_in + self.tau_p * (
+            -activation_update_in
+            + afferent_excitation
+            - afferent_inhibition
+            - recurrent_inhibition
+            - cross_scale_inhibition
+        )
+        if apply_scale_gate:
+            activation_update = activation_update * g_scale
+
+        # --- Nonlinearity ---
+        new_activations = torch.tanh(torch.relu(activation_update))
+
+        # --- Post-competition expression ---
+        # Learning uses a Gaussian-derived scale-level eligibility mask only.
+        # Recall/preplay bypass Gaussian post-competition expression entirely.
+        # if learning_active:
+        #     expression_state = (
+        #         self._compute_learning_gaussian_post_competition_expression_state(
+        #             proximity=proximity,
+        #         )
+        #     )
+        #     activation_update = (
+        #         activation_update * expression_state["eligibility_per_pc"]
+        #     )
+        #     new_activations = (
+        #         new_activations * expression_state["eligibility_per_pc"]
+        #     )
+        # else:
+        #     expression_state = None
+        #     self._clear_gaussian_post_competition_diagnostics()
+        #     self._clear_learning_post_competition_diagnostics()
+        # --- Post-competition expression ---
+        # Disabled: no learning-time Gaussian eligibility masking.
+        expression_state = None
+        self._clear_gaussian_post_competition_diagnostics()
+        self._clear_learning_post_competition_diagnostics()
+
+        return new_activations, activation_update, expression_state
 
     def get_place_cell_activations(
         self,
@@ -519,6 +1653,11 @@ class UnifiedMultiScalePCN:
         Returns:
             place_cell_activations: Unified activation vector (num_pc_total,)
         """
+        if self.enable_stdp:
+            self.apply_connection_decay()
+        if self.enable_stdp or self.enable_correlation_weighting:
+            self._ensure_learning_caches()
+
         # Convert distances to torch tensor if needed
         if isinstance(distances, torch.Tensor):
             distances_torch = distances.clone().detach().to(dtype=self.dtype, device=self.device)
@@ -530,6 +1669,10 @@ class UnifiedMultiScalePCN:
                 hd_activations_torch = hd_activations.clone().detach().to(dtype=self.dtype, device=self.device)
             else:
                 hd_activations_torch = torch.as_tensor(hd_activations, dtype=self.dtype, device=self.device)
+        else:
+            hd_activations_torch = None
+
+        self.update_hd_eligibility_trace(hd_activations_torch)
 
         # Compute per-scale BVC activations and concatenate.
         bvc_blocks = []
@@ -555,132 +1698,228 @@ class UnifiedMultiScalePCN:
                 )
 
         # Afferent excitation terms
-        bvc_afferent_excitation = torch.matmul(self.w_in, self.bvc_activations)
-        grid_afferent_excitation = torch.zeros_like(bvc_afferent_excitation)
+        learning_active = self._is_learning_active()
+        if learning_active:
+            self.learning_step_count = int(getattr(self, "learning_step_count", 0)) + 1
+        raw_bvc_afferent_excitation = torch.matmul(self.w_in, self.bvc_activations)
+        raw_grid_afferent_excitation = torch.zeros_like(raw_bvc_afferent_excitation)
         if self.grid_cell_activations is not None and self.w_grid is not None:
-            grid_afferent_excitation = torch.matmul(self.w_grid, self.grid_cell_activations)
+            raw_grid_afferent_excitation = torch.matmul(self.w_grid, self.grid_cell_activations)
+
+        (
+            bvc_afferent_excitation,
+            grid_afferent_excitation,
+            bvc_gain_per_pc,
+            grid_gain_per_pc,
+        ) = self._balance_bvc_and_grid_drive(
+            raw_bvc_afferent_excitation,
+            raw_grid_afferent_excitation,
+        )
+
+        effective_grid_influence_per_pc = self._effective_grid_influence_per_pc(
+            learning_active=learning_active
+        )
+
+        # NEW: context-dependent modulation on BVC drive only
+        bvc_context_gain_per_pc = self._compute_bvc_context_gain_per_pc(
+            proximity=proximity,
+            learning_active=learning_active,
+        )
 
         # Mix BVC and Grid inputs per place cell according to scale-config grid influence
-        afferent_excitation = (
-            (1.0 - self.grid_influence_per_pc) * bvc_afferent_excitation
-            + self.grid_influence_per_pc * grid_afferent_excitation
+        mixed_bvc_afferent_excitation = (
+            (1.0 - effective_grid_influence_per_pc) * bvc_afferent_excitation * bvc_context_gain_per_pc
         )
-        self._update_grid_diagnostics(
-            bvc_afferent_excitation=bvc_afferent_excitation,
-            grid_afferent_excitation=grid_afferent_excitation,
+        mixed_grid_afferent_excitation = (
+            effective_grid_influence_per_pc * grid_afferent_excitation
         )
-        # Proximity-based scale gate (always computed; used differently per gate_mode).
-        scale_preference = self.compute_scale_preference(proximity)
-        scale_preference_per_pc = self.compute_scale_preference_per_pc(proximity)
-        self.last_scale_preference = scale_preference.detach()
-        self.last_scale_preference_per_pc = scale_preference_per_pc.detach()
-        self.last_proximity = float(proximity)
+        afferent_excitation = mixed_bvc_afferent_excitation + mixed_grid_afferent_excitation
 
-        if self.gate_mode == "normal":
-            # Standard behaviour: gate multiplies excitation and suppresses IIR bleed.
-            g_excitation = scale_preference_per_pc
-            g_iir        = scale_preference_per_pc
-        else:
-            # Both no-gate modes: remove the multiplicative gate on excitation/IIR.
-            g_excitation = self._buf_ones
-            g_iir        = self._buf_ones
+        # Optional debug cache
+        self.last_bvc_context_gain_per_pc = bvc_context_gain_per_pc.detach()
+        self.last_bvc_context_gain_per_scale = torch.stack([
+            torch.mean(
+                bvc_context_gain_per_pc[
+                    self.scale_boundaries[s]:self.scale_boundaries[s + 1]
+                ]
+            )
+            for s in range(self.num_scales)
+        ]).detach()
 
-        afferent_excitation = g_excitation * afferent_excitation
-
-        # Scale-local BVC afferent inhibition per PC block.
-        bvc_afferent_inhibition = self._buf_bvc_inh.zero_()
-        for scale_idx in range(self.num_scales):
-            pc_start = self.scale_boundaries[scale_idx]
-            pc_end = self.scale_boundaries[scale_idx + 1]
-            bvc_start = self.bvc_boundaries[scale_idx]
-            bvc_end = self.bvc_boundaries[scale_idx + 1]
-            bvc_sum_scale = torch.sum(self.bvc_activations[bvc_start:bvc_end])
-            gamma_pb_scale = self.gamma_pb_per_pc[pc_start]
-            bvc_afferent_inhibition[pc_start:pc_end] = g_excitation[pc_start:pc_end] * gamma_pb_scale * bvc_sum_scale
-        grid_afferent_inhibition = self._buf_grid_inh.zero_()
-        if self.grid_cell_activations is not None:
-            for scale_idx in range(self.num_scales):
-                pc_start = self.scale_boundaries[scale_idx]
-                pc_end = self.scale_boundaries[scale_idx + 1]
-                gc_start = self.grid_boundaries[scale_idx]
-                gc_end = self.grid_boundaries[scale_idx + 1]
-                gc_sum_scale = torch.sum(self.grid_cell_activations[gc_start:gc_end])
-                gamma_pg_scale = self.gamma_pg_per_pc[pc_start]
-                grid_afferent_inhibition[pc_start:pc_end] = g_excitation[pc_start:pc_end] * gamma_pg_scale * gc_sum_scale
-
-        afferent_inhibition = (
-            (1.0 - self.grid_influence_per_pc) * bvc_afferent_inhibition
-            + self.grid_influence_per_pc * grid_afferent_inhibition
+        # Delegate to the shared stateless competition stage.
+        new_activations, new_activation_update, expression_state = (
+            self._apply_competition_stage(
+                afferent_excitation=afferent_excitation,
+                proximity=proximity,
+                current_activations=self.place_cell_activations,
+                activation_update_in=self.activation_update,
+                learning_active=learning_active,
+                bvc_gain_per_pc=bvc_gain_per_pc,
+                grid_gain_per_pc=grid_gain_per_pc,
+            )
         )
-
-        # Scale-local recurrent inhibition (within-scale only).
-        recurrent_inhibition = self._buf_rec_inh.zero_()
-        for scale_idx in range(self.num_scales):
-            pc_start = self.scale_boundaries[scale_idx]
-            pc_end = self.scale_boundaries[scale_idx + 1]
-            scale_sum = torch.sum(self.place_cell_activations[pc_start:pc_end])
-            gamma_pp_scale = self.gamma_pp_per_pc[pc_start]
-            recurrent_inhibition[pc_start:pc_end] = gamma_pp_scale * scale_sum
-
-        # Cross-scale inhibition: Gaussian boundary-based.
-        # "no_gate_no_inhibition"   → zeroed out entirely.
-        # "no_gate_with_inhibition" → computed normally using real proximity gate.
-        # "normal"                  → computed normally.
-        if self.gate_mode == "no_gate_no_inhibition":
-            cross_scale_inhibition = self._buf_cross_inh.zero_()
-        else:
-            cross_scale_inhibition = self.compute_cross_scale_inhibition(proximity)
-
-        # Update activation equation.
-        self.activation_update += self.tau_p * (
-            -self.activation_update
-            + afferent_excitation
-            - afferent_inhibition
-            - recurrent_inhibition
-            - cross_scale_inhibition
+        self.place_cell_activations = new_activations
+        self.activation_update = new_activation_update
+        has_place_cell_activity = bool(torch.any(self.place_cell_activations != 0).item())
+        if has_place_cell_activity:
+            self.update_correlation_tracking(self.place_cell_activations)
+        stdp_learning_active = self._is_stdp_learning_active(
+            learning_active=learning_active
         )
-
-        # Suppress residual IIR bleed (g_iir = ones when gate disabled).
-        self.activation_update = self.activation_update * g_iir
-
-        # Apply ReLU and tanh
-        self.place_cell_activations = torch.tanh(torch.relu(self.activation_update))
+        self.last_learning_stdp_active = bool(
+            self.enable_stdp and stdp_learning_active
+        )
 
         # STDP updates (unified across all scales)
         if (
             self.enable_stdp
-            and torch.any(self.place_cell_activations != 0)
+            and has_place_cell_activity
             and not collided
+            and stdp_learning_active
         ):
-            # No gate applied to STDP traces when gate is disabled.
-            gated_pc_activations = self.place_cell_activations * g_excitation
+            if self.place_cell_trace is None:
+                self.place_cell_trace = torch.zeros(
+                    self.num_pc_total, dtype=self.dtype, device=self.device
+                )
+            if self.hd_cell_trace is None:
+                self.hd_cell_trace = torch.zeros(
+                    (self.n_hd, 1, 1), dtype=self.dtype, device=self.device
+                )
+            gated_pc_activations = self.place_cell_activations
+            self.last_learning_stdp_gate_mean = float(
+                torch.mean(gated_pc_activations).item()
+            )
             # Update eligibility trace for place cells
             self.place_cell_trace += (self.tau / 3) * (
                 gated_pc_activations - self.place_cell_trace
             )
 
-            # Update eligibility trace for head direction cells
-            hd_activations_no_nan = torch.nan_to_num(hd_activations_torch)
-            hd_activations_no_nan = hd_activations_no_nan.unsqueeze(1).unsqueeze(2)
-            self.hd_cell_trace += (self.tau / 3) * (
-                hd_activations_no_nan - self.hd_cell_trace
+            # Update unified recurrent weights (cross-scale STDP)
+            # Match the non-unified learning dynamics more closely by using the
+            # HD eligibility trace rather than the instantaneous HD snapshot.
+            hd_contrib = self.hd_cell_trace
+            mode = str(getattr(self, "adjacency_learning_mode", "dense")).lower()
+            if mode not in {"dense", "topk"}:
+                mode = "dense"
+            floor = float(getattr(self, "adjacency_activity_floor", 0.0))
+
+            if bool(getattr(self, "enable_adaptive_stdp", False)):
+                self.strength_update_counter += 1
+                if (
+                    self.strength_update_counter
+                    % int(max(1, getattr(self, "strength_update_frequency", 10)))
+                    == 0
+                ):
+                    self.connection_strength_cache.copy_(
+                        self.compute_connection_strengths(self.w_rec_unified)
+                    )
+                lr_scale = self.get_adaptive_learning_rates(
+                    self.connection_strength_cache
+                ).view(self.n_hd, 1, 1)
+            else:
+                lr_scale = float(getattr(self, "eta_stdp", 0.3))
+
+            recurrent_visibility_mask = self._get_recurrent_visibility_mask()
+            recurrent_learning_mask = None
+            if learning_active:
+                if expression_state is not None:
+                    recurrent_learning_mask = expression_state["recurrent_mask"]
+                else:
+                    recurrent_learning_mask = self._get_learning_recurrent_update_mask(
+                        float(self.last_learning_cross_scale_coupling)
+                    )
+
+            active_mask = (
+                gated_pc_activations > floor
+                if floor > 0.0
+                else gated_pc_activations > 0
             )
 
-            # Update unified recurrent weights (cross-scale STDP)
-            hd_contrib = torch.nan_to_num(hd_activations_torch).unsqueeze(-1).unsqueeze(-1)
+            if mode == "topk":
+                active_indices = torch.nonzero(active_mask, as_tuple=False).flatten()
+                topk = getattr(self, "adjacency_topk", None)
+                if active_indices.numel() > 0 and topk is not None and int(topk) > 0:
+                    k = min(int(topk), int(active_indices.numel()))
+                    if k < int(active_indices.numel()):
+                        active_scores = gated_pc_activations[active_indices]
+                        keep_rel = torch.topk(active_scores, k=k).indices
+                        sel_indices = active_indices[keep_rel]
+                    else:
+                        sel_indices = active_indices
 
-            # Outer products: (num_pc_total x num_pc_total)
-            pc_act_mat = torch.ger(gated_pc_activations, self.place_cell_trace)
-            pc_trace_mat = torch.ger(self.place_cell_trace, gated_pc_activations)
+                    pc_act_sel = gated_pc_activations[sel_indices]
+                    pc_trace_sel = self.place_cell_trace[sel_indices]
+                    delta_small = torch.ger(pc_act_sel, pc_trace_sel) - torch.ger(
+                        pc_trace_sel, pc_act_sel
+                    )
+                    update_small = hd_contrib * delta_small.unsqueeze(0)
 
-            # STDP update for unified matrix
-            update_rec = hd_contrib * (pc_act_mat - pc_trace_mat)
+                    if self.enable_correlation_weighting:
+                        correlation_weights = self.get_correlation_weights()
+                        corr_small = correlation_weights.index_select(
+                            0, sel_indices
+                        ).index_select(1, sel_indices)
+                        update_small = update_small * corr_small.unsqueeze(0)
+                    if recurrent_learning_mask is not None:
+                        learn_small = recurrent_learning_mask.index_select(
+                            0, sel_indices
+                        ).index_select(1, sel_indices)
+                        update_small = update_small * learn_small.unsqueeze(0)
+                    if recurrent_visibility_mask is not None:
+                        vis_small = recurrent_visibility_mask.index_select(
+                            0, sel_indices
+                        ).index_select(1, sel_indices)
+                        update_small = update_small * vis_small.unsqueeze(0)
 
-            self.w_rec_unified += update_rec.type(self.dtype)
+                    scaled_small = (
+                        update_small * lr_scale
+                        if bool(getattr(self, "enable_adaptive_stdp", False))
+                        else float(getattr(self, "eta_stdp", 0.3)) * update_small
+                    )
+                    row_idx = sel_indices.unsqueeze(1).expand(-1, sel_indices.numel())
+                    col_idx = sel_indices.unsqueeze(0).expand(sel_indices.numel(), -1)
+                    self.w_rec_unified[:, row_idx, col_idx] += scaled_small.type(
+                        self.dtype
+                    )
+                    # Mark reinforced connections for decay protection
+                    if hasattr(self, "_decay_protection_counter"):
+                        self.mark_connections_reinforced(
+                            self.w_rec_unified[:, row_idx, col_idx]
+                        )
+                # If no active subset, skip recurrent update.
+            else:
+                pc_act_for_adj = gated_pc_activations
+                pc_trace_for_adj = self.place_cell_trace
+                if floor > 0.0:
+                    active_scale = active_mask.to(pc_act_for_adj.dtype)
+                    pc_act_for_adj = pc_act_for_adj * active_scale
+                    pc_trace_for_adj = pc_trace_for_adj * active_scale
+
+                pc_act_mat = torch.ger(pc_act_for_adj, pc_trace_for_adj)
+                pc_trace_mat = torch.ger(pc_trace_for_adj, pc_act_for_adj)
+                update_rec = hd_contrib * (pc_act_mat - pc_trace_mat)
+                update_rec = self.apply_correlation_weighting_to_stdp(update_rec)
+                if recurrent_learning_mask is not None:
+                    update_rec = update_rec * recurrent_learning_mask.unsqueeze(0)
+                if recurrent_visibility_mask is not None:
+                    update_rec = update_rec * recurrent_visibility_mask.unsqueeze(0)
+
+                scaled_update_rec = (
+                    update_rec * lr_scale
+                    if bool(getattr(self, "enable_adaptive_stdp", False))
+                    else float(getattr(self, "eta_stdp", 0.3)) * update_rec
+                )
+                self.w_rec_unified += scaled_update_rec.type(self.dtype)
+                self.mark_connections_reinforced(scaled_update_rec)
+
+            if recurrent_visibility_mask is not None:
+                self.w_rec_unified *= recurrent_visibility_mask.unsqueeze(0)
+        else:
+            self.last_learning_stdp_gate_mean = 0.0
 
         # Oja's rule for input weights
         if self.enable_ojas and torch.any(self.place_cell_activations != 0):
-            pc_activations_col = (self.place_cell_activations * g_excitation).unsqueeze(1)
+            pc_activations_col = self.place_cell_activations.unsqueeze(1)
             # BVC->PC Oja update (scale-local blocks only).
             alpha_pb_col = self.alpha_pb_per_pc.unsqueeze(1)
             weight_update_bvc = torch.zeros_like(self.w_in)
@@ -694,7 +1933,7 @@ class UnifiedMultiScalePCN:
                 bvc_row = self.bvc_activations[bvc_start:bvc_end].unsqueeze(0)
                 w_block = self.w_in[pc_start:pc_end, bvc_start:bvc_end]
                 alpha_block = alpha_pb_col[pc_start:pc_end]
-                grid_mix_bvc_block = (1.0 - self.grid_influence_per_pc[pc_start:pc_end]).unsqueeze(1)
+                grid_mix_bvc_block = (1.0 - effective_grid_influence_per_pc[pc_start:pc_end]).unsqueeze(1)
                 hebbian_bvc = torch.matmul(pc_col, bvc_row)
                 decay_bvc = (1.0 / torch.clamp(alpha_block, min=1e-6)) * (pc_col**2) * w_block
                 update_block = self.tau * (hebbian_bvc - decay_bvc) * grid_mix_bvc_block
@@ -720,7 +1959,7 @@ class UnifiedMultiScalePCN:
                     gc_row       = self.grid_cell_activations[gc_start:gc_end].unsqueeze(0)
                     w_block      = self.w_grid[pc_start:pc_end, gc_start:gc_end]
                     alpha_block  = alpha_pg_col[pc_start:pc_end]
-                    grid_mix_col = self.grid_influence_per_pc[pc_start:pc_end].unsqueeze(1)
+                    grid_mix_col = effective_grid_influence_per_pc[pc_start:pc_end].unsqueeze(1)
                     hebbian_gc   = torch.matmul(pc_col, gc_row)
                     decay_gc     = (1.0 / torch.clamp(alpha_block, min=1e-6)) * (pc_col**2) * w_block
                     weight_update_gc[pc_start:pc_end, gc_start:gc_end] = \
@@ -729,22 +1968,49 @@ class UnifiedMultiScalePCN:
                 self.w_grid.data *= self.w_grid_block_mask.float()  # belt-and-suspenders
                 self.w_grid.data  = torch.clamp(self.w_grid.data, min=0.0)
 
+        self._update_grid_diagnostics(
+            raw_bvc_afferent_excitation=raw_bvc_afferent_excitation,
+            raw_grid_afferent_excitation=raw_grid_afferent_excitation,
+            balanced_bvc_afferent_excitation=bvc_afferent_excitation,
+            balanced_grid_afferent_excitation=grid_afferent_excitation,
+            mixed_bvc_afferent_excitation=mixed_bvc_afferent_excitation,
+            mixed_grid_afferent_excitation=mixed_grid_afferent_excitation,
+            effective_grid_influence_per_pc=effective_grid_influence_per_pc,
+            learning_active=learning_active,
+        )
+
         return self.place_cell_activations
 
     def _update_grid_diagnostics(
         self,
-        bvc_afferent_excitation: torch.Tensor,
-        grid_afferent_excitation: torch.Tensor,
+        raw_bvc_afferent_excitation: torch.Tensor,
+        raw_grid_afferent_excitation: torch.Tensor,
+        balanced_bvc_afferent_excitation: torch.Tensor,
+        balanced_grid_afferent_excitation: torch.Tensor,
+        mixed_bvc_afferent_excitation: torch.Tensor,
+        mixed_grid_afferent_excitation: torch.Tensor,
+        effective_grid_influence_per_pc: torch.Tensor,
+        learning_active: bool,
     ) -> None:
         """Store lightweight diagnostics to verify GC contribution in unified mode."""
         self._diag_step_count += 1
         if self._diag_step_count % self._diag_interval != 0:
             return  # Skip to avoid per-step GPU→CPU sync
 
-        bvc_abs_mean = float(torch.mean(torch.abs(bvc_afferent_excitation)).item())
-        grid_abs_mean = float(torch.mean(torch.abs(grid_afferent_excitation)).item())
-        denom = bvc_abs_mean + grid_abs_mean + 1e-12
-        grid_share = float(grid_abs_mean / denom)
+        raw_bvc_abs_mean = float(torch.mean(torch.abs(raw_bvc_afferent_excitation)).item())
+        raw_grid_abs_mean = float(torch.mean(torch.abs(raw_grid_afferent_excitation)).item())
+        raw_denom = raw_bvc_abs_mean + raw_grid_abs_mean + 1e-12
+        raw_grid_share = float(raw_grid_abs_mean / raw_denom)
+
+        balanced_bvc_abs_mean = float(torch.mean(torch.abs(balanced_bvc_afferent_excitation)).item())
+        balanced_grid_abs_mean = float(torch.mean(torch.abs(balanced_grid_afferent_excitation)).item())
+        balanced_denom = balanced_bvc_abs_mean + balanced_grid_abs_mean + 1e-12
+        balanced_grid_share = float(balanced_grid_abs_mean / balanced_denom)
+
+        mixed_bvc_abs_mean = float(torch.mean(torch.abs(mixed_bvc_afferent_excitation)).item())
+        mixed_grid_abs_mean = float(torch.mean(torch.abs(mixed_grid_afferent_excitation)).item())
+        effective_denom = mixed_bvc_abs_mean + mixed_grid_abs_mean + 1e-12
+        effective_grid_share = float(mixed_grid_abs_mean / effective_denom)
 
         if self.grid_cell_activations is not None and self.grid_cell_activations.numel() > 0:
             gc_active_frac = float((self.grid_cell_activations > 1e-6).float().mean().item())
@@ -759,22 +2025,168 @@ class UnifiedMultiScalePCN:
         for scale_idx in range(self.num_scales):
             pc_start = self.scale_boundaries[scale_idx]
             pc_end = self.scale_boundaries[scale_idx + 1]
-            bvc_block = bvc_afferent_excitation[pc_start:pc_end]
-            grid_block = grid_afferent_excitation[pc_start:pc_end]
-            bvc_block_abs = float(torch.mean(torch.abs(bvc_block)).item())
-            grid_block_abs = float(torch.mean(torch.abs(grid_block)).item())
-            block_denom = bvc_block_abs + grid_block_abs + 1e-12
+            raw_bvc_block = raw_bvc_afferent_excitation[pc_start:pc_end]
+            raw_grid_block = raw_grid_afferent_excitation[pc_start:pc_end]
+            balanced_bvc_block = balanced_bvc_afferent_excitation[pc_start:pc_end]
+            balanced_grid_block = balanced_grid_afferent_excitation[pc_start:pc_end]
+            mixed_bvc_block = mixed_bvc_afferent_excitation[pc_start:pc_end]
+            mixed_grid_block = mixed_grid_afferent_excitation[pc_start:pc_end]
+            raw_bvc_block_abs = float(torch.mean(torch.abs(raw_bvc_block)).item())
+            raw_grid_block_abs = float(torch.mean(torch.abs(raw_grid_block)).item())
+            balanced_bvc_block_abs = float(torch.mean(torch.abs(balanced_bvc_block)).item())
+            balanced_grid_block_abs = float(torch.mean(torch.abs(balanced_grid_block)).item())
+            mixed_bvc_block_abs = float(torch.mean(torch.abs(mixed_bvc_block)).item())
+            mixed_grid_block_abs = float(torch.mean(torch.abs(mixed_grid_block)).item())
+            raw_block_denom = raw_bvc_block_abs + raw_grid_block_abs + 1e-12
+            balanced_block_denom = balanced_bvc_block_abs + balanced_grid_block_abs + 1e-12
+            effective_block_denom = mixed_bvc_block_abs + mixed_grid_block_abs + 1e-12
+            gains = (
+                self.last_grid_gain_per_scale[scale_idx]
+                if scale_idx < len(getattr(self, "last_grid_gain_per_scale", []))
+                else {"bvc_gain": 1.0, "grid_gain": 1.0}
+            )
             per_scale.append({
                 "scale_idx": int(scale_idx),
-                "bvc_abs_mean": bvc_block_abs,
-                "grid_abs_mean": grid_block_abs,
-                "grid_share": float(grid_block_abs / block_denom),
+                "raw_bvc_abs_mean": raw_bvc_block_abs,
+                "raw_grid_abs_mean": raw_grid_block_abs,
+                "raw_grid_share": float(raw_grid_block_abs / raw_block_denom),
+                "balanced_bvc_abs_mean": balanced_bvc_block_abs,
+                "balanced_grid_abs_mean": balanced_grid_block_abs,
+                "balanced_grid_share": float(balanced_grid_block_abs / balanced_block_denom),
+                "mixed_bvc_abs_mean": mixed_bvc_block_abs,
+                "mixed_grid_abs_mean": mixed_grid_block_abs,
+                "grid_share": float(mixed_grid_block_abs / effective_block_denom),
+                "bvc_gain": float(gains.get("bvc_gain", 1.0)),
+                "grid_gain": float(gains.get("grid_gain", 1.0)),
+                "effective_grid_influence": float(
+                    torch.mean(effective_grid_influence_per_pc[pc_start:pc_end]).item()
+                ),
             })
 
         self.last_grid_diagnostics = {
-            "bvc_abs_mean": bvc_abs_mean,
-            "grid_abs_mean": grid_abs_mean,
-            "grid_share": grid_share,
+            "raw_bvc_abs_mean": raw_bvc_abs_mean,
+            "raw_grid_abs_mean": raw_grid_abs_mean,
+            "raw_grid_share": raw_grid_share,
+            "balanced_bvc_abs_mean": balanced_bvc_abs_mean,
+            "balanced_grid_abs_mean": balanced_grid_abs_mean,
+            "balanced_grid_share": balanced_grid_share,
+            "bvc_abs_mean": mixed_bvc_abs_mean,
+            "grid_abs_mean": mixed_grid_abs_mean,
+            "grid_share": effective_grid_share,
+            "effective_grid_share": effective_grid_share,
+            "effective_grid_influence": float(
+                torch.mean(effective_grid_influence_per_pc).item()
+            ),
+            "learning_adaptation_mode": str(
+                getattr(
+                    self,
+                    "last_learning_adaptation_mode",
+                    "gaussian_post_competition_expression",
+                )
+            ),
+            "gaussian_post_competition_scale_preference": (
+                getattr(self, "last_gaussian_post_competition_scale_preference", None)
+                .detach()
+                .cpu()
+                .tolist()
+                if getattr(self, "last_gaussian_post_competition_scale_preference", None) is not None
+                else None
+            ),
+            "gaussian_post_competition_raw_gain": (
+                getattr(self, "last_gaussian_post_competition_raw_gain", None)
+                .detach()
+                .cpu()
+                .tolist()
+                if getattr(self, "last_gaussian_post_competition_raw_gain", None) is not None
+                else None
+            ),
+            "gaussian_post_competition_gain": (
+                getattr(self, "last_gaussian_post_competition_gain", None)
+                .detach()
+                .cpu()
+                .tolist()
+                if getattr(self, "last_gaussian_post_competition_gain", None) is not None
+                else None
+            ),
+            "gaussian_post_competition_pair_weights": (
+                getattr(self, "last_gaussian_post_competition_pair_weights", None)
+                .detach()
+                .cpu()
+                .tolist()
+                if getattr(self, "last_gaussian_post_competition_pair_weights", None) is not None
+                else None
+            ),
+            "learning_post_competition_alpha": (
+                float(getattr(self, "last_learning_post_competition_alpha", 0.0))
+                if getattr(self, "last_learning_post_competition_alpha", None) is not None
+                else None
+            ),
+            "learning_post_competition_mean_gain": (
+                (
+                    getattr(self, "last_learning_post_competition_mean_gain", None)
+                    .detach()
+                    .cpu()
+                    .tolist()
+                    if isinstance(
+                        getattr(self, "last_learning_post_competition_mean_gain", None),
+                        torch.Tensor,
+                    )
+                    else float(getattr(self, "last_learning_post_competition_mean_gain", 0.0))
+                )
+                if getattr(self, "last_learning_post_competition_mean_gain", None) is not None
+                else None
+            ),
+            "learning_post_competition_eligibility_scale": (
+                getattr(self, "last_learning_post_competition_eligibility_scale", None)
+                .detach()
+                .cpu()
+                .tolist()
+                if getattr(self, "last_learning_post_competition_eligibility_scale", None) is not None
+                else None
+            ),
+            "learning_post_competition_survivor_fraction": (
+                (
+                    getattr(self, "last_learning_post_competition_survivor_fraction", None)
+                    .detach()
+                    .cpu()
+                    .tolist()
+                    if isinstance(
+                        getattr(self, "last_learning_post_competition_survivor_fraction", None),
+                        torch.Tensor,
+                    )
+                    else float(
+                        getattr(self, "last_learning_post_competition_survivor_fraction", 0.0)
+                    )
+                )
+                if getattr(self, "last_learning_post_competition_survivor_fraction", None) is not None
+                else None
+            ),
+            "learning_post_competition_survivor_count": (
+                (
+                    getattr(self, "last_learning_post_competition_survivor_count", None)
+                    .detach()
+                    .cpu()
+                    .tolist()
+                    if isinstance(
+                        getattr(self, "last_learning_post_competition_survivor_count", None),
+                        torch.Tensor,
+                    )
+                    else int(getattr(self, "last_learning_post_competition_survivor_count", 0))
+                )
+                if getattr(self, "last_learning_post_competition_survivor_count", None) is not None
+                else None
+            ),
+            "learning_cross_scale_coupling": float(
+                getattr(self, "last_learning_cross_scale_coupling", 1.0)
+            ),
+            "learning_stdp_active": bool(
+                getattr(self, "last_learning_stdp_active", True)
+            ),
+            "learning_stdp_gate_mean": float(
+                getattr(self, "last_learning_stdp_gate_mean", 0.0)
+            ),
+            "learning_step_count": int(getattr(self, "learning_step_count", 0)),
+            "learning_active": bool(learning_active),
             "gc_active_frac": gc_active_frac,
             "gc_mean": gc_mean,
             "gc_max": gc_max,
@@ -795,92 +2207,619 @@ class UnifiedMultiScalePCN:
             activations_per_scale.append(self.place_cell_activations[start:end])
         return activations_per_scale
 
-    def preplay(self, direction: int, num_steps: int = 1) -> torch.Tensor:
+    def _get_preplay_scale_gate(self) -> Optional[torch.Tensor]:
         """
-        Simple unified preplay using cross-scale recurrent weights.
+        Return the gate used during unified preplay.
 
-        Simulates forward movement in a given direction using the unified
-        W_rec matrix (1750×1750). Cross-scale connections allow information
-        to flow between scales during preplay, providing richer predictions.
-
-        Args:
-            direction: Head direction index for selecting recurrent weights
-            num_steps: Number of steps to simulate forward
-
-        Returns:
-            Predicted unified place cell activations (num_pc_total,)
+        This mirrors the online activation path: downstream replay/preplay
+        should use the segmented post-competition expression gate rather than
+        the older raw scale-preference signal.
         """
-        # Clone current activations to avoid modifying the original
-        place_cell_activations = self.place_cell_activations.clone()
+        gate = self.get_segmented_expression_gate_per_pc()
+        if gate is None:
+            return None
+        gate = gate.to(device=self.device, dtype=self.dtype)
+        return torch.clamp(gate, min=0.0, max=1.0)
 
-        # Simulate forward for num_steps
-        for _ in range(num_steps):
-            previous_activations = place_cell_activations.clone()
+    def _get_recurrent_visibility_mask(self) -> Optional[torch.Tensor]:
+        """Return recurrent visibility mask on this module's device/dtype if set."""
+        mask = getattr(self, "recurrent_visibility_mask", None)
+        if mask is None:
+            return None
+        if mask.shape != (self.num_pc_total, self.num_pc_total):
+            return None
+        return mask.to(device=self.device, dtype=self.dtype)
 
-            # Use unified recurrent weights for this direction
-            # w_rec_unified[direction]: (num_pc_total, num_pc_total)
-            # Matrix multiply: (num_pc_total, num_pc_total) @ (num_pc_total,) -> (num_pc_total,)
-            updated = torch.matmul(
-                self.w_rec_unified[direction],
-                previous_activations
+    def _get_within_scale_block_mask(self) -> torch.Tensor:
+        """Return a cached block mask with ones only within the same scale."""
+        mask = getattr(self, "within_scale_block_mask", None)
+        if (
+            mask is None
+            or mask.shape != (self.num_pc_total, self.num_pc_total)
+        ):
+            mask = torch.zeros(
+                (self.num_pc_total, self.num_pc_total),
+                dtype=self.dtype,
+                device=self.device,
             )
+            for scale_idx in range(self.num_scales):
+                start = self.scale_boundaries[scale_idx]
+                end = self.scale_boundaries[scale_idx + 1]
+                mask[start:end, start:end] = 1.0
+            self.within_scale_block_mask = mask
+        return mask.to(device=self.device, dtype=self.dtype)
 
-            # Subtract previous activations (same as single-scale preplay)
-            updated = updated - previous_activations
-
-            # Apply ReLU then tanh
-            place_cell_activations = torch.tanh(torch.relu(updated))
-            if hasattr(self, "last_scale_preference") and self.last_scale_preference is not None:
-                place_cell_activations = place_cell_activations * self.expand_scale_values_to_pc(
-                    self.last_scale_preference
-                )
-
-        return place_cell_activations
-
-    def preplay_from_state_batched(
+    def _get_learning_recurrent_update_mask(
         self,
-        activations_batch: torch.Tensor,
-        directions_batch: torch.Tensor,
-        num_steps: int = 1
+        cross_scale_coupling: float,
     ) -> torch.Tensor:
         """
-        Batched preplay from arbitrary states (for stochastic sampling).
-
-        Performs preplay for multiple trajectories in parallel, where each
-        trajectory can have its own activation state and direction.
-
-        Args:
-            activations_batch: Initial activations (batch_size, num_pc_total)
-            directions_batch: Direction indices (batch_size,)
-            num_steps: Number of forward steps to simulate
-
-        Returns:
-            Updated activations after num_steps (batch_size, num_pc_total)
+        Return a recurrent update mask that is block-diagonal early in learning
+        and gradually admits cross-scale updates as coupling ramps up.
         """
-        batch_size = activations_batch.shape[0]
-        current_activations = activations_batch.clone()
+        if cross_scale_coupling >= 0.999999:
+            return torch.ones(
+                (self.num_pc_total, self.num_pc_total),
+                dtype=self.dtype,
+                device=self.device,
+            )
+        within = self._get_within_scale_block_mask()
+        return within + ((1.0 - within) * float(max(0.0, cross_scale_coupling)))
+
+    def _get_masked_recurrent_weights(self, direction: int) -> torch.Tensor:
+        """
+        Return the recurrent matrix for one head direction after applying the
+        current spatial visibility mask, when available.
+        """
+        weights = self.w_rec_unified[int(direction)]
+        mask = self._get_recurrent_visibility_mask()
+        if mask is not None:
+            weights = weights * mask
+        return weights
+
+    def apply_connection_decay(self):
+        """Apply activity-dependent recurrent decay.
+
+        Connections that were recently reinforced by STDP are protected
+        from decay (synaptic tagging).  Only stale connections — those
+        that have not received meaningful STDP reinforcement within the
+        protection window — are decayed.
+        """
+        if not bool(getattr(self, "enable_connection_decay", True)):
+            return
+
+        decay_rate = float(getattr(self, "connection_decay_rate", 1e-5))
+        if decay_rate <= 0.0:
+            return
+
+        # Lazy-init the reinforcement recency tracker.
+        # Counts timesteps since last significant STDP update per connection.
+        if not hasattr(self, "_decay_protection_counter"):
+            self._decay_protection_counter = torch.zeros_like(
+                self.w_rec_unified
+            )
+        # Increment age for all connections
+        self._decay_protection_counter += 1
+
+        # Only decay connections older than the protection window
+        protection_window = int(
+            getattr(self, "decay_protection_window", 500)
+        )
+        stale_mask = (self._decay_protection_counter > protection_window).float()
+        self.w_rec_unified *= (1.0 - decay_rate * stale_mask)
+
+    def mark_connections_reinforced(self, update: torch.Tensor):
+        """Reset the decay protection counter for connections that received
+        a meaningful STDP update this timestep."""
+        if not hasattr(self, "_decay_protection_counter"):
+            return
+        # Threshold: any connection whose update magnitude exceeds a
+        # small fraction of the current weight is considered reinforced.
+        reinforced = (torch.abs(update) > 1e-6)
+        self._decay_protection_counter[reinforced] = 0
+
+    def _compute_scale_mass_batched(self, activations_batch: torch.Tensor) -> torch.Tensor:
+        """Return per-scale activation mass for a batch of unified states."""
+        if activations_batch.dim() == 1:
+            activations_batch = activations_batch.unsqueeze(0)
+
+        masses = []
+        for scale_idx in range(self.num_scales):
+            start = self.scale_boundaries[scale_idx]
+            end = self.scale_boundaries[scale_idx + 1]
+            masses.append(torch.sum(torch.abs(activations_batch[:, start:end]), dim=1))
+
+        if not masses:
+            return torch.zeros(
+                (activations_batch.shape[0], 0),
+                dtype=activations_batch.dtype,
+                device=activations_batch.device,
+            )
+        return torch.stack(masses, dim=1)
+
+    def _get_last_segmented_expression_gain_scale(self) -> Optional[torch.Tensor]:
+        """
+        Return the current expressed scale mass from the live activation state.
+
+        This is a non-learning recall/preplay signal only. It does not use any
+        cached Gaussian learning telemetry.
+        """
+        activations = getattr(self, "place_cell_activations", None)
+        if activations is None or activations.numel() != self.num_pc_total:
+            return None
+        mass = self._compute_scale_mass_batched(
+            activations.to(device=self.device, dtype=self.dtype).unsqueeze(0)
+        ).squeeze(0)
+        if mass.numel() != self.num_scales:
+            return None
+        mass_sum = torch.sum(mass)
+        if float(mass_sum.item()) <= 1e-9:
+            return None
+        return mass / torch.clamp(mass_sum, min=1e-9)
+
+    def get_segmented_scale_prior_batched(
+        self,
+        activations_batch: torch.Tensor,
+        preference_mix: float = 0.5,
+    ) -> torch.Tensor:
+        """
+        Return normalized expressed scale mass for a batch of unified states.
+
+        `preference_mix` is retained only for API compatibility; non-learning
+        segmented priors no longer blend in any cached Gaussian state.
+        """
+        _ = preference_mix
+        if activations_batch.dim() == 1:
+            activations_batch = activations_batch.unsqueeze(0)
+
+        mass_prior = self._compute_scale_mass_batched(activations_batch)
+        if mass_prior.shape[1] == 0:
+            return mass_prior
+        return mass_prior / torch.clamp(
+            torch.sum(mass_prior, dim=1, keepdim=True), min=1e-9
+        )
+
+    def get_segmented_expression_gate_per_pc(
+        self,
+        activations: Optional[torch.Tensor] = None,
+        preference_mix: float = 0.5,
+    ) -> Optional[torch.Tensor]:
+        """
+        Return the per-PC segmented expression gate for replay/preplay.
+
+        If an activation vector is supplied, infer the scale gate from that
+        state's current expressed scale mass. Otherwise use the current live
+        activation state's expressed scale mass.
+        """
+        if activations is None:
+            scale_gate = self._get_last_segmented_expression_gain_scale()
+            if scale_gate is None:
+                return None
+        else:
+            act = activations.to(device=self.device, dtype=self.dtype)
+            if act.dim() != 1 or act.numel() != self.num_pc_total:
+                return None
+            scale_gate = self.get_segmented_scale_prior_batched(
+                act.unsqueeze(0),
+                preference_mix=preference_mix,
+            ).squeeze(0)
+
+        scale_gate = torch.clamp(scale_gate, min=0.0, max=1.0)
+        return self.expand_scale_values_to_pc(scale_gate)
+
+    def _compute_preplay_scale_prior_batched(
+        self,
+        activations_batch: torch.Tensor,
+        preference_mix: float = 0.5,
+    ) -> torch.Tensor:
+        """
+        Return the current activation-mass scale prior for preplay.
+        """
+        return self.get_segmented_scale_prior_batched(
+            activations_batch,
+            preference_mix=preference_mix,
+        )
+
+    def _get_scale_block_bounds(self, scale_idx: int) -> tuple[int, int]:
+        """Return [start, end) bounds for one scale block in the unified state."""
+        start = int(self.scale_boundaries[int(scale_idx)])
+        end = int(self.scale_boundaries[int(scale_idx) + 1])
+        return start, end
+
+    def _preplay_scale_block_from_state_batched(
+        self,
+        starting_activations: torch.Tensor,
+        directions: torch.Tensor,
+        scale_idx: int,
+        num_steps: int = 1,
+    ) -> torch.Tensor:
+        """
+        Simulate old-style preplay on one scale block only.
+
+        This is the clean non-unified analogue inside the unified model:
+        one scale proposes its own successor using only its within-scale
+        recurrent block, and the imagined state for that rollout keeps all
+        other scales silent.
+        """
+        if starting_activations.dim() == 1:
+            starting_activations = starting_activations.unsqueeze(0)
+
+        batch_size = int(starting_activations.shape[0])
+        start, end = self._get_scale_block_bounds(scale_idx)
+        current_block = starting_activations[:, start:end].clone()
 
         for _ in range(num_steps):
-            previous_activations = current_activations.clone()
-
-            # Vectorized: loop over unique directions (typically 8), not over batch items.
-            # For each direction d, gather all trajectories assigned to it and do a
-            # single (n_pc × n_pc) @ (n_pc × K) matmul instead of K separate mv calls.
-            updated_batch = torch.zeros_like(current_activations)
-            for d in torch.unique(directions_batch):
-                mask = directions_batch == d            # (K,) bool
-                # w_rec_unified[d]: (n_pc, n_pc),  prev[mask].T: (n_pc, K)
-                updated_batch[mask] = torch.matmul(
-                    self.w_rec_unified[d.item()], previous_activations[mask].T
+            previous_block = current_block.clone()
+            updated_block = torch.zeros_like(previous_block)
+            for d in torch.unique(directions):
+                mask = directions == d
+                recurrent = self._get_masked_recurrent_weights(int(d.item()))
+                recurrent_block = recurrent[start:end, start:end]
+                updated_block[mask] = torch.matmul(
+                    recurrent_block,
+                    previous_block[mask].T,
                 ).T
+            updated_block = updated_block - previous_block
+            current_block = torch.tanh(torch.relu(updated_block))
 
-            # Subtract previous activations
-            updated_batch = updated_batch - previous_activations
+        updated_state = torch.zeros_like(starting_activations)
+        updated_state[:, start:end] = current_block
+        return updated_state
 
-            # Apply ReLU then tanh
-            current_activations = torch.tanh(torch.relu(updated_batch))
+    def _preplay_reconstructed_step(
+        self,
+        x_imagined: torch.Tensor,
+        direction: int,
+        proximity: float,
+    ) -> torch.Tensor:
+        """
+        Single project → reconstruct preplay step.
 
-        return current_activations
+        Projects x_imagined through the full cross-scale recurrent weights for
+        the given head direction, then passes the proposal through a dedicated
+        lighter imagined-transition reconstruction stage. The reconstruction is
+        stateless: no self.place_cell_activations or self.activation_update is
+        read or written.
+
+        Args:
+            x_imagined: Current imagined unified activation state (num_pc_total,).
+            direction: Head-direction bin index (0..n_hd-1).
+            proximity: Distance to nearest boundary in metres (use last_proximity
+                from the most recent real inference step as a proxy).
+
+        Returns:
+            next_x: Reconstructed next imagined state (num_pc_total,).
+        """
+        # Project: full cross-scale recurrent matrix for this direction.
+        recurrent = self._get_masked_recurrent_weights(direction)
+        raw_projection = torch.matmul(recurrent, x_imagined)
+        proposal = torch.relu(raw_projection)
+
+        return self._preplay_reconstructed_competition_batched(
+            afferent_excitation_batch=proposal.unsqueeze(0),
+            proximity=proximity,
+            current_activations_batch=x_imagined.unsqueeze(0),
+        ).squeeze(0)
+
+    def _build_preplay_rollout_context(self, proximity: float) -> Dict[str, Any]:
+        """Precompute proximity-dependent tensors shared across one preplay call."""
+        scale_preference = self.compute_scale_preference(proximity)
+        scale_preference_per_pc = self.compute_scale_preference_per_pc(proximity)
+        effective_scale_preference_per_pc = self._soften_scale_preference(
+            scale_preference_per_pc,
+            learning_active=False,
+        )
+        effective_scale_preference = self._soften_scale_preference(
+            scale_preference,
+            learning_active=False,
+        )
+        return {
+            "proximity": float(proximity),
+            "apply_scale_gate": bool(self.gate_mode == "normal"),
+            "effective_scale_preference_per_pc": effective_scale_preference_per_pc,
+            "effective_scale_preference": effective_scale_preference,
+            "effective_grid_influence_per_pc": self._effective_grid_influence_per_pc(
+                learning_active=False
+            ),
+            "preplay_afferent_inhibition_scale": float(
+                max(0.0, getattr(self, "preplay_afferent_inhibition_scale", 0.0))
+            ),
+            "preplay_recurrent_inhibition_scale": float(
+                max(0.0, getattr(self, "preplay_recurrent_inhibition_scale", 0.20))
+            ),
+            "preplay_cross_scale_inhibition_scale": float(
+                max(0.0, getattr(self, "preplay_cross_scale_inhibition_scale", 1.0))
+            ),
+            "use_soft_overlap": bool(
+                self._use_soft_scale_overlap(learning_active=False)
+            ),
+            "soft_cross_inhibition_scale": float(
+                getattr(self, "soft_cross_inhibition_scale", 0.35)
+            ),
+            "soft_cross_inhibition_cap": float(
+                getattr(self, "soft_cross_inhibition_cap", 0.0)
+            ),
+        }
+
+    def _preplay_reconstructed_competition_batched(
+        self,
+        afferent_excitation_batch: torch.Tensor,
+        proximity: float,
+        current_activations_batch: torch.Tensor,
+        preplay_context: Optional[Dict[str, Any]] = None,
+    ) -> torch.Tensor:
+        """
+        Vectorized imagined-transition reconstruction stage for preplay states.
+
+        Recurrent proposals still pass through a competition-aware shaping
+        stage, but the preplay kernel is intentionally lighter than the online
+        sensory update: afferent inhibition is removed by default and recurrent
+        inhibition is reduced so imagined states do not collapse to zero.
+        """
+        if afferent_excitation_batch.dim() == 1:
+            afferent_excitation_batch = afferent_excitation_batch.unsqueeze(0)
+            current_activations_batch = current_activations_batch.unsqueeze(0)
+            squeeze_output = True
+        else:
+            squeeze_output = False
+
+        ctx = (
+            preplay_context
+            if preplay_context is not None
+            else self._build_preplay_rollout_context(proximity)
+        )
+        preplay_afferent_inhibition_scale = float(
+            ctx["preplay_afferent_inhibition_scale"]
+        )
+        preplay_recurrent_inhibition_scale = float(
+            ctx["preplay_recurrent_inhibition_scale"]
+        )
+        preplay_cross_scale_inhibition_scale = float(
+            ctx["preplay_cross_scale_inhibition_scale"]
+        )
+        effective_grid_influence_per_pc = ctx["effective_grid_influence_per_pc"]
+        effective_scale_preference_per_pc = ctx["effective_scale_preference_per_pc"]
+        effective_scale_preference = ctx["effective_scale_preference"]
+        apply_scale_gate = bool(ctx["apply_scale_gate"])
+
+        afferent_excitation = afferent_excitation_batch
+        if apply_scale_gate:
+            afferent_excitation = (
+                afferent_excitation
+                * effective_scale_preference_per_pc.unsqueeze(0)
+            )
+
+        if preplay_afferent_inhibition_scale > 0.0:
+            bvc_afferent_inhibition = torch.zeros(
+                self.num_pc_total,
+                dtype=self.dtype,
+                device=self.device,
+            )
+            for scale_idx in range(self.num_scales):
+                pc_start = self.scale_boundaries[scale_idx]
+                pc_end = self.scale_boundaries[scale_idx + 1]
+                bvc_start = self.bvc_boundaries[scale_idx]
+                bvc_end = self.bvc_boundaries[scale_idx + 1]
+                bvc_sum_scale = torch.sum(self.bvc_activations[bvc_start:bvc_end])
+                gamma_pb_scale = self.gamma_pb_per_pc[pc_start]
+                if apply_scale_gate:
+                    bvc_afferent_inhibition[pc_start:pc_end] = (
+                        effective_scale_preference_per_pc[pc_start:pc_end]
+                        * gamma_pb_scale
+                        * bvc_sum_scale
+                    )
+                else:
+                    bvc_afferent_inhibition[pc_start:pc_end] = (
+                        gamma_pb_scale * bvc_sum_scale
+                    )
+
+            grid_afferent_inhibition = torch.zeros(
+                self.num_pc_total,
+                dtype=self.dtype,
+                device=self.device,
+            )
+            if self.grid_cell_activations is not None:
+                for scale_idx in range(self.num_scales):
+                    pc_start = self.scale_boundaries[scale_idx]
+                    pc_end = self.scale_boundaries[scale_idx + 1]
+                    gc_start = self.grid_boundaries[scale_idx]
+                    gc_end = self.grid_boundaries[scale_idx + 1]
+                    gc_sum_scale = torch.sum(self.grid_cell_activations[gc_start:gc_end])
+                    gamma_pg_scale = self.gamma_pg_per_pc[pc_start]
+                    if apply_scale_gate:
+                        grid_afferent_inhibition[pc_start:pc_end] = (
+                            effective_scale_preference_per_pc[pc_start:pc_end]
+                            * gamma_pg_scale
+                            * gc_sum_scale
+                        )
+                    else:
+                        grid_afferent_inhibition[pc_start:pc_end] = (
+                            gamma_pg_scale * gc_sum_scale
+                        )
+
+            afferent_inhibition = (
+                preplay_afferent_inhibition_scale
+                * (
+                    (1.0 - effective_grid_influence_per_pc) * bvc_afferent_inhibition
+                    + effective_grid_influence_per_pc * grid_afferent_inhibition
+                )
+            ).unsqueeze(0)
+        else:
+            afferent_inhibition = torch.zeros_like(afferent_excitation)
+
+        recurrent_inhibition = torch.zeros_like(current_activations_batch)
+        scale_sums = []
+        for scale_idx in range(self.num_scales):
+            pc_start = self.scale_boundaries[scale_idx]
+            pc_end = self.scale_boundaries[scale_idx + 1]
+            scale_sum = torch.sum(
+                current_activations_batch[:, pc_start:pc_end],
+                dim=1,
+                keepdim=True,
+            )
+            scale_sums.append(scale_sum)
+            if preplay_recurrent_inhibition_scale > 0.0:
+                gamma_pp_scale = self.gamma_pp_per_pc[pc_start]
+                recurrent_inhibition[:, pc_start:pc_end] = (
+                    preplay_recurrent_inhibition_scale
+                    * gamma_pp_scale
+                    * scale_sum
+                )
+
+        cross_scale_inhibition = torch.zeros_like(current_activations_batch)
+        if (
+            preplay_cross_scale_inhibition_scale > 0.0
+            and self.gate_mode != "no_gate_no_inhibition"
+        ):
+            scale_sums_tensor = torch.cat(scale_sums, dim=1)
+            total_scale_sum = torch.sum(scale_sums_tensor, dim=1, keepdim=True)
+            for scale_idx in range(self.num_scales):
+                pc_start = self.scale_boundaries[scale_idx]
+                pc_end = self.scale_boundaries[scale_idx + 1]
+                mismatch = 1.0 - effective_scale_preference[scale_idx]
+                other_scales_activation = (
+                    total_scale_sum - scale_sums_tensor[:, scale_idx : scale_idx + 1]
+                )
+                scale_inhibition = (
+                    preplay_cross_scale_inhibition_scale
+                    * self.gamma_cross_per_scale[scale_idx]
+                    * mismatch
+                    * other_scales_activation
+                )
+                if bool(ctx["use_soft_overlap"]):
+                    scale_inhibition = (
+                        float(ctx["soft_cross_inhibition_scale"])
+                        * scale_inhibition
+                    )
+                    cap_ratio = float(ctx["soft_cross_inhibition_cap"])
+                    if cap_ratio > 0.0:
+                        cap = cap_ratio * torch.clamp(
+                            afferent_excitation[:, pc_start:pc_end],
+                            min=0.0,
+                        )
+                        cross_scale_inhibition[:, pc_start:pc_end] = torch.minimum(
+                            scale_inhibition,
+                            cap,
+                        )
+                    else:
+                        cross_scale_inhibition[:, pc_start:pc_end] = scale_inhibition
+                else:
+                    cross_scale_inhibition[:, pc_start:pc_end] = scale_inhibition
+
+        activation_update = self.tau_p * (
+            afferent_excitation
+            - afferent_inhibition
+            - recurrent_inhibition
+            - cross_scale_inhibition
+        )
+        if apply_scale_gate:
+            activation_update = (
+                activation_update
+                * effective_scale_preference_per_pc.unsqueeze(0)
+            )
+
+        new_activations = torch.tanh(torch.relu(activation_update))
+        if squeeze_output:
+            return new_activations.squeeze(0)
+        return new_activations
+
+    def _preplay_reconstructed_step_batched(
+        self,
+        x_imagined_batch: torch.Tensor,
+        directions: torch.Tensor,
+        proximity: float,
+        preplay_context: Optional[Dict[str, Any]] = None,
+    ) -> torch.Tensor:
+        """
+        Batched wrapper around _preplay_reconstructed_step.
+
+        Each sample is advanced with the same reconstructed imagined transition
+        used by the single-state helper so exploit/preplay rollouts are scored
+        under the shared competition-aware dynamics instead of raw recurrent
+        projection alone.
+        """
+        if x_imagined_batch.dim() == 1:
+            return self._preplay_reconstructed_step(
+                x_imagined=x_imagined_batch,
+                direction=int(directions.item()),
+                proximity=proximity,
+            )
+
+        proposal_batch = torch.zeros_like(x_imagined_batch)
+        for direction in range(int(self.n_hd)):
+            batch_indices = torch.nonzero(
+                directions == direction,
+                as_tuple=False,
+            ).squeeze(1)
+            if batch_indices.numel() == 0:
+                continue
+            recurrent = self._get_masked_recurrent_weights(direction)
+            raw_projection = torch.matmul(recurrent, x_imagined_batch[batch_indices].T).T
+            proposal_batch[batch_indices] = torch.relu(raw_projection)
+        return self._preplay_reconstructed_competition_batched(
+            afferent_excitation_batch=proposal_batch,
+            proximity=proximity,
+            current_activations_batch=x_imagined_batch,
+            preplay_context=preplay_context,
+        )
+
+    def _compute_scale_block_turn_probabilities_batched(
+        self,
+        activations_batch: torch.Tensor,
+        current_directions: torch.Tensor,
+        scale_idx: int,
+        temperature: float = 1.0,
+        unified_rcn=None,
+        reward_vector: Optional[torch.Tensor] = None,
+        gaussian_weights: Optional[torch.Tensor] = None,
+        preplay_context: Optional[Dict[str, Any]] = None,
+    ) -> torch.Tensor:
+        """
+        State-evaluation turn probabilities using reconstructed imagined steps.
+
+        For each candidate turn direction, projects the full unified activation
+        through the same reconstructed competition-aware transition used by the
+        sampled rollout path, then scores the predicted next state via the same
+        normalized reward contribution used by the rollout return accumulator.
+        Raw dot products are kept only as a compatibility fallback when no
+        reward model is provided.
+        """
+        if activations_batch.dim() == 1:
+            activations_batch = activations_batch.unsqueeze(0)
+
+        batch_size = int(activations_batch.shape[0])
+        proximity = float(getattr(self, "last_proximity", 5.0))
+        turn_options = torch.tensor([-1, 0, 1], dtype=torch.long, device=self.device)
+        next_dirs = (current_directions.unsqueeze(1) + turn_options.unsqueeze(0)) % self.n_hd
+        expanded_batch = activations_batch.unsqueeze(1).expand(
+            batch_size, 3, activations_batch.shape[1]
+        ).reshape(batch_size * 3, activations_batch.shape[1])
+        flat_dirs = next_dirs.reshape(-1)
+        x_next_all = self._preplay_reconstructed_step_batched(
+            x_imagined_batch=expanded_batch,
+            directions=flat_dirs,
+            proximity=proximity,
+            preplay_context=preplay_context,
+        )
+        if unified_rcn is not None:
+            turn_logits = unified_rcn.compute_reward_contribution_for_scale_batched(
+                x_next_all,
+                scale_idx=int(scale_idx),
+            ).view(batch_size, 3)
+        elif reward_vector is not None:
+            turn_logits = torch.matmul(x_next_all, reward_vector).view(batch_size, 3)
+        elif gaussian_weights is not None:
+            turn_logits = torch.matmul(x_next_all, gaussian_weights).view(batch_size, 3)
+        else:
+            turn_logits = torch.sum(x_next_all, dim=1).view(batch_size, 3)
+
+        safe_temp = float(max(1e-6, temperature))
+        turn_logits = turn_logits.to(
+            dtype=self.dtype,
+            device=self.device,
+        ) / safe_temp
+
+        return torch.softmax(turn_logits, dim=1)
 
     def unified_preplay_sampling(
         self,
@@ -889,187 +2828,231 @@ class UnifiedMultiScalePCN:
         num_steps: int = 3,
         discount_factor: float = 0.9,
         within_direction_beta: float = 2.0,
+        scale_selection_beta: float = 2.0,
+        ema_lambda: float = 0.25,
+        prev_scale_entropies: Optional[torch.Tensor] = None,
+        scale_reliability: Optional[torch.Tensor] = None,
+        entropy_exponent: float = 2.0,
+        reliability_exponent: float = 2.0,
+        variance_lambda: float = 1.0,
+        use_entropy_ema: bool = True,
+        enable_scale_arbitration: bool = True,
+        scale_prior_mix: float = 0.0,
         num_samples: int = 10,
         sampling_strategy: str = "uniform",
         sampling_temperature: float = 1.0,
+        sample_aggregation: str = "mean",
+        pc_centers: Optional[torch.Tensor] = None,
+        pc_center_mask: Optional[torch.Tensor] = None,
         debug: bool = False
     ) -> tuple:
         """
-        Unified stochastic trajectory sampling preplay.
+        Clean hierarchical preplay for the unified model.
 
-        Adapted from hierarchical_multiscale_preplay_sampling for unified architecture.
-        Samples K trajectories per initial direction instead of exhaustive branching.
-
-        Key differences from multi-scale version:
-        - No scale loop (single unified representation)
-        - No scale selection or entropy calculation
-        - Direct Boltzmann distribution over directions
-        - Cross-scale interactions handled automatically via W_rec_unified
-
-        Args:
-            unified_rcn: Unified reward cell network
-            n_hd: Number of head directions
-            num_steps: Number of preplay steps per trajectory
-            discount_factor: Temporal discount factor (gamma)
-            within_direction_beta: Inverse temperature for direction Boltzmann
-            num_samples: Number of trajectories to sample per initial direction
-            sampling_strategy: "uniform" (random turns) or "learned" (use W_rec probabilities)
-            sampling_temperature: Softmax temperature for learned strategy
-            debug: Whether to print debug information
-
-        Returns:
-            tuple: (final_direction_deg, expected_value, combined_vector,
-                    discounted_returns_per_dir, direction_variance, direction_probs)
+        Each scale still rolls out its own trajectories using only its own
+        recurrent block, but unified preplay no longer performs a second
+        entropy/reliability arbitration pass across scales. Cross-scale mixing
+        is driven only by the segmented scale prior, which already reflects the
+        current environmental regime.
         """
-        if debug:
-            print(f"[UNIFIED-SAMPLING] Preplay: {n_hd} dirs × {num_samples} samples × {num_steps} steps")
-            print(f"[UNIFIED-SAMPLING] Params: β={within_direction_beta} strategy={sampling_strategy}")
-            print(f"[UNIFIED-SAMPLING] OPTIMIZED: Batched processing with batch_size={n_hd * num_samples}")
-
-        # Build discount weights for all steps
-        discount_weights = discount_factor ** torch.arange(num_steps, dtype=self.dtype, device=self.device)
-
-        # Track sampling variance per direction
-        sampling_variances = torch.zeros(n_hd, dtype=self.dtype, device=self.device)
-
-        # ------------------------------------------------------------------
-        # STAGE 1: Sample trajectories for all directions (BATCHED)
-        # ------------------------------------------------------------------
-
-        batch_size = n_hd * num_samples
-
-        # Initialize all trajectories
-        # Shape: (batch_size, num_pc_total)
-        initial_activations = self.place_cell_activations.unsqueeze(0).expand(batch_size, -1).clone()
-
-        # Initial directions: [0, 0, ..., 0, 1, 1, ..., 1, ..., 7, 7, ..., 7]
-        # Shape: (batch_size,)
-        initial_directions = torch.arange(n_hd, device=self.device).repeat_interleave(num_samples)
-        current_directions = initial_directions.clone()
-
-        # Initialize return and vector accumulators
-        trajectory_returns = torch.zeros(batch_size, dtype=self.dtype, device=self.device)
-        trajectory_vectors = torch.zeros(batch_size, 2, dtype=self.dtype, device=self.device)
-
-        # Current activations for all trajectories
-        activations_batch = initial_activations.clone()
-
-        # Simulate num_steps forward for all trajectories in parallel
-        for step in range(num_steps):
-            # Sample direction for this step (if not first step)
-            if step > 0:
-                if sampling_strategy == "uniform":
-                    # Uniform random: left, straight, right with equal probability
-                    turn_options = torch.tensor([-1, 0, 1], dtype=torch.long, device=self.device)
-                    chosen_turns = turn_options[torch.randint(0, 3, (batch_size,), device=self.device)]
-                    current_directions = (current_directions + chosen_turns) % n_hd
-
-                elif sampling_strategy == "learned":
-                    # Use W_rec to inform turn probabilities
-                    # For now, fall back to uniform (can implement learned later)
-                    turn_options = torch.tensor([-1, 0, 1], dtype=torch.long, device=self.device)
-                    chosen_turns = turn_options[torch.randint(0, 3, (batch_size,), device=self.device)]
-                    current_directions = (current_directions + chosen_turns) % n_hd
-
-                else:
-                    raise ValueError(f"Unknown sampling_strategy: {sampling_strategy}")
-
-            # Preplay one step for all trajectories in parallel
-            activations_batch = self.preplay_from_state_batched(
-                activations_batch, current_directions, num_steps=1
+        sample_aggregation = str(sample_aggregation).strip().lower()
+        if sample_aggregation not in {"mean", "max"}:
+            raise ValueError(
+                f"Unknown sample_aggregation: {sample_aggregation}"
             )
 
-            # Evaluate reward for all trajectories in parallel
-            step_rewards = unified_rcn.compute_reward_activations_batched(activations_batch)  # (batch_size,)
-            step_rewards = torch.nan_to_num(step_rewards)
+        eps = 1e-9
+        discount_weights = discount_factor ** torch.arange(
+            num_steps, dtype=self.dtype, device=self.device
+        )
+        scale_macro_returns = torch.zeros(
+            (self.num_scales, n_hd),
+            dtype=self.dtype,
+            device=self.device,
+        )
+        scale_macro_vectors = torch.zeros(
+            (self.num_scales, n_hd, 2),
+            dtype=self.dtype,
+            device=self.device,
+        )
+        scale_sampling_variances = torch.zeros(
+            (self.num_scales, n_hd),
+            dtype=self.dtype,
+            device=self.device,
+        )
 
-            # Accumulate discounted returns
-            step_weight = discount_weights[step]
-            trajectory_returns += step_weight * step_rewards
+        preplay_scale_gate = self.get_segmented_scale_prior_batched(
+            self.place_cell_activations.unsqueeze(0),
+            preference_mix=0.0,
+        ).squeeze(0)
+        scale_gate_weights = torch.clamp(preplay_scale_gate, min=0.0)
+        gate_sum = torch.sum(scale_gate_weights)
+        if (not torch.isfinite(gate_sum)) or float(gate_sum.item()) <= eps:
+            scale_gate_weights = torch.full(
+                (self.num_scales,),
+                1.0 / float(max(1, self.num_scales)),
+                dtype=self.dtype,
+                device=self.device,
+            )
+        else:
+            scale_gate_weights = scale_gate_weights / torch.clamp(gate_sum, min=eps)
 
-            # Accumulate direction vectors
-            step_angles = current_directions.float() * (2 * np.pi / n_hd)
-            step_vectors = torch.stack([torch.cos(step_angles), torch.sin(step_angles)], dim=1)
-            trajectory_vectors += step_vectors
+        active_scale_indices = list(range(self.num_scales))
+        rollout_proximity = float(getattr(self, "last_proximity", 5.0))
+        preplay_context = self._build_preplay_rollout_context(rollout_proximity)
+        turn_options = torch.tensor(
+            [-1, 0, 1],
+            dtype=torch.long,
+            device=self.device,
+        )
 
-        # Reshape results by (direction, sample)
-        # trajectory_returns: (batch_size,) -> (n_hd, num_samples)
-        returns_by_dir = trajectory_returns.view(n_hd, num_samples)
-        # trajectory_vectors: (batch_size, 2) -> (n_hd, num_samples, 2)
-        vectors_by_dir = trajectory_vectors.view(n_hd, num_samples, 2)
+        for scale_idx in active_scale_indices:
+            batch_size = int(n_hd * num_samples)
+            # Initialise every trajectory from the full unified state (all scales),
+            # not just the current scale's block.
+            initial_activations = self.place_cell_activations.unsqueeze(0).expand(
+                batch_size, -1
+            ).clone()
+            initial_directions = torch.arange(
+                n_hd,
+                device=self.device,
+            ).repeat_interleave(num_samples)
+            current_directions = initial_directions.clone()
+            trajectory_returns = torch.zeros(batch_size, dtype=self.dtype, device=self.device)
+            trajectory_vectors = torch.zeros(batch_size, 2, dtype=self.dtype, device=self.device)
+            activations_batch = initial_activations.clone()
 
-        # Compute mean and variance across samples for each direction
-        macro_returns = torch.mean(returns_by_dir, dim=1)  # (n_hd,)
-        macro_vectors = torch.mean(vectors_by_dir, dim=1)  # (n_hd, 2)
+            for step in range(num_steps):
+                if step > 0:
+                    if sampling_strategy == "uniform":
+                        chosen_turns = turn_options[
+                            torch.randint(0, 3, (batch_size,), device=self.device)
+                        ]
+                        current_directions = (current_directions + chosen_turns) % n_hd
+                    elif sampling_strategy == "learned":
+                        turn_probs_batch = self._compute_scale_block_turn_probabilities_batched(
+                            activations_batch=activations_batch,
+                            current_directions=current_directions,
+                            scale_idx=scale_idx,
+                            temperature=sampling_temperature,
+                            unified_rcn=unified_rcn,
+                            preplay_context=preplay_context,
+                        )
+                        turn_indices = torch.multinomial(
+                            turn_probs_batch,
+                            num_samples=1,
+                        ).squeeze(1)
+                        chosen_turns = turn_options[turn_indices]
+                        current_directions = (current_directions + chosen_turns) % n_hd
+                    else:
+                        raise ValueError(f"Unknown sampling_strategy: {sampling_strategy}")
 
-        # Variances: (n_hd,)
-        return_variances = torch.var(returns_by_dir, dim=1)
-        sampling_variances[:] = return_variances
+                activations_batch = self._preplay_reconstructed_step_batched(
+                    x_imagined_batch=activations_batch,
+                    directions=current_directions,
+                    proximity=rollout_proximity,
+                    preplay_context=preplay_context,
+                )
 
-        if debug:
-            print(f"[UNIFIED-SAMPLING] Return variances: {return_variances}")
+                step_scale_rewards = unified_rcn.compute_reward_contribution_for_scale_batched(
+                    activations_batch,
+                    scale_idx=int(scale_idx),
+                )
+                step_scale_rewards = torch.nan_to_num(step_scale_rewards)
+                trajectory_returns += discount_weights[step] * step_scale_rewards
 
-        # ------------------------------------------------------------------
-        # STAGE 2: Boltzmann Distribution Over Directions
-        # ------------------------------------------------------------------
+                step_angles = -current_directions.to(dtype=self.dtype) * (
+                    2.0 * np.pi / float(n_hd)
+                )
+                step_vectors = torch.stack(
+                    [torch.cos(step_angles), torch.sin(step_angles)],
+                    dim=1,
+                )
+                trajectory_vectors += step_vectors
 
-        # Compute Boltzmann distribution over directions
-        # P(d) = exp(beta * R_d) / Σ_d' exp(beta * R_d')
-        returns_normalized = macro_returns - torch.max(macro_returns)  # Numerical stability
-        boltzmann_weights = torch.exp(within_direction_beta * returns_normalized)
-        direction_probs = boltzmann_weights / torch.clamp(torch.sum(boltzmann_weights), min=1e-9)
+            returns_by_dir = trajectory_returns.view(n_hd, num_samples)
+            vectors_by_dir = trajectory_vectors.view(n_hd, num_samples, 2)
+            if sample_aggregation == "max":
+                best_sample_idx = torch.argmax(returns_by_dir, dim=1)
+                scale_macro_returns[scale_idx] = torch.max(returns_by_dir, dim=1).values
+                scale_macro_vectors[scale_idx] = vectors_by_dir[
+                    torch.arange(n_hd, device=self.device),
+                    best_sample_idx,
+                ]
+            else:
+                scale_macro_returns[scale_idx] = torch.mean(returns_by_dir, dim=1)
+                scale_macro_vectors[scale_idx] = torch.mean(vectors_by_dir, dim=1)
+            scale_sampling_variances[scale_idx] = torch.var(returns_by_dir, dim=1)
 
-        if debug:
-            print(f"[UNIFIED-SAMPLING] Direction probabilities: {direction_probs}")
-            print(f"[UNIFIED-SAMPLING] Macro returns: {macro_returns}")
 
-        # ------------------------------------------------------------------
-        # STAGE 3: Compute Combined Vector and Expected Value
-        # ------------------------------------------------------------------
+        scale_direction_probs = []
 
-        # Form combined movement vector: weighted sum of direction vectors
-        combined_vector = torch.sum(direction_probs.unsqueeze(1) * macro_vectors, dim=0)
+        for scale_idx in range(self.num_scales):
+            scale_returns = scale_macro_returns[scale_idx]
+            normalized_returns = scale_returns - torch.max(scale_returns)
+            boltzmann_weights = torch.exp(within_direction_beta * normalized_returns)
+            direction_probs_scale = boltzmann_weights / torch.clamp(
+                torch.sum(boltzmann_weights),
+                min=eps,
+            )
+            scale_direction_probs.append(direction_probs_scale)
+        scale_weights = scale_gate_weights
+        scale_entropies_smoothed = torch.zeros(
+            self.num_scales,
+            dtype=self.dtype,
+            device=self.device,
+        )
 
-        # Compute expected value: weighted sum of discounted returns
+        direction_prob_matrix = torch.stack(scale_direction_probs, dim=0)
+        joint_prob_matrix = scale_weights.unsqueeze(1) * direction_prob_matrix
+        direction_probs = torch.sum(joint_prob_matrix, dim=0)
+        direction_denoms = torch.clamp(direction_probs, min=eps)
+
+        macro_returns = torch.sum(joint_prob_matrix * scale_macro_returns, dim=0) / direction_denoms
+        macro_vectors = torch.sum(
+            joint_prob_matrix.unsqueeze(2) * scale_macro_vectors,
+            dim=0,
+        ) / direction_denoms.unsqueeze(1)
+        sampling_variances = torch.sum(
+            joint_prob_matrix * scale_sampling_variances,
+            dim=0,
+        ) / direction_denoms
+
+        joint_direction_scores = direction_probs * macro_returns
+        best_dir_idx = torch.argmax(joint_direction_scores)
         expected_value = torch.sum(direction_probs * macro_returns)
+        combined_vector = torch.sum(
+            direction_probs.unsqueeze(1) * macro_vectors,
+            dim=0,
+        )
 
-        # Robust fallback: if combined vector magnitude is near zero, use max-return direction
-        combined_magnitude = torch.norm(combined_vector)
-        epsilon = 1e-6
-        if combined_magnitude < epsilon:
-            max_idx = torch.argmax(macro_returns)
-            combined_vector = macro_vectors[max_idx]
-            expected_value = macro_returns[max_idx]
-            if debug:
-                print(f"[UNIFIED-SAMPLING] Fallback: vector near zero, using max-return direction")
+        if torch.norm(combined_vector) < 1e-6:
+            best_angle = -best_dir_idx.to(dtype=self.dtype) * (
+                2.0 * np.pi / float(n_hd)
+            )
+            combined_vector = torch.stack(
+                [torch.cos(best_angle), torch.sin(best_angle)]
+            )
 
-        # Compute final direction angle from combined vector
         final_direction_rad = torch.atan2(combined_vector[1], combined_vector[0])
-
-        # Convert to degrees [0, 360)
         final_direction_deg_tensor = final_direction_rad * (180.0 / np.pi)
         final_direction_deg_tensor = torch.where(
             final_direction_deg_tensor < 0,
             final_direction_deg_tensor + 360.0,
-            final_direction_deg_tensor
+            final_direction_deg_tensor,
         )
-
-        if debug:
-            print(f"[UNIFIED-SAMPLING] Final direction: {final_direction_deg_tensor.item():.1f}°")
-            print(f"[UNIFIED-SAMPLING] Expected value: {expected_value.item():.3f}")
-            avg_variance = torch.mean(sampling_variances).item()
-            max_variance = torch.max(sampling_variances).item()
-            print(f"[UNIFIED-SAMPLING] Variance: mean={avg_variance:.4f} max={max_variance:.4f}")
-
-            if max_variance > 0.1:
-                print(f"[UNIFIED-SAMPLING] WARNING: High sampling variance (max={max_variance:.4f})")
-                print(f"  Suggested: Increase num_samples (current K={num_samples})")
+        self.last_preplay_commit_dir = int(best_dir_idx.item())
+        self.last_preplay_action_deg = float(final_direction_deg_tensor.item())
+        self.last_preplay_expected_value = float(expected_value.item())
 
         return (
             final_direction_deg_tensor,
             expected_value,
             combined_vector,
             macro_returns,
+            macro_vectors,
             sampling_variances,
-            direction_probs
+            direction_probs,
+            scale_weights,
+            scale_entropies_smoothed,
         )

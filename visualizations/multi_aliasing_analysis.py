@@ -6,7 +6,6 @@ import os
 import sys
 from pathlib import Path
 import matplotlib.gridspec as gridspec
-from typing import Dict, List, Tuple, Optional
 
 # Get the project root directory
 project_root = Path(__file__).resolve().parent.parent  # Adjust if needed

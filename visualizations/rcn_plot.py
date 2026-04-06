@@ -3,7 +3,6 @@ import matplotlib.pyplot as plt
 import torch
 import numpy as np
 from matplotlib import cm, rcParams
-from typing import List, Optional
 
 # Import utility functions from vis_utils.py
 from vis_utils import load_hmaps, convert_xzy_hmaps, load_layer_pkl
@@ -40,9 +39,11 @@ def plot_rcn_activation(
             f"but hmap_pcn has {hmap_pcn_float32.shape[0]}."
         )
 
-    # Compute reward function using dot product
-    sum_activations = torch.sum(hmap_pcn_float32, dim=0)
-    safe_denom = torch.where(sum_activations > 0, sum_activations, torch.ones_like(sum_activations))
+    mode = str(getattr(rcn, "reward_normalization_mode", "input_l1")).strip().lower()
+    if mode in {"input_l1", "input", "l1", "v11"}:
+        safe_denom = torch.sum(torch.abs(hmap_pcn_float32), dim=0).clamp(min=1e-4)
+    else:
+        safe_denom = torch.sum(torch.abs(w_in_float32), dim=1, keepdim=True).clamp(min=1e-12)
     reward_function = torch.tensordot(w_in_float32, hmap_pcn_float32, dims=1) / safe_denom
     reward_function = torch.squeeze(reward_function)
 

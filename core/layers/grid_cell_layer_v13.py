@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+from collections import OrderedDict
 from typing import Optional, Tuple
 
 try:
@@ -28,7 +29,7 @@ class GridCellLayer:
         cells_per_module: int,
         spread_range: Tuple[float, float] = (1.2, 1.2),
         scale_multiplier: float = 1.0,
-        module_scale_ratio: float = 1.6,
+        module_scale_ratio: float = 1.0,
         translation_scale: float = 1.0,
         threshold: float = 0.7,
         threshold_type: str = "soft",
@@ -37,6 +38,8 @@ class GridCellLayer:
         mask_resolution: int = 128,
         wall_split_thresh: float = 0.2,
         smooth_sigma: float = 1.5,
+        activation_cache_size: int = 0,
+        activation_cache_quantization: Optional[float] = None,
         device: str = "cpu",
         dtype: torch.dtype = torch.float32,
     ):
@@ -57,11 +60,19 @@ class GridCellLayer:
         self.normalization = normalization
         self.wall_split_thresh = float(wall_split_thresh)
         self.smooth_sigma = float(smooth_sigma)
+        self.activation_cache_size = int(max(0, activation_cache_size))
+        self.activation_cache_quantization = (
+            float(activation_cache_quantization)
+            if activation_cache_quantization is not None
+            else None
+        )
+        self._activation_cache = OrderedDict()
 
         if self.normalization == "per-cell":
             self.cell_min = torch.ones(self.total_grid_cells, dtype=self.dtype, device=self.device) * -1.0
             self.cell_max = torch.ones(self.total_grid_cells, dtype=self.dtype, device=self.device) * 1.0
-            self.min_max_updated = False
+            # Match old non-unified behavior: use fixed theoretical bounds [-1, 1].
+            self.min_max_updated = True
 
         # Module params
         torch.manual_seed(42)
@@ -116,6 +127,46 @@ class GridCellLayer:
         self.world_obstacles = (self.world["obstacles"] if self.world else [])
         self.mask_resolution = int(mask_resolution)
         self._build_advanced_mask()
+
+    def _cache_key(self, x: float, y: float):
+        if self.activation_cache_quantization is None:
+            return (x, y)
+        q = self.activation_cache_quantization
+        return (round(x / q), round(y / q))
+
+    def _cache_get_raw_activations(self, x: float, y: float) -> Optional[torch.Tensor]:
+        if self.activation_cache_size <= 0:
+            return None
+        key = self._cache_key(x, y)
+        cached = self._activation_cache.get(key)
+        if cached is None:
+            return None
+        self._activation_cache.move_to_end(key)
+        return cached
+
+    def _cache_put_raw_activations(self, x: float, y: float, raw_acts: torch.Tensor) -> None:
+        if self.activation_cache_size <= 0:
+            return
+        key = self._cache_key(x, y)
+        self._activation_cache[key] = raw_acts.detach().clone()
+        self._activation_cache.move_to_end(key)
+        while len(self._activation_cache) > self.activation_cache_size:
+            self._activation_cache.popitem(last=False)
+
+    def _compute_raw_activations(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        dx = x - self.x_trans_params
+        dy = y - self.y_trans_params
+        rx = self.cos_theta * dx + self.sin_theta * dy
+        ry = -self.sin_theta * dx + self.cos_theta * dy
+
+        freq = (2.0 * np.pi) / self.size_params
+        z1 = torch.cos(freq * rx)
+        z2 = torch.cos(freq * (rx / 2.0 + (np.sqrt(3.0) / 2.0) * ry))
+        z3 = torch.cos(freq * (rx / 2.0 - (np.sqrt(3.0) / 2.0) * ry))
+        z = (z1 + z2 + z3) / 3.0
+
+        spread = self.spread_params
+        return torch.sign(z) * torch.pow(torch.abs(z), 1.0 / spread)
 
     def _build_obstacle_mask(self) -> np.ndarray:
         """Build obstacle-only mask (free space = 1, obstacles = 0)."""
@@ -487,37 +538,33 @@ class GridCellLayer:
         thr_type = self.threshold_type if threshold_type is None else threshold_type
         norm = self.normalization if normalization is None else normalization
 
-        if not isinstance(position, torch.Tensor):
-            position = torch.tensor(position, dtype=self.dtype)
-        position = position.to(self.device)
+        position = torch.as_tensor(position, dtype=self.dtype, device=self.device)
         if position.dim() > 1:
             position = position.squeeze()
         x, y = position[0], position[1]
+        x_float = float(x.item())
+        y_float = float(y.item())
 
-        # Compute activations
-        dx = x - self.x_trans_params
-        dy = y - self.y_trans_params
-        rx = self.cos_theta * dx + self.sin_theta * dy
-        ry = -self.sin_theta * dx + self.cos_theta * dy
-
-        freq = (2.0 * np.pi) / self.size_params
-        z1 = torch.cos(freq * rx)
-        z2 = torch.cos(freq * (rx / 2.0 + (np.sqrt(3.0) / 2.0) * ry))
-        z3 = torch.cos(freq * (rx / 2.0 - (np.sqrt(3.0) / 2.0) * ry))
-        z = (z1 + z2 + z3) / 3.0
-
-        spread = self.spread_params
-        acts = torch.sign(z) * torch.pow(torch.abs(z), 1.0 / spread)
+        cached_raw = self._cache_get_raw_activations(x_float, y_float)
+        if cached_raw is None:
+            raw_acts = self._compute_raw_activations(x, y)
+            self._cache_put_raw_activations(x_float, y_float, raw_acts)
+        else:
+            raw_acts = cached_raw
+        acts = raw_acts.clone()
 
         # Normalization
         if norm == "per-cell":
             if not getattr(self, "min_max_updated", True):
                 self.cell_min = torch.minimum(self.cell_min, acts)
                 self.cell_max = torch.maximum(self.cell_max, acts)
-            rng = self.cell_max - self.cell_min
-            rng = torch.where(rng > 1e-8, rng, torch.ones_like(rng))
-            acts = (acts - self.cell_min) / rng
-            acts = torch.clamp(acts, 0.0, 1.0)
+                rng = self.cell_max - self.cell_min
+                rng = torch.where(rng > 1e-8, rng, torch.ones_like(rng))
+                acts = (acts - self.cell_min) / rng
+                acts = torch.clamp(acts, 0.0, 1.0)
+            else:
+                # Fast path matching old v2 fixed theoretical bounds [-1, 1].
+                acts = torch.clamp((acts + 1.0) * 0.5, 0.0, 1.0)
 
         # Threshold
         if thr_type == "soft":
@@ -528,8 +575,8 @@ class GridCellLayer:
 
         # Apply mask
         if use_mask and hasattr(self, "_mask") and self._mask is not None:
-            xi = int(round((float(x.item()) + self.world_w / 2.0) * self._x_scale))
-            yi = int(round((float(y.item()) + self.world_h / 2.0) * self._y_scale))
+            xi = int(round((x_float + self.world_w / 2.0) * self._x_scale))
+            yi = int(round((y_float + self.world_h / 2.0) * self._y_scale))
             xi = max(0, min(self.mask_resolution - 1, xi))
             yi = max(0, min(self.mask_resolution - 1, yi))
             acts = acts * self._mask[yi, xi, :]

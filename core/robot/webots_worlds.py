@@ -201,30 +201,6 @@ def get_world_config(world_name: str) -> dict:
     return WORLD_CONFIGS[world_name].copy()
 
 
-def list_available_worlds() -> list:
-    """
-    Get list of all available world configurations.
-
-    Returns:
-        List of world names
-    """
-    return list(WORLD_CONFIGS.keys())
-
-
-def get_world_size(world_name: str) -> list:
-    """
-    Get size of a specific world.
-
-    Args:
-        world_name: Name of the world
-
-    Returns:
-        [width, height] in meters
-    """
-    config = get_world_config(world_name)
-    return config["size"]
-
-
 def get_world_obstacles(world_name: str) -> list:
     """
     Get obstacles for a specific world.
