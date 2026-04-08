@@ -13,7 +13,7 @@ sys.path.append(str(project_root))
 
 CONTROLLER_PATH_PREFIX = "webots/controllers/"
 CONTROLLER_NAME = "msg_controller"
-WORLD_NAME = "environment_6"
+WORLD_NAME = "environment_2"
 # "A_20x20_Maze_Multi_Goal"
 # "20x20_multi_goal"
 # Define output directories relative to project root

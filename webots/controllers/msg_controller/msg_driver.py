@@ -161,8 +161,10 @@ class Driver(Supervisor):
         phase1_revisit_cosine_threshold: float = 0.90,
         phase1_revisit_window: int = 200,
         defer_experience_build_until_phase2_end: bool = True,
-        goal_map_replay_timesteps: int = 12,
-        goal_map_paper_replay_tau: float = 8.0,
+        goal_map_replay_timesteps: int = 10,
+        goal_map_paper_replay_tau: float = 4.0,
+        goal_map_goal_replay_timesteps: Optional[int] = 8,
+        goal_map_goal_replay_tau: Optional[float] = 4.0,
         goal_map_goal_replay_event_count: int = 4,
         goal_map_checkpoint_replay_event_count: int = 3,
         goal_map_replay_event_merge_gap_steps: int = 3,
@@ -233,6 +235,7 @@ class Driver(Supervisor):
         pcn_soft_cross_inhibition_scale: float = 0.35,
         pcn_soft_cross_inhibition_scale_in_learning: float = 0.25,
         pcn_soft_cross_inhibition_cap: float = 0.75,
+        pcn_cross_scale_inhibition_base_enabled: bool = True,
         unified_preplay_scale_arbitration: bool = True,
         unified_preplay_scale_prior_mix: float = 0.0,
         unified_preplay_mode: str = "sampling",
@@ -380,6 +383,9 @@ class Driver(Supervisor):
             max(0.0, pcn_soft_cross_inhibition_scale_in_learning)
         )
         self.pcn_soft_cross_inhibition_cap = float(max(0.0, pcn_soft_cross_inhibition_cap))
+        self.pcn_cross_scale_inhibition_base_enabled = bool(
+            pcn_cross_scale_inhibition_base_enabled
+        )
         self.proximity_mode = str(proximity_mode).strip().lower()
         if self.proximity_mode not in {"min", "trimmed_mean", "opposite_pair_percentile", "local_minima", "raw_local_minima"}:
             print(f"[DRIVER] Unknown proximity_mode='{self.proximity_mode}', falling back to 'min'")
@@ -447,6 +453,16 @@ class Driver(Supervisor):
         )
         self.goal_map_replay_timesteps = int(max(1, goal_map_replay_timesteps))
         self.goal_map_paper_replay_tau = float(max(1e-6, goal_map_paper_replay_tau))
+        self.goal_map_goal_replay_timesteps = (
+            None
+            if goal_map_goal_replay_timesteps is None
+            else int(max(1, goal_map_goal_replay_timesteps))
+        )
+        self.goal_map_goal_replay_tau = (
+            None
+            if goal_map_goal_replay_tau is None
+            else float(max(1e-6, goal_map_goal_replay_tau))
+        )
         self.goal_map_goal_replay_event_count = int(
             max(1, goal_map_goal_replay_event_count)
         )
@@ -908,9 +924,41 @@ class Driver(Supervisor):
         }
         # Diagnostics for post-run analysis of scale gating and recruitment behavior.
         self.diag_scale_indices = [int(s["scale_index"]) for s in self.scales]
+        self.diag_sample_steps = []
         self.diag_prox_values = []
         self.diag_scale_pref_values = []
         self.diag_active_counts = []
+        self.diag_active_fractions = []
+        self.diag_activation_sums = []
+        self.diag_activation_means = []
+        self.diag_activation_peaks = []
+        self.diag_cross_scale_inhibition_means = []
+        self.diag_cross_scale_inhibition_peaks = []
+        self.diag_other_scale_activity_sums = []
+        self.diag_effective_cross_scale_factors = []
+        self.afferent_diag_attr_by_metric = {
+            "raw_bvc_abs_mean": "last_raw_bvc_abs_mean_per_scale",
+            "raw_grid_abs_mean": "last_raw_grid_abs_mean_per_scale",
+            "raw_grid_share": "last_raw_grid_share_per_scale",
+            "balanced_bvc_abs_mean": "last_balanced_bvc_abs_mean_per_scale",
+            "balanced_grid_abs_mean": "last_balanced_grid_abs_mean_per_scale",
+            "balanced_grid_share": "last_balanced_grid_share_per_scale",
+            "mixed_bvc_abs_mean": "last_mixed_bvc_abs_mean_per_scale",
+            "mixed_grid_abs_mean": "last_mixed_grid_abs_mean_per_scale",
+            "mixed_grid_share": "last_mixed_grid_share_per_scale",
+            "bvc_gain": "last_bvc_gain_value_per_scale",
+            "grid_gain": "last_grid_gain_value_per_scale",
+            "effective_grid_influence": "last_effective_grid_influence_mean_per_scale",
+            "bvc_context_gain": "last_bvc_context_gain_per_scale",
+            "bvc_afferent_source_sum": "last_bvc_afferent_source_sum_per_scale",
+            "grid_afferent_source_sum": "last_grid_afferent_source_sum_per_scale",
+            "bvc_afferent_inhibition_mean": "last_bvc_afferent_inhibition_mean_per_scale",
+            "grid_afferent_inhibition_mean": "last_grid_afferent_inhibition_mean_per_scale",
+            "afferent_inhibition_mean": "last_afferent_inhibition_mean_per_scale",
+        }
+        self.diag_afferent_metric_rows = {
+            metric_name: [] for metric_name in self.afferent_diag_attr_by_metric
+        }
         # Sample diagnostics on the same cadence as compact hmaps to avoid per-step
         # host transfers during long training runs.
         self.scale_diag_sample_stride = max(1, self.hmap_sample_stride)
@@ -1477,6 +1525,12 @@ class Driver(Supervisor):
                 self.pcn_soft_cross_inhibition_scale_in_learning
             )
             unified_pcn.soft_cross_inhibition_cap = float(self.pcn_soft_cross_inhibition_cap)
+            unified_pcn.cross_scale_inhibition_base_enabled = bool(
+                self.pcn_cross_scale_inhibition_base_enabled
+            )
+            unified_pcn.cross_scale_inhibition_lambda_base = float(
+                getattr(unified_pcn, "cross_scale_inhibition_lambda_base", 0.20)
+            )
             for legacy_attr in (
                 "learning_plasticity_bias_rule",
                 "learning_plasticity_bias_floor",
@@ -1650,6 +1704,7 @@ class Driver(Supervisor):
                 soft_cross_inhibition_scale=self.pcn_soft_cross_inhibition_scale,
                 soft_cross_inhibition_scale_in_learning=self.pcn_soft_cross_inhibition_scale_in_learning,
                 soft_cross_inhibition_cap=self.pcn_soft_cross_inhibition_cap,
+                cross_scale_inhibition_base_enabled=self.pcn_cross_scale_inhibition_base_enabled,
                 use_bvc_context_modulation=self.use_bvc_context_modulation,
                 bvc_context_gain_floor=self.bvc_context_gain_floor,
                 bvc_context_gain_strength=self.bvc_context_gain_strength,
@@ -2013,6 +2068,17 @@ class Driver(Supervisor):
                                 }
                         except Exception:
                             pass
+                # Restore replay-derived room masks for exploit-time
+                # room suppression (persisted on goal_rcn).
+                _rcn_room_masks = getattr(
+                    self.unified_rcn, "_replay_derived_room_masks", None
+                )
+                if _rcn_room_masks:
+                    self._replay_derived_room_masks = dict(_rcn_room_masks)
+                    print(
+                        f"[DRIVER] Restored replay-derived room masks: "
+                        f"{list(_rcn_room_masks.keys())}"
+                    )
                 if cached_rcn is None:
                     print(f"[DRIVER] Loaded goal-specific unified RCN: {unified_goal_path}")
                 return
@@ -4339,6 +4405,39 @@ class Driver(Supervisor):
                 )
                 self.prev_unified_scale_entropies = scale_entropies
                 self.last_unified_transition_planner_log = "clean_preplay=hierarchical_scale_blocks"
+                macro_returns = torch.nan_to_num(
+                    macro_returns,
+                    nan=0.0,
+                    posinf=0.0,
+                    neginf=0.0,
+                )
+                macro_vectors = torch.nan_to_num(
+                    macro_vectors,
+                    nan=0.0,
+                    posinf=0.0,
+                    neginf=0.0,
+                )
+                direction_probs = torch.nan_to_num(
+                    direction_probs,
+                    nan=0.0,
+                    posinf=0.0,
+                    neginf=0.0,
+                )
+                direction_probs = torch.clamp(direction_probs, min=0.0)
+                direction_prob_sum = torch.sum(direction_probs)
+                direction_prob_sum_valid = bool(torch.isfinite(direction_prob_sum).item())
+                if (not direction_prob_sum_valid) or float(direction_prob_sum.item()) <= 1e-9:
+                    direction_probs = torch.full(
+                        (self.n_hd,),
+                        1.0 / float(max(1, int(self.n_hd))),
+                        dtype=self.dtype,
+                        device=self.device,
+                    )
+                else:
+                    direction_probs = direction_probs / torch.clamp(
+                        direction_prob_sum,
+                        min=1e-9,
+                    )
 
                 safe_thresholds = torch.full(
                     (self.n_hd,),
@@ -4369,11 +4468,23 @@ class Driver(Supervisor):
                         ),
                     )
                 )
+                distances_per_hd = torch.nan_to_num(
+                    distances_per_hd,
+                    nan=0.0,
+                    posinf=0.0,
+                    neginf=0.0,
+                )
                 safe_thresholds_clamped = torch.clamp(safe_thresholds, min=1e-6)
                 safety_weights = torch.clamp(
                     distances_per_hd / safe_thresholds_clamped,
                     min=0.0,
                     max=1.0,
+                )
+                safety_weights = torch.nan_to_num(
+                    safety_weights,
+                    nan=0.0,
+                    posinf=1.0,
+                    neginf=0.0,
                 )
                 doorway_soft_mask = doorway_safe_bins & (
                     distances_per_hd > hard_collision_distance
@@ -4434,8 +4545,18 @@ class Driver(Supervisor):
                     f"{safety_mask_log},safe_bins={int(torch.sum(safe_mask).item())},"
                     f"hard_collision={hard_collision_distance:.2f}{fallback_log}"
                 )
-                safe_probs = direction_probs * safety_weights
-                safe_returns = macro_returns.clone()
+                safe_probs = torch.nan_to_num(
+                    direction_probs * safety_weights,
+                    nan=0.0,
+                    posinf=0.0,
+                    neginf=0.0,
+                )
+                safe_returns = torch.nan_to_num(
+                    macro_returns.clone(),
+                    nan=0.0,
+                    posinf=0.0,
+                    neginf=0.0,
+                )
                 self.last_unified_room_mask_log = room_mask_log
                 self.last_unified_safety_mask_log = safety_mask_log
 
@@ -4457,7 +4578,9 @@ class Driver(Supervisor):
                     )
 
                 prob_sum = torch.sum(safe_probs)
-                if prob_sum.item() <= 1e-9 and torch.any(safe_mask):
+                prob_sum_is_finite = bool(torch.isfinite(prob_sum).item())
+                prob_sum_value = float(prob_sum.item()) if prob_sum_is_finite else 0.0
+                if prob_sum_value <= 1e-9 and torch.any(safe_mask):
                     masked_returns = torch.where(
                         safe_mask,
                         macro_returns,
@@ -4466,7 +4589,9 @@ class Driver(Supervisor):
                     masked_returns = masked_returns - torch.max(masked_returns)
                     safe_probs = torch.softmax(masked_returns, dim=0)
                     prob_sum = torch.sum(safe_probs)
-                if prob_sum.item() <= 1e-9:
+                    prob_sum_is_finite = bool(torch.isfinite(prob_sum).item())
+                    prob_sum_value = float(prob_sum.item()) if prob_sum_is_finite else 0.0
+                if prob_sum_value <= 1e-9:
                     if debug_enabled:
                         print("[EXPLOIT-ACTION] safe_probs sum ≈ 0 → explore()")
                     self._reset_unified_heading_commit_state(
@@ -4476,13 +4601,28 @@ class Driver(Supervisor):
                     self.last_scale_weights = None
                     return
 
-                safe_probs = safe_probs / prob_sum
-                joint_direction_scores = safe_probs * safe_returns
+                safe_probs = torch.nan_to_num(
+                    safe_probs / torch.clamp(prob_sum, min=1e-9),
+                    nan=0.0,
+                    posinf=0.0,
+                    neginf=0.0,
+                )
+                joint_direction_scores = torch.nan_to_num(
+                    safe_probs * safe_returns,
+                    nan=0.0,
+                    posinf=0.0,
+                    neginf=0.0,
+                )
                 best_safe_idx = torch.argmax(joint_direction_scores)
                 expected_value = torch.sum(safe_probs * safe_returns)
-                combined_vector = torch.sum(
-                    safe_probs.unsqueeze(1) * macro_vectors,
-                    dim=0,
+                combined_vector = torch.nan_to_num(
+                    torch.sum(
+                        safe_probs.unsqueeze(1) * macro_vectors,
+                        dim=0,
+                    ),
+                    nan=0.0,
+                    posinf=0.0,
+                    neginf=0.0,
                 )
                 preplay_commit_dir = getattr(
                     self.unified_pcn,
@@ -4555,7 +4695,7 @@ class Driver(Supervisor):
                     combined_vector = torch.stack(
                         [torch.cos(action_angle), torch.sin(action_angle)]
                     )
-                elif torch.norm(combined_vector) < 1e-6:
+                elif float(torch.norm(combined_vector).item()) < 1e-6:
                     candidate_idx = int(best_safe_idx.item())
                     candidate_branch = "fallback_best_safe"
                     action_angle = safe_angles[best_safe_idx]
@@ -5370,45 +5510,178 @@ class Driver(Supervisor):
         return float(torch.min(self.boundaries).item())
 
     def _record_scale_diagnostics(self) -> None:
-        """Record per-step diagnostics for proximity, scale preference, and active-cell counts."""
+        """Record per-step diagnostics for scale behavior."""
         if self.step_count % self.scale_diag_sample_stride != 0:
             return
 
+        num_scales = len(self.diag_scale_indices)
+        self.diag_sample_steps.append(int(self.step_count))
         try:
             self.diag_prox_values.append(float(self.prox))
         except Exception:
             self.diag_prox_values.append(float("nan"))
 
-        # Active cell counts per scale from current activation buffers.
-        active_counts = []
-        for act in getattr(self, "pcn_activations_list", []):
-            if act is None:
-                active_counts.append(0)
-            else:
-                active_counts.append(int(torch.sum(act > 0).item()))
-        if active_counts:
-            self.diag_active_counts.append(active_counts)
-
-        # Scale preference is available in unified mode after activation update.
-        pref = None
+        pref_np = np.full(num_scales, np.nan, dtype=np.float32)
         if self.use_unified_multiscale and hasattr(self, "unified_pcn"):
             pref = getattr(self.unified_pcn, "last_scale_preference", None)
-        if pref is not None:
-            pref_np = pref.detach().float().cpu().numpy().astype(np.float32)
-            self.diag_scale_pref_values.append(pref_np)
+            if pref is not None:
+                pref_np = pref.detach().float().cpu().numpy().astype(np.float32)
+        self.diag_scale_pref_values.append(pref_np)
+
+        # Activation diagnostics per scale from current activation buffers.
+        active_counts = []
+        active_fractions = []
+        activation_sums = []
+        activation_means = []
+        activation_peaks = []
+        pcn_activations_list = list(getattr(self, "pcn_activations_list", []))
+        for scale_list_idx, scale_def in enumerate(self.scales):
+            act = pcn_activations_list[scale_list_idx] if scale_list_idx < len(pcn_activations_list) else None
+            num_pc = int(max(1, scale_def.get("num_pc", 0)))
+            if act is None:
+                active_counts.append(0)
+                active_fractions.append(0.0)
+                activation_sums.append(0.0)
+                activation_means.append(0.0)
+                activation_peaks.append(0.0)
+            else:
+                active_count = int(torch.sum(act > 0).item())
+                active_counts.append(active_count)
+                active_fractions.append(float(active_count / float(num_pc)))
+                activation_sums.append(float(torch.sum(act).item()))
+                activation_means.append(float(torch.mean(act).item()))
+                activation_peaks.append(
+                    float(torch.max(act).item()) if act.numel() > 0 else 0.0
+                )
+        self.diag_active_counts.append(active_counts)
+        self.diag_active_fractions.append(active_fractions)
+        self.diag_activation_sums.append(activation_sums)
+        self.diag_activation_means.append(activation_means)
+        self.diag_activation_peaks.append(activation_peaks)
+
+        cross_scale_inhibition_means = np.full(num_scales, np.nan, dtype=np.float32)
+        cross_scale_inhibition_peaks = np.full(num_scales, np.nan, dtype=np.float32)
+        other_scale_activity_sums = np.full(num_scales, np.nan, dtype=np.float32)
+        effective_cross_scale_factors = np.full(num_scales, np.nan, dtype=np.float32)
+        if self.use_unified_multiscale and hasattr(self, "unified_pcn"):
+            unified_pcn = self.unified_pcn
+            for attr_name, target in (
+                ("last_cross_scale_inhibition_mean_per_scale", cross_scale_inhibition_means),
+                ("last_cross_scale_inhibition_peak_per_scale", cross_scale_inhibition_peaks),
+                ("last_cross_scale_other_scale_activity_sum_per_scale", other_scale_activity_sums),
+                ("last_cross_scale_effective_factor_per_scale", effective_cross_scale_factors),
+            ):
+                attr_value = getattr(unified_pcn, attr_name, None)
+                if attr_value is None:
+                    continue
+                attr_np = attr_value.detach().float().cpu().numpy().astype(np.float32)
+                width = min(num_scales, attr_np.shape[0])
+                target[:width] = attr_np[:width]
+        self.diag_cross_scale_inhibition_means.append(cross_scale_inhibition_means)
+        self.diag_cross_scale_inhibition_peaks.append(cross_scale_inhibition_peaks)
+        self.diag_other_scale_activity_sums.append(other_scale_activity_sums)
+        self.diag_effective_cross_scale_factors.append(effective_cross_scale_factors)
+
+        afferent_metric_rows = {
+            metric_name: np.full(num_scales, np.nan, dtype=np.float32)
+            for metric_name in self.diag_afferent_metric_rows
+        }
+        if self.use_unified_multiscale and hasattr(self, "unified_pcn"):
+            unified_pcn = self.unified_pcn
+            for metric_name, attr_name in self.afferent_diag_attr_by_metric.items():
+                attr_value = getattr(unified_pcn, attr_name, None)
+                if attr_value is None:
+                    continue
+                attr_np = attr_value.detach().float().cpu().numpy().astype(np.float32)
+                width = min(num_scales, attr_np.shape[0])
+                afferent_metric_rows[metric_name][:width] = attr_np[:width]
+        for metric_name, row in afferent_metric_rows.items():
+            self.diag_afferent_metric_rows[metric_name].append(row)
 
     def _build_scale_diagnostics_payload(self) -> Dict[str, Any]:
         """Summarize collected diagnostics into a compact serializable payload."""
+        lambda_base = 0.20
+        if self.use_unified_multiscale and hasattr(self, "unified_pcn"):
+            lambda_base = float(
+                getattr(self.unified_pcn, "cross_scale_inhibition_lambda_base", 0.20)
+            )
         payload: Dict[str, Any] = {
+            "samples_recorded": int(len(self.diag_sample_steps)),
             "steps_recorded": int(len(self.diag_prox_values)),
             "scale_indices": list(self.diag_scale_indices),
             "proximity_mode": str(getattr(self, "proximity_mode", "")),
             "proximity_pair_percentile": float(getattr(self, "proximity_pair_percentile", 0.0)),
+            "pcn_cross_scale_inhibition_base_enabled": bool(
+                getattr(self, "pcn_cross_scale_inhibition_base_enabled", False)
+            ),
+            "cross_scale_inhibition_lambda_base": lambda_base,
             "proximity_stats": {},
             "proximity_histogram": {},
             "scale_preference_stats": {},
             "active_cell_stats": {},
+            "active_fraction_stats": {},
+            "activation_sum_stats": {},
+            "activation_mean_stats": {},
+            "activation_peak_stats": {},
+            "cross_scale_inhibition_mean_stats": {},
+            "cross_scale_inhibition_peak_stats": {},
+            "other_scale_activity_sum_stats": {},
+            "effective_cross_scale_factor_stats": {},
+            "sampled_history": {
+                "steps": [int(step) for step in self.diag_sample_steps],
+                "proximity": [float(v) for v in self.diag_prox_values],
+                "per_scale": {
+                    str(scale_idx): {} for scale_idx in self.diag_scale_indices
+                },
+            },
         }
+        for metric_name in self.diag_afferent_metric_rows:
+            payload[f"{metric_name}_stats"] = {}
+
+        def _summarize_per_scale_matrix(
+            rows,
+            target_key: str,
+            include_nonzero_step_ratio: bool = False,
+            include_median: bool = False,
+        ) -> None:
+            if len(rows) == 0:
+                return
+            arr = np.asarray(rows, dtype=np.float64)
+            if arr.ndim != 2 or arr.shape[1] == 0:
+                return
+            n_scales = min(arr.shape[1], len(self.diag_scale_indices))
+            for i in range(n_scales):
+                vals = arr[:, i]
+                vals = vals[np.isfinite(vals)]
+                if vals.size == 0:
+                    continue
+                stats = {
+                    "count": int(vals.size),
+                    "min": float(np.min(vals)),
+                    "max": float(np.max(vals)),
+                    "mean": float(np.mean(vals)),
+                    "std": float(np.std(vals)),
+                    "p10": float(np.percentile(vals, 10)),
+                    "p50": float(np.percentile(vals, 50)),
+                    "p90": float(np.percentile(vals, 90)),
+                }
+                if include_median:
+                    stats["median"] = float(np.median(vals))
+                if include_nonzero_step_ratio:
+                    stats["nonzero_step_ratio"] = float(np.mean(vals > 0))
+                payload[target_key][str(self.diag_scale_indices[i])] = stats
+
+        def _store_sampled_history(metric_name: str, rows) -> None:
+            if len(rows) == 0:
+                return
+            arr = np.asarray(rows, dtype=np.float64)
+            if arr.ndim != 2 or arr.shape[1] == 0:
+                return
+            n_scales = min(arr.shape[1], len(self.diag_scale_indices))
+            for i in range(n_scales):
+                payload["sampled_history"]["per_scale"][str(self.diag_scale_indices[i])][
+                    metric_name
+                ] = arr[:, i].tolist()
 
         prox = np.asarray(self.diag_prox_values, dtype=np.float64)
         prox = prox[np.isfinite(prox)]
@@ -5431,33 +5704,64 @@ class Driver(Supervisor):
                 "counts": hist_counts.tolist(),
             }
 
-        if len(self.diag_scale_pref_values) > 0:
-            pref_arr = np.asarray(self.diag_scale_pref_values, dtype=np.float64)
-            n_scales = pref_arr.shape[1]
-            for i in range(n_scales):
-                vals = pref_arr[:, i]
-                payload["scale_preference_stats"][str(self.diag_scale_indices[i])] = {
-                    "min": float(np.min(vals)),
-                    "max": float(np.max(vals)),
-                    "mean": float(np.mean(vals)),
-                    "std": float(np.std(vals)),
-                    "p10": float(np.percentile(vals, 10)),
-                    "p50": float(np.percentile(vals, 50)),
-                    "p90": float(np.percentile(vals, 90)),
-                }
+        _summarize_per_scale_matrix(self.diag_scale_pref_values, "scale_preference_stats")
+        _summarize_per_scale_matrix(
+            self.diag_active_counts,
+            "active_cell_stats",
+            include_nonzero_step_ratio=True,
+            include_median=True,
+        )
+        _summarize_per_scale_matrix(
+            self.diag_active_fractions,
+            "active_fraction_stats",
+            include_nonzero_step_ratio=True,
+        )
+        _summarize_per_scale_matrix(self.diag_activation_sums, "activation_sum_stats")
+        _summarize_per_scale_matrix(self.diag_activation_means, "activation_mean_stats")
+        _summarize_per_scale_matrix(self.diag_activation_peaks, "activation_peak_stats")
+        _summarize_per_scale_matrix(
+            self.diag_cross_scale_inhibition_means,
+            "cross_scale_inhibition_mean_stats",
+        )
+        _summarize_per_scale_matrix(
+            self.diag_cross_scale_inhibition_peaks,
+            "cross_scale_inhibition_peak_stats",
+        )
+        _summarize_per_scale_matrix(
+            self.diag_other_scale_activity_sums,
+            "other_scale_activity_sum_stats",
+        )
+        _summarize_per_scale_matrix(
+            self.diag_effective_cross_scale_factors,
+            "effective_cross_scale_factor_stats",
+        )
+        for metric_name, rows in self.diag_afferent_metric_rows.items():
+            _summarize_per_scale_matrix(rows, f"{metric_name}_stats")
 
-        if len(self.diag_active_counts) > 0:
-            act_arr = np.asarray(self.diag_active_counts, dtype=np.float64)
-            n_scales = act_arr.shape[1]
-            for i in range(n_scales):
-                vals = act_arr[:, i]
-                payload["active_cell_stats"][str(self.diag_scale_indices[i])] = {
-                    "min": float(np.min(vals)),
-                    "max": float(np.max(vals)),
-                    "mean": float(np.mean(vals)),
-                    "median": float(np.median(vals)),
-                    "nonzero_step_ratio": float(np.mean(vals > 0)),
-                }
+        _store_sampled_history("scale_preference", self.diag_scale_pref_values)
+        _store_sampled_history("active_count", self.diag_active_counts)
+        _store_sampled_history("active_fraction", self.diag_active_fractions)
+        _store_sampled_history("activation_sum", self.diag_activation_sums)
+        _store_sampled_history("activation_mean", self.diag_activation_means)
+        _store_sampled_history("activation_peak", self.diag_activation_peaks)
+        _store_sampled_history(
+            "cross_scale_inhibition_mean",
+            self.diag_cross_scale_inhibition_means,
+        )
+        _store_sampled_history(
+            "cross_scale_inhibition_peak",
+            self.diag_cross_scale_inhibition_peaks,
+        )
+        _store_sampled_history(
+            "other_scale_activity_sum",
+            self.diag_other_scale_activity_sums,
+        )
+        _store_sampled_history(
+            "effective_cross_scale_factor",
+            self.diag_effective_cross_scale_factors,
+        )
+        for metric_name, rows in self.diag_afferent_metric_rows.items():
+            _store_sampled_history(metric_name, rows)
 
         return payload
 
@@ -6369,7 +6673,60 @@ class Driver(Supervisor):
         for ck_idx, (cx, cy) in enumerate(self.detected_doorways):
             dist = math.hypot(curr_x - float(cx), curr_y - float(cy))
             if dist < proximity_radius:
-                self.checkpoint_proximity_pcs[ck_idx][active_mask] += activations[active_mask]
+                self.checkpoint_proximity_pcs[ck_idx] = torch.max(
+                    self.checkpoint_proximity_pcs[ck_idx], activations
+                )
+
+    def _build_checkpoint_boundary_masks(
+        self,
+        percentile: float = 80.0,
+        device=None,
+    ) -> Dict[int, torch.Tensor]:
+        """Build per-checkpoint boundary masks using scale-relative thresholds.
+
+        For each checkpoint and each scale, a cell is part of the boundary if
+        its max observed activation exceeds the ``percentile``-th percentile of
+        all nonzero max activations in that scale's population at that checkpoint.
+        This prevents large-scale cells (which fire more strongly on average)
+        from dominating the boundary while small-scale cells are excluded.
+
+        Returns:
+            Dict mapping checkpoint index → bool tensor (num_pc_total,).
+        """
+        proximity_pcs = getattr(self, "checkpoint_proximity_pcs", {})
+        if not proximity_pcs or not hasattr(self, "unified_pcn"):
+            return {}
+        scale_boundaries = list(self.unified_pcn.scale_boundaries)
+        target_device = device or self.device
+        boundary_masks: Dict[int, torch.Tensor] = {}
+
+        for cp_idx, max_act in proximity_pcs.items():
+            max_act = max_act.to(target_device)
+            mask = torch.zeros_like(max_act, dtype=torch.bool)
+
+            for s in range(len(scale_boundaries) - 1):
+                start = int(scale_boundaries[s])
+                end = int(scale_boundaries[s + 1])
+                scale_slice = max_act[start:end]
+                if scale_slice.numel() == 0:
+                    continue
+                # Only consider cells that had *some* activation (>0)
+                active = scale_slice[scale_slice > 0]
+                if active.numel() == 0:
+                    continue
+                threshold = float(
+                    torch.quantile(active, percentile / 100.0).item()
+                )
+                mask[start:end] = scale_slice >= threshold
+
+            boundary_masks[int(cp_idx)] = mask
+            count = int(torch.count_nonzero(mask).item())
+            print(
+                f"[BOUNDARY] cp{cp_idx}: {count} boundary cells "
+                f"(p{percentile:.0f} scale-relative)"
+            )
+
+        return boundary_masks
 
     def _checkpoint_support_side_from_point(
         self,
@@ -6588,13 +6945,32 @@ class Driver(Supervisor):
         for cp_idx, (cx, cy) in enumerate(checkpoint_positions):
             cr, cc = world_to_grid(float(cx), float(cy))
             blocked_cells = []
-            for dr in range(-doorway_block_radius, doorway_block_radius + 1):
-                for dc in range(-doorway_block_radius, doorway_block_radius + 1):
-                    nr, nc = cr + dr, cc + dc
-                    if 0 <= nr < resolution and 0 <= nc < resolution:
-                        if dr * dr + dc * dc <= doorway_block_radius * doorway_block_radius:
-                            occupancy[nr, nc] = False
-                            blocked_cells.append((nr, nc))
+            # Only block cells that are currently FREE.  Cells that are
+            # already walls stay as walls — this prevents the blocking
+            # circle from tunneling through a wall into an adjacent room
+            # (e.g. cp3's circle extending past wall4 into the top-left).
+            # We also flood-fill from the checkpoint center through free
+            # cells only, so the block stays within the doorway gap.
+            block_visited = set()
+            block_queue = deque([(cr, cc)])
+            while block_queue:
+                br, bc = block_queue.popleft()
+                if (br, bc) in block_visited:
+                    continue
+                dr, dc = br - cr, bc - cc
+                if dr * dr + dc * dc > doorway_block_radius * doorway_block_radius:
+                    continue
+                if not (0 <= br < resolution and 0 <= bc < resolution):
+                    continue
+                block_visited.add((br, bc))
+                if not occupancy[br, bc]:
+                    continue  # Hit a wall — don't cross it
+                occupancy[br, bc] = False
+                blocked_cells.append((br, bc))
+                for ddr, ddc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    nbr, nbc = br + ddr, bc + ddc
+                    if (nbr, nbc) not in block_visited:
+                        block_queue.append((nbr, nbc))
             checkpoint_grid_cells[cp_idx] = blocked_cells
 
         # --- 4. Flood-fill to find connected components (rooms) ---
@@ -7034,37 +7410,25 @@ class Driver(Supervisor):
         )
 
     def _ensure_checkpoint_pc_groups_loaded(self):
-        """Build room partition from wall geometry if not already populated.
+        """No-op: room partition is now derived from replay boundaries.
 
-        Always uses the deterministic geometry-based partition (wall structure +
-        checkpoint/goal positions) rather than loading from pkl, ensuring both
-        ``checkpoint_pc_groups`` and ``_room_partition_data`` are consistent.
+        Kept for backward compatibility with callers that expect this method
+        to exist.  The old geometry-based partition is no longer needed.
         """
-        partition = getattr(self, "_room_partition_data", None)
-        if partition is not None:
-            return  # Already built.
-        self._build_room_groups_from_geometry()
+        pass
 
     def _get_unified_checkpoint_room_partition(
         self,
         target_device,
     ) -> Tuple[Optional[Dict[str, Any]], str]:
-        """Return the geometry-based room partition for exploit-time use.
+        """Room partition is now derived from replay boundaries.
 
-        Ensures checkpoint PC groups (and thus ``_room_partition_data``) are
-        built, then returns the stored partition dict.
+        Returns None — the old geometry/connectivity-based partition is no
+        longer used.  Replay-driven room discovery happens inside
+        ``_build_paper_room_local_goal_map`` using checkpoint boundary masks.
         """
         self._ensure_checkpoint_pc_groups_loaded()
-        partition = getattr(self, "_room_partition_data", None)
-        if partition is None:
-            return None, "roomown=no_partition_data"
-        # Move tensors to requested device
-        result = dict(partition)
-        for key in ("component_ids", "visited"):
-            if isinstance(result.get(key), torch.Tensor):
-                result[key] = result[key].to(target_device)
-        n_comp = int(result.get("num_components", 0))
-        return result, f"roomown=geometry(rooms={n_comp})"
+        return None, "roomown=replay_boundaries(no_precomputed_partition)"
 
     def _resolve_goal_component_from_partition(
         self,
@@ -10425,12 +10789,19 @@ class Driver(Supervisor):
         )
         q = percentile / 100.0
         usable = boundaries_rolled[: self.n_hd * num_points_per_hd]
+        usable = torch.nan_to_num(
+            usable.to(device=self.device, dtype=self.dtype),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
         sectors = usable.view(self.n_hd, num_points_per_hd)
         if q <= 0.0:
             clearances = torch.min(sectors, dim=1).values
         else:
             clearances = torch.quantile(sectors, q, dim=1)
-        return clearances.to(device=self.device, dtype=self.dtype)
+        clearances = torch.nan_to_num(clearances, nan=0.0, posinf=0.0, neginf=0.0)
+        return torch.clamp(clearances, min=0.0).to(device=self.device, dtype=self.dtype)
 
     def _get_unified_checkpoint_door_safety_profile(
         self,
@@ -11116,79 +11487,53 @@ class Driver(Supervisor):
 
     def _get_unified_exploit_room_reward_mask(self, device):
         """
-        Build an exploit-time per-PC mask using doorway geometry only.
+        Build an exploit-time per-PC mask using replay-derived room masks.
 
-        A checkpoint is considered passed once the agent is on the same side of the
-        checkpoint plane as the route's downstream target (next checkpoint or goal).
-        When passed, the upstream side plus the doorway band are suppressed.
+        For each checkpoint the agent has crossed, suppress that checkpoint's
+        upstream room cells (the cells that received reward during that
+        checkpoint's replay).  Room masks are derived from the replay process
+        itself, not from geometry.
+
+        Falls back to a simple checkpoint-proximity suppression if no
+        replay-derived masks are available.
         """
-        debug_log = getattr(getattr(self, "unified_rcn", None), "goal_map_debug_log", "")
-        chain_near_to_far = self._extract_selected_checkpoint_order_from_goal_map_log(debug_log)
-        if not chain_near_to_far and self.detected_doorways:
-            goal_name = self._get_active_goal_name_for_exploit()
-            goal_loc = self._get_goal_location_by_name(goal_name) if goal_name else None
-            if goal_loc is not None:
-                gx, gz = float(goal_loc[0]), float(goal_loc[1])
-                indexed = [
-                    (i, math.hypot(dx - gx, dz - gz))
-                    for i, (dx, dz) in enumerate(self.detected_doorways)
-                ]
-                indexed.sort(key=lambda t: t[1])
-                chain_near_to_far = [i for i, _ in indexed]
-        if not chain_near_to_far:
-            return None, "roommask=no_chain"
+        masks = getattr(self, "_replay_derived_room_masks", None)
+        if not masks:
+            return None, "roommask=no_replay_data"
 
-        chain = list(reversed(chain_near_to_far))
+        if not self.detected_doorways:
+            return None, "roommask=no_doorways"
+
         curr_x, curr_z = self._current_planar_xy()
         goal_name = self._get_active_goal_name_for_exploit()
         goal_loc = self._get_goal_location_by_name(goal_name) if goal_name else None
         if goal_loc is None:
             return None, "roommask=no_goal_loc"
         goal_x, goal_z = float(goal_loc[0]), float(goal_loc[1])
-        centers, visited, spatial_log = self._get_unified_pc_spatial_support(device)
-        if centers is None or visited is None:
-            return None, spatial_log.replace("spatial=", "roommask=")
 
-        entry_state = (
-            tuple(int(idx) for idx in chain),
-            int(len(self.detected_doorways)),
-        )
-        prev_entry_state = getattr(self, "_prev_room_mask_entry_state", None)
-        if entry_state != prev_entry_state or self.step_count % 60 == 0:
-            print(
-                f"[ROOMMASK-ENTRY] step={self.step_count} mode=geometry_only "
-                f"chain={chain} chain_type={type(chain[0]).__name__ if chain else 'empty'} "
-                f"doorways={len(self.detected_doorways)}"
-            )
-            self._prev_room_mask_entry_state = entry_state
-        num_pc = int(centers.shape[0])
-        mask = torch.ones(num_pc, dtype=torch.float32, device=device)
+        num_pc = 0
+        for v in masks.values():
+            num_pc = max(num_pc, int(v.numel()))
+            break
+        if num_pc == 0:
+            return None, "roommask=empty_masks"
+
+        result_mask = torch.ones(num_pc, dtype=torch.float32, device=device)
         masked_logs: List[str] = []
 
-        for chain_pos, ck_idx in enumerate(chain):
-            if ck_idx < 0 or ck_idx >= len(self.detected_doorways):
+        for ck_idx, (cx, cz) in enumerate(self.detected_doorways):
+            source_key = f"cp{ck_idx}"
+            room_cells = masks.get(source_key)
+            if room_cells is None:
                 continue
-            cx, cz = self.detected_doorways[ck_idx]
 
-            support_region, _ = self._infer_checkpoint_support_region(float(cx), float(cz))
+            # Determine if agent has crossed this checkpoint toward goal
+            support_region, _ = self._infer_checkpoint_support_region(
+                float(cx), float(cz)
+            )
             frame = self._support_region_frame(support_region)
             if frame is None:
                 continue
-
-            if chain_pos + 1 < len(chain):
-                downstream_idx = int(chain[chain_pos + 1])
-                if downstream_idx < 0 or downstream_idx >= len(self.detected_doorways):
-                    downstream_target_xy = (goal_x, goal_z)
-                    target_label = "goal"
-                else:
-                    downstream_target_xy = (
-                        float(self.detected_doorways[downstream_idx][0]),
-                        float(self.detected_doorways[downstream_idx][1]),
-                    )
-                    target_label = f"cp{downstream_idx}"
-            else:
-                downstream_target_xy = (goal_x, goal_z)
-                target_label = "goal"
 
             frame_cx, frame_cz = frame["center"]
             nx, nz = frame["normal"]
@@ -11197,39 +11542,37 @@ class Driver(Supervisor):
                 float(frame.get("half_width", 0.0))
                 + float(getattr(self, "goal_map_checkpoint_directional_band", 0.12)),
             )
-            downstream_signed = (
-                (float(downstream_target_xy[0]) - frame_cx) * nx
-                + (float(downstream_target_xy[1]) - frame_cz) * nz
-            )
-            if abs(float(downstream_signed)) <= max(0.05, 0.5 * doorway_keep):
-                continue
-            downstream_side = 1.0 if downstream_signed > 0.0 else -1.0
 
-            agent_signed = (
-                (float(curr_x) - frame_cx) * nx
-                + (float(curr_z) - frame_cz) * nz
+            # Direction toward goal
+            goal_signed = (
+                (goal_x - frame_cx) * nx + (goal_z - frame_cz) * nz
             )
-            # Flip room ownership as soon as the agent reaches the doorway band
-            # on the downstream-facing side test, rather than waiting until it
-            # is fully classified onto the opposite side of the checkpoint plane.
+            if abs(goal_signed) <= 0.05:
+                continue
+            downstream_side = 1.0 if goal_signed > 0.0 else -1.0
+
+            # Agent position relative to checkpoint
+            agent_signed = (
+                (curr_x - frame_cx) * nx + (curr_z - frame_cz) * nz
+            )
+            # Agent has crossed if it's on the downstream (goal) side
             if float(agent_signed * downstream_side) < -float(doorway_keep):
                 continue
 
-            pc_signed = (centers[:, 0] - frame_cx) * nx + (centers[:, 1] - frame_cz) * nz
-            behind = (pc_signed * downstream_side <= doorway_keep) & visited
-            if not behind.any():
-                continue
-            mask[behind] = 0.0
-            masked_logs.append(
-                f"cp{ck_idx}:geom(n={int(behind.sum().item())},"
-                f"target={target_label},dir={'+' if downstream_side > 0.0 else '-'},"
-                f"band={doorway_keep:.2f},agent_signed={agent_signed:.2f})"
-            )
+            # Suppress this checkpoint's upstream room cells
+            room_cells_t = room_cells.to(device=device, dtype=torch.bool)
+            suppress_count = int(torch.count_nonzero(room_cells_t).item())
+            if suppress_count > 0:
+                result_mask[room_cells_t] = 0.0
+                masked_logs.append(
+                    f"cp{ck_idx}:replay(n={suppress_count},"
+                    f"agent_signed={agent_signed:.2f})"
+                )
 
         if not masked_logs:
             return None, "roommask=all_clear"
 
-        return mask, f"roommask=[{','.join(masked_logs)}]"
+        return result_mask, f"roommask=[{','.join(masked_logs)}]"
 
     def _sync_unified_recurrent_visibility_mask(self, prune_weights: bool = True):
         """
@@ -11513,47 +11856,22 @@ class Driver(Supervisor):
                 route_selected_data = None
                 route_log = f"route_select=error({exc})"
 
-        # --- Pre-fetch connectivity partition (needed before checkpoint selection) ---
-        room_partition = None
-        room_partition_log = "roomown=disabled"
-        try:
-            room_partition, room_partition_log = self._get_unified_checkpoint_room_partition(device)
-        except Exception as exc:
-            room_partition = None
-            room_partition_log = "roomown=partition_error"
-            print(
-                f"[ROOM-PARTITION] ERROR in _build_paper_room_local_goal_map (early fetch): "
-                f"_get_unified_checkpoint_room_partition failed: {exc}"
-            )
+        # --- Build checkpoint boundary masks for replay-driven room discovery ---
+        # Default percentile=0 includes ALL cells that fired near the
+        # checkpoint.  The flood fill handles actual room separation;
+        # the barrier just needs enough cells to disconnect the graph.
+        boundary_masks = self._build_checkpoint_boundary_masks(
+            percentile=float(getattr(self, "checkpoint_boundary_percentile", 0.0)),
+            device=device,
+        )
+        room_partition_log = f"roomown=replay_boundaries(n_cp={len(boundary_masks)})"
 
         selected_order = (
             list(route_selected_data.get("selected_order", []))
             if isinstance(route_selected_data, dict)
             else []
         )
-        # When connectivity partition is available, topology-based selection
-        # can be overly restrictive (fragmented components = fragmented RCN
-        # clouds).  Use ALL checkpoints — the connectivity partition already
-        # defines room boundaries, so we don't need the topology filter.
-        _use_all_checkpoints = (
-            room_partition is not None
-            and checkpoint_seed_bank
-            and len(selected_order) < len(checkpoint_seed_bank)
-        )
-        if _use_all_checkpoints:
-            all_cp_by_dist = []
-            for checkpoint_idx, _seed in checkpoint_seed_bank:
-                if 0 <= int(checkpoint_idx) < len(self.detected_doorways):
-                    cx, cy = self.detected_doorways[int(checkpoint_idx)]
-                    dist = math.hypot(float(cx) - float(goal_x), float(cy) - float(goal_z))
-                    all_cp_by_dist.append((dist, int(checkpoint_idx)))
-            all_cp_by_dist.sort(key=lambda item: (item[0], item[1]))
-            selected_order = [cp_idx for _, cp_idx in all_cp_by_dist]
-            print(
-                f"[ROOM-PARTITION] Overriding topology selection: using ALL "
-                f"{len(selected_order)} checkpoints (connectivity partition available)"
-            )
-        elif not selected_order and checkpoint_seed_bank:
+        if not selected_order and checkpoint_seed_bank:
             fallback = []
             for checkpoint_idx, _seed in checkpoint_seed_bank:
                 if 0 <= int(checkpoint_idx) < len(self.detected_doorways):
@@ -11567,31 +11885,13 @@ class Driver(Supervisor):
             int(idx): (float(cx), float(cy))
             for idx, (cx, cy) in enumerate(getattr(self, "detected_doorways", []))
         }
-        directional_band = float(
-            getattr(self, "goal_map_checkpoint_directional_band", 0.12)
-        )
 
+        # --- Build checkpoint geometry for seed direction selection ---
         checkpoint_geometry: Dict[int, Dict[str, Any]] = {}
         for order_idx, checkpoint_idx in enumerate(selected_order):
             checkpoint_idx = int(checkpoint_idx)
             if checkpoint_idx not in checkpoint_positions:
                 continue
-            # When connectivity partition handles room masks, every checkpoint's
-            # "downstream" direction is simply toward the goal — no sequential
-            # chain ordering needed.
-            if room_partition is not None:
-                downstream_target_xy = (float(goal_x), float(goal_z))
-                target_label = "goal"
-            elif order_idx == 0:
-                downstream_target_xy = (float(goal_x), float(goal_z))
-                target_label = "goal"
-            else:
-                downstream_parent = int(selected_order[order_idx - 1])
-                downstream_target_xy = checkpoint_positions.get(
-                    downstream_parent,
-                    (float(goal_x), float(goal_z)),
-                )
-                target_label = f"cp{downstream_parent}"
             support_region = checkpoint_support_region_bank.get(checkpoint_idx)
             if support_region is None:
                 support_region, _ = self._infer_checkpoint_support_region(
@@ -11602,358 +11902,191 @@ class Driver(Supervisor):
                 continue
             frame_cx, frame_cy = frame["center"]
             nx, ny = frame["normal"]
-            doorway_keep = max(
-                0.15,
-                float(frame.get("half_width", 0.0)) + float(directional_band),
-            )
-            target_signed = (
-                (float(downstream_target_xy[0]) - frame_cx) * nx
-                + (float(downstream_target_xy[1]) - frame_cy) * ny
-            )
-            if abs(float(target_signed)) <= max(0.05, 0.5 * doorway_keep):
-                target_signed = 1.0
-            downstream_side = 1.0 if float(target_signed) >= 0.0 else -1.0
-            signed = (((centers[:, 0] - frame_cx) * nx) + ((centers[:, 1] - frame_cy) * ny))
             checkpoint_geometry[checkpoint_idx] = {
-                "signed": signed,
-                "downstream_side": downstream_side,
-                "doorway_keep": doorway_keep,
-                "target_label": target_label,
                 "support_region": support_region,
                 "frame_center": (frame_cx, frame_cy),
                 "frame_normal": (nx, ny),
             }
 
-        # --- Build room assignments using connectivity-based partition ---
-        # (room_partition and room_partition_log already fetched above)
+        # --- Replay-driven room discovery ---
+        # Instead of precomputing rooms, we build a single "goal" assignment
+        # with ALL visited cells as its initial mask (bounded by checkpoint
+        # barriers).  Then for each checkpoint in route order, we build an
+        # assignment whose mask = ~(other boundaries) & ~(already_rewarded).
+        # The replay loop fills each room to completion; the already_rewarded
+        # mask tracks which cells have been claimed.
+        #
+        # Room masks are derived AFTER replay, from which cells received
+        # reward in each iteration.
+
         room_assignments: List[Dict[str, Any]] = []
 
-        if room_partition is not None:
-            # Connectivity-based room masks
+        # Union of ALL checkpoint boundaries — used to block goal replay
+        all_checkpoint_barrier = torch.zeros(
+            num_pc_total, dtype=torch.bool, device=device
+        )
+        for cp_idx, bmask in boundary_masks.items():
+            all_checkpoint_barrier |= bmask.to(device)
+
+        def _flood_reachable_from_seed(
+            transition: torch.Tensor,
+            seed_mask: torch.Tensor,
+            barrier_mask: torch.Tensor,
+            max_steps: int = 50,
+            threshold: float = 1e-8,
+        ) -> torch.Tensor:
+            """Flood fill through transition, blocked by barrier cells.
+
+            Zeroes out all connections to/from barrier cells in the
+            transition matrix, then iteratively walks from seed_mask
+            to find every reachable cell.  Returns a bool mask.
+            """
+            pass_float = (1.0 - barrier_mask.float())
+            cut_transition = transition * (
+                pass_float.unsqueeze(0) * pass_float.unsqueeze(1)
+            )
+            reachable = seed_mask.clone()
+            frontier = seed_mask.float()
+            for _ in range(max_steps):
+                spread = torch.mv(cut_transition, frontier)
+                new_cells = (spread > threshold) & (~reachable) & (~barrier_mask)
+                if not bool(torch.any(new_cells).item()):
+                    break
+                reachable |= new_cells
+                frontier = new_cells.float()
+            return reachable
+
+        # Goal room: flood fill from goal seed through transition,
+        # with checkpoint boundaries acting as barriers in the graph.
+        goal_seed_mask = (seed_activations.to(device) > eps).view(-1)
+        if not bool(torch.any(goal_seed_mask).item()):
+            # Fallback: use a sparse seed near the goal location
+            _goal_dists = (
+                (centers[:, 0] - float(goal_x)) ** 2
+                + (centers[:, 1] - float(goal_z)) ** 2
+            )
+            _nearest = torch.argmin(_goal_dists)
+            goal_seed_mask = torch.zeros(
+                num_pc_total, dtype=torch.bool, device=device
+            )
+            goal_seed_mask[_nearest] = True
+        goal_reachable = _flood_reachable_from_seed(
+            replay_transition, goal_seed_mask, all_checkpoint_barrier
+        )
+        goal_spread_mask = visited.clone().to(device) & goal_reachable
+        _goal_reachable_count = int(torch.count_nonzero(goal_reachable).item())
+        _goal_spread_count = int(torch.count_nonzero(goal_spread_mask).item())
+        print(
+            f"[ROOM-FLOOD] goal: reachable={_goal_reachable_count}, "
+            f"spread_mask={_goal_spread_count} "
+            f"(barrier={int(torch.count_nonzero(all_checkpoint_barrier).item())} cells)"
+        )
+        if bool(torch.any(goal_spread_mask).item()):
+            room_assignments.append({
+                "source_name": "goal",
+                "sink_type": "goal",
+                "sink_idx": None,
+                "route_pos": -1,
+                "direction_key": None,
+                "room_mask": goal_spread_mask,
+                "support_region": None,
+                "fallback_seed": torch.where(
+                    goal_spread_mask,
+                    seed_activations.to(device=device, dtype=torch.float32),
+                    torch.zeros_like(seed_activations, device=device, dtype=torch.float32),
+                ),
+            })
+
+        # Checkpoint rooms: mask = ~(other boundaries) & ~(already_rewarded)
+        # already_rewarded is updated after each replay in the main loop.
+        # We defer the actual mask computation to replay time (see below).
+        # For now, store a placeholder that the replay loop will replace.
+        for order_idx, checkpoint_idx in enumerate(selected_order):
+            checkpoint_idx = int(checkpoint_idx)
+            if checkpoint_idx not in checkpoint_positions:
+                continue
+            # Build barrier: union of all OTHER checkpoint boundaries
+            other_boundaries = torch.zeros(
+                num_pc_total, dtype=torch.bool, device=device
+            )
+            for cp_j, bmask in boundary_masks.items():
+                if int(cp_j) != checkpoint_idx:
+                    other_boundaries |= bmask.to(device)
+
+            # Flood fill from this checkpoint's boundary cells through
+            # the transition, blocked by other checkpoints' boundaries.
+            cp_seed_mask = boundary_masks.get(checkpoint_idx)
+            if cp_seed_mask is not None:
+                cp_seed_mask = cp_seed_mask.to(device)
+            else:
+                # Fallback: seed from nearest cell to checkpoint position
+                cp_pos = checkpoint_positions[checkpoint_idx]
+                _cp_dists = (
+                    (centers[:, 0] - float(cp_pos[0])) ** 2
+                    + (centers[:, 1] - float(cp_pos[1])) ** 2
+                )
+                cp_seed_mask = torch.zeros(
+                    num_pc_total, dtype=torch.bool, device=device
+                )
+                cp_seed_mask[torch.argmin(_cp_dists)] = True
+            cp_reachable = _flood_reachable_from_seed(
+                replay_transition, cp_seed_mask, other_boundaries
+            )
+            initial_spread_mask = visited.clone().to(device) & cp_reachable
+            _cp_reachable_count = int(
+                torch.count_nonzero(cp_reachable).item()
+            )
+            _cp_spread_count = int(
+                torch.count_nonzero(initial_spread_mask).item()
+            )
             print(
-                f"[ROOM-PARTITION] Using connectivity-based room masks "
-                f"({room_partition_log})"
-            )
-            comp_ids_t = room_partition["component_ids"].to(device).clone()
-            visited_t = room_partition["visited"].to(device)
-            cp_comp_bank = {
-                int(k): [int(v) for v in vals]
-                for k, vals in room_partition.get("checkpoint_components", {}).items()
-            }
-
-            # --- Merge tiny components into nearest large neighbor ---
-            # Components with fewer PCs than this threshold are absorbed into
-            # the nearest large component they share a checkpoint with.
-            _MIN_COMP_SIZE = 10
-            n_comps = int(room_partition.get("num_components", 0))
-            comp_sizes = {}
-            for c_idx in range(n_comps):
-                comp_sizes[c_idx] = int(torch.count_nonzero(
-                    visited_t & (comp_ids_t == c_idx)
-                ).item())
-            tiny_comps = {c for c, sz in comp_sizes.items() if sz < _MIN_COMP_SIZE and sz > 0}
-            if tiny_comps:
-                _room_graph = room_partition.get("graph", {})
-                _merge_map: Dict[int, int] = {}
-                for tc in tiny_comps:
-                    # Find the largest neighbor in the room graph
-                    neighbors = _room_graph.get(tc, [])
-                    large_neighbors = [
-                        (comp_sizes.get(int(nb), 0), int(nb))
-                        for nb in neighbors
-                        if int(nb) not in tiny_comps
-                    ]
-                    if not large_neighbors:
-                        # No large neighbor via graph — find nearest large component
-                        # by spatial proximity of PC centers
-                        tc_pcs = visited_t & (comp_ids_t == tc)
-                        if bool(torch.any(tc_pcs).item()) and centers is not None:
-                            tc_center = torch.mean(centers[tc_pcs], dim=0)
-                            best_dist = float("inf")
-                            best_comp = -1
-                            for lc, lsz in comp_sizes.items():
-                                if lsz < _MIN_COMP_SIZE or lc == tc:
-                                    continue
-                                lc_pcs = visited_t & (comp_ids_t == lc)
-                                if not bool(torch.any(lc_pcs).item()):
-                                    continue
-                                lc_center = torch.mean(centers[lc_pcs], dim=0)
-                                d = float(torch.sum((tc_center - lc_center) ** 2).item())
-                                if d < best_dist:
-                                    best_dist = d
-                                    best_comp = lc
-                            if best_comp >= 0:
-                                _merge_map[tc] = best_comp
-                        continue
-                    large_neighbors.sort(key=lambda x: (-x[0], x[1]))
-                    _merge_map[tc] = large_neighbors[0][1]
-
-                # Apply merges to comp_ids_t
-                for tc, target in _merge_map.items():
-                    comp_ids_t[comp_ids_t == tc] = target
-                # Update cp_comp_bank: replace tiny refs with merge targets
-                for cp_idx in list(cp_comp_bank.keys()):
-                    cp_comp_bank[cp_idx] = sorted(set(
-                        _merge_map.get(int(c), int(c))
-                        for c in cp_comp_bank[cp_idx]
-                    ))
-                print(
-                    f"[ROOM-PARTITION] Merged {len(_merge_map)}/{len(tiny_comps)} "
-                    f"tiny components (size<{_MIN_COMP_SIZE}) into large neighbors"
-                )
-
-            goal_comp_idx = int(self._resolve_goal_component_from_partition(
-                room_partition, goal_x=float(goal_x), goal_z=float(goal_z),
-                target_device=device,
-            ))
-            # Re-resolve goal component from (possibly merged) comp_ids
-            if goal_comp_idx >= 0:
-                goal_t = torch.tensor(
-                    [float(goal_x), float(goal_z)],
-                    dtype=torch.float32, device=device,
-                )
-                _dist_sq = torch.sum((centers - goal_t.unsqueeze(0)) ** 2, dim=1)
-                _valid = visited_t & (comp_ids_t >= 0)
-                _dist_sq = torch.where(_valid, _dist_sq, torch.full_like(_dist_sq, float("inf")))
-                _nearest_pc = int(torch.argmin(_dist_sq).item())
-                goal_comp_idx = int(comp_ids_t[_nearest_pc].item())
-            room_goal_dists = (
-                self._room_graph_distances_from_goal(
-                    room_partition.get("graph", {}), goal_comp_idx,
-                )
-                if goal_comp_idx >= 0 else {}
+                f"[ROOM-FLOOD] cp{checkpoint_idx}: "
+                f"reachable={_cp_reachable_count}, "
+                f"spread_mask={_cp_spread_count} "
+                f"(barrier={int(torch.count_nonzero(other_boundaries).item())} cells)"
             )
 
-            def _comp_mask(comp_indices: List[int]) -> torch.Tensor:
-                mask = torch.zeros(num_pc_total, dtype=torch.bool, device=device)
-                for c in comp_indices:
-                    mask |= visited_t & (comp_ids_t == int(c))
-                return mask
-
-            # --- Goal room mask ---
-            goal_room_mask = (
-                _comp_mask([goal_comp_idx]) if goal_comp_idx >= 0
-                else visited.clone()
+            checkpoint_seed = next(
+                (
+                    seed.to(device=device, dtype=torch.float32)
+                    for idx, seed in checkpoint_seed_bank
+                    if int(idx) == checkpoint_idx
+                ),
+                None,
             )
-            if bool(torch.any(goal_room_mask).item()):
-                room_assignments.append({
-                    "source_name": "goal",
-                    "sink_type": "goal",
-                    "sink_idx": None,
-                    "route_pos": -1,
-                    "direction_key": None,
-                    "room_mask": goal_room_mask,
-                    "support_region": None,
-                    "fallback_seed": torch.where(
-                        goal_room_mask,
-                        seed_activations.to(device=device, dtype=torch.float32),
-                        torch.zeros_like(seed_activations, device=device, dtype=torch.float32),
-                    ),
-                })
+            if checkpoint_seed is None:
+                checkpoint_seed = torch.zeros(
+                    num_pc_total, dtype=torch.float32, device=device
+                )
 
-            # --- Checkpoint room ownership via gateway BFS ---
-            # BFS outward from the goal room through checkpoints as gateways.
-            # Each room is owned by the FIRST checkpoint you must cross to
-            # reach it from the goal.  No disputes possible — each room is
-            # discovered exactly once.
-            resolved_claims: Dict[int, List[int]] = {int(cp): [] for cp in selected_order}
-            room_visited: set = {int(goal_comp_idx)}
-            cp_processed: set = set()
-            bfs_frontier: List[int] = [int(goal_comp_idx)]
+            # Direction key: determine which crossing direction leads upstream
+            # (into unrewarded territory). This will be refined at replay time
+            # using already_rewarded, but we need an initial guess for seed
+            # selection. Use "both" to indicate we'll pick at replay time.
+            geom = checkpoint_geometry.get(checkpoint_idx)
+            support_region = geom["support_region"] if geom is not None else None
 
-            while bfs_frontier:
-                # Find unprocessed checkpoints adjacent to frontier rooms
-                gateway_cps: List[int] = []
-                for room in bfs_frontier:
-                    for cp_idx in selected_order:
-                        cp_idx = int(cp_idx)
-                        if cp_idx in cp_processed:
-                            continue
-                        if int(room) in cp_comp_bank.get(cp_idx, []):
-                            if cp_idx not in gateway_cps:
-                                gateway_cps.append(cp_idx)
-
-                next_frontier: List[int] = []
-                for cp_idx in gateway_cps:
-                    cp_processed.add(cp_idx)
-                    for room in cp_comp_bank.get(cp_idx, []):
-                        room = int(room)
-                        if room not in room_visited:
-                            resolved_claims[cp_idx].append(room)
-                            room_visited.add(room)
-                            next_frontier.append(room)
-                bfs_frontier = next_frontier
-
-            # --- Diagnostic: partition ownership summary ---
-            print(
-                f"[ROOM-PARTITION] goal_comp={goal_comp_idx}, "
-                f"goal_room_size={int(torch.count_nonzero(goal_room_mask).item())}, "
-                f"total_components={room_partition.get('num_components', '?')}"
+            fallback_seed = torch.where(
+                initial_spread_mask, checkpoint_seed,
+                torch.zeros_like(checkpoint_seed),
             )
-            for _cp_idx in selected_order:
-                _cp_idx = int(_cp_idx)
-                _adj = cp_comp_bank.get(_cp_idx, [])
-                _res = resolved_claims.get(_cp_idx, [])
-                _comp_sizes = {}
-                for _c in _adj:
-                    _comp_sizes[_c] = int(torch.count_nonzero(
-                        visited_t & (comp_ids_t == int(_c))
-                    ).item())
-                print(
-                    f"  cp{_cp_idx}: adjacent={_adj}, "
-                    f"owned={_res}, comp_sizes={_comp_sizes}"
-                )
-
-            # --- Build checkpoint assignments ---
-            # Find each checkpoint's own corridor component — the room
-            # containing the checkpoint position itself.  The seed PCs are
-            # physically at the checkpoint, so they live in this corridor
-            # component.  We must include it in the room_mask so the replay
-            # can start there and spread into the owned upstream room.
-            def _checkpoint_corridor_comp(cp_idx: int) -> int:
-                """Return the component_id of the cell nearest to the checkpoint."""
-                cp_pos = checkpoint_positions.get(int(cp_idx))
-                if cp_pos is None:
-                    return -1
-                cp_t = torch.tensor(
-                    [float(cp_pos[0]), float(cp_pos[1])],
-                    dtype=torch.float32, device=device,
-                )
-                d_sq = torch.sum((centers - cp_t.unsqueeze(0)) ** 2, dim=1)
-                valid = visited_t & (comp_ids_t >= 0)
-                d_sq = torch.where(valid, d_sq, torch.full_like(d_sq, float("inf")))
-                nearest = int(torch.argmin(d_sq).item())
-                return int(comp_ids_t[nearest].item())
-
-            for order_idx, checkpoint_idx in enumerate(selected_order):
-                checkpoint_idx = int(checkpoint_idx)
-                owned = resolved_claims.get(checkpoint_idx, [])
-                if not owned:
-                    continue
-                # Include the checkpoint's corridor component so the seed
-                # PCs (at the checkpoint location) are inside the mask and
-                # replay can propagate from the corridor into the upstream room.
-                corridor_comp = _checkpoint_corridor_comp(checkpoint_idx)
-                mask_comps = list(owned)
-                # Add the corridor component unless it IS the goal room —
-                # including the goal room would trigger the overlap guard
-                # and let checkpoint replay leak into the goal's own region.
-                if (
-                    corridor_comp >= 0
-                    and corridor_comp not in mask_comps
-                    and corridor_comp != goal_comp_idx
-                ):
-                    mask_comps.append(corridor_comp)
-                room_mask = _comp_mask(mask_comps)
-                if not bool(torch.any(room_mask).item()):
-                    continue
-                geom = checkpoint_geometry.get(checkpoint_idx)
-                checkpoint_seed = next(
-                    (
-                        seed.to(device=device, dtype=torch.float32)
-                        for idx, seed in checkpoint_seed_bank
-                        if int(idx) == checkpoint_idx
-                    ),
-                    None,
-                )
-                if checkpoint_seed is None:
-                    checkpoint_seed = torch.zeros(num_pc_total, dtype=torch.float32, device=device)
-                fallback_seed = torch.where(
-                    room_mask, checkpoint_seed, torch.zeros_like(checkpoint_seed),
-                )
-                room_assignments.append({
-                    "source_name": f"cp{checkpoint_idx}",
-                    "sink_type": "checkpoint",
-                    "sink_idx": checkpoint_idx,
-                    "route_pos": int(order_idx),
-                    "direction_key": (
-                        ("neg_to_pos" if float(geom["downstream_side"]) > 0.0 else "pos_to_neg")
-                        if geom is not None else "unknown"
-                    ),
-                    "room_mask": room_mask,
-                    "support_region": geom["support_region"] if geom is not None else None,
-                    "fallback_seed": fallback_seed,
-                })
-        else:
-            # Fallback: geometry-based masks (original behavior)
-            print(
-                f"[ROOM-PARTITION] WARNING: connectivity partition unavailable, "
-                f"falling back to geometry-based room masks ({room_partition_log})"
-            )
-            goal_room_mask = visited.clone()
-            if selected_order:
-                nearest_goal_checkpoint = checkpoint_geometry.get(int(selected_order[0]))
-                if nearest_goal_checkpoint is not None:
-                    goal_room_mask = goal_room_mask & (
-                        (nearest_goal_checkpoint["signed"] * nearest_goal_checkpoint["downstream_side"])
-                        > nearest_goal_checkpoint["doorway_keep"]
-                    )
-            if bool(torch.any(goal_room_mask).item()):
-                room_assignments.append({
-                    "source_name": "goal",
-                    "sink_type": "goal",
-                    "sink_idx": None,
-                    "route_pos": -1,
-                    "direction_key": None,
-                    "room_mask": goal_room_mask,
-                    "support_region": None,
-                    "fallback_seed": torch.where(
-                        goal_room_mask,
-                        seed_activations.to(device=device, dtype=torch.float32),
-                        torch.zeros_like(seed_activations, device=device, dtype=torch.float32),
-                    ),
-                })
-
-            for order_idx, checkpoint_idx in enumerate(selected_order):
-                checkpoint_idx = int(checkpoint_idx)
-                geom = checkpoint_geometry.get(checkpoint_idx)
-                if geom is None:
-                    continue
-                room_mask = visited.clone()
-                room_mask = room_mask & (
-                    (geom["signed"] * geom["downstream_side"]) <= geom["doorway_keep"]
-                )
-                if order_idx + 1 < len(selected_order):
-                    upstream_checkpoint_idx = int(selected_order[order_idx + 1])
-                    upstream_geom = checkpoint_geometry.get(upstream_checkpoint_idx)
-                    if upstream_geom is not None:
-                        room_mask = room_mask & (
-                            (upstream_geom["signed"] * upstream_geom["downstream_side"])
-                            > upstream_geom["doorway_keep"]
-                        )
-                room_mask = room_mask & (~goal_room_mask)
-                if not bool(torch.any(room_mask).item()):
-                    continue
-                checkpoint_seed = next(
-                    (
-                        seed.to(device=device, dtype=torch.float32)
-                        for idx, seed in checkpoint_seed_bank
-                        if int(idx) == checkpoint_idx
-                    ),
-                    None,
-                )
-                if checkpoint_seed is None:
-                    checkpoint_seed = torch.zeros(num_pc_total, dtype=torch.float32, device=device)
-                fallback_seed = torch.where(
-                    room_mask, checkpoint_seed, torch.zeros_like(checkpoint_seed),
-                )
-                room_assignments.append({
-                    "source_name": f"cp{checkpoint_idx}",
-                    "sink_type": "checkpoint",
-                    "sink_idx": checkpoint_idx,
-                    "route_pos": int(order_idx),
-                    "direction_key": (
-                        "neg_to_pos" if float(geom["downstream_side"]) > 0.0 else "pos_to_neg"
-                    ),
-                    "room_mask": room_mask,
-                    "support_region": geom["support_region"],
-                    "fallback_seed": fallback_seed,
-                })
+            room_assignments.append({
+                "source_name": f"cp{checkpoint_idx}",
+                "sink_type": "checkpoint",
+                "sink_idx": checkpoint_idx,
+                "route_pos": int(order_idx),
+                "direction_key": "deferred",
+                "room_mask": initial_spread_mask,
+                "other_boundaries": other_boundaries,
+                "support_region": support_region,
+                "fallback_seed": fallback_seed,
+            })
 
         # --- Diagnostic: summarize room assignments ---
         print(
             f"[ROOM-ASSIGN] {len(room_assignments)} room assignments built "
-            f"(selected_order={[int(i) for i in selected_order]})"
+            f"(selected_order={[int(i) for i in selected_order]}, "
+            f"mode=replay_boundaries)"
         )
         for _ra in room_assignments:
             _ra_count = int(torch.count_nonzero(
@@ -11961,7 +12094,8 @@ class Driver(Supervisor):
             ).item())
             print(
                 f"  {_ra['source_name']}: sink={_ra['sink_type']}, "
-                f"dir={_ra.get('direction_key','n/a')}, mask_size={_ra_count}"
+                f"dir={_ra.get('direction_key','n/a')}, "
+                f"initial_mask_size={_ra_count}"
             )
 
         history, compact_log = self._extract_compact_unified_history(
@@ -12004,6 +12138,16 @@ class Driver(Supervisor):
 
         replay_timesteps = int(max(1, getattr(self, "goal_map_replay_timesteps", 12)))
         replay_tau = float(max(1e-6, getattr(self, "goal_map_paper_replay_tau", 8.0)))
+        goal_replay_timesteps = getattr(self, "goal_map_goal_replay_timesteps", None)
+        if goal_replay_timesteps is None:
+            goal_replay_timesteps = replay_timesteps
+        else:
+            goal_replay_timesteps = int(max(1, goal_replay_timesteps))
+        goal_replay_tau = getattr(self, "goal_map_goal_replay_tau", None)
+        if goal_replay_tau is None:
+            goal_replay_tau = replay_tau
+        else:
+            goal_replay_tau = float(max(1e-6, goal_replay_tau))
         room_norm_mode = str(
             getattr(self, "goal_map_room_normalization_mode", "per_room_peak")
         ).strip().lower()
@@ -12048,11 +12192,10 @@ class Driver(Supervisor):
             if dense_hmap_loc is None or dense_valid <= 0:
                 return None
 
-            # When connectivity partition is available, use the PC room mask
-            # to determine which dense positions belong to this room: a position
-            # is "inside" if the majority of its activation mass falls on PCs
-            # within the room_mask.
-            if room_partition is not None and dense_unified_acts is not None:
+            # Use the PC room mask to determine which dense positions belong
+            # to this room: a position is "inside" if the majority of its
+            # activation mass falls on PCs within the room_mask.
+            if dense_unified_acts is not None:
                 room_mask_t = torch.as_tensor(
                     assignment["room_mask"], dtype=torch.bool, device=device,
                 ).view(-1)
@@ -12911,6 +13054,12 @@ class Driver(Supervisor):
                 ),
             )
 
+            # Overlap threshold: reject seeds whose activation mass falls
+            # mostly on already-rewarded (downstream) cells.
+            _overlap_reject_frac = float(
+                getattr(self, "checkpoint_seed_overlap_reject_fraction", 0.5)
+            )
+
             for (
                 chosen_step,
                 chosen_center_dist,
@@ -12926,6 +13075,25 @@ class Driver(Supervisor):
                 )
                 if replay_seed_vec is None:
                     continue
+                # Check overlap with already_rewarded: if the majority of
+                # this seed's activation mass sits on cells that are already
+                # claimed by a prior replay, this trajectory was recorded on
+                # the downstream side — skip it.
+                _seed_abs = torch.abs(replay_seed_vec)
+                _seed_total_mass = float(torch.sum(_seed_abs).item())
+                if _seed_total_mass > eps:
+                    _seed_overlap_mass = float(
+                        torch.sum(_seed_abs[already_rewarded]).item()
+                    )
+                    _seed_overlap_frac = _seed_overlap_mass / _seed_total_mass
+                    if _seed_overlap_frac > _overlap_reject_frac:
+                        print(
+                            f"[SEED-OVERLAP] {assignment['source_name']}: "
+                            f"rejecting step {int(chosen_step)} — "
+                            f"{_seed_overlap_frac:.1%} of activation mass "
+                            f"overlaps already_rewarded"
+                        )
+                        continue
                 chosen_log = (
                     f"{replay_seed_log},"
                     f"checkpoint_exact=step{int(replay_event_step)},"
@@ -12974,6 +13142,21 @@ class Driver(Supervisor):
                 )
                 if seed_vec is None:
                     continue
+                # Overlap filter: skip trajectories whose activation mass
+                # falls mostly on already-rewarded cells.
+                _cand_abs = torch.abs(seed_vec)
+                _cand_total = float(torch.sum(_cand_abs).item())
+                if _cand_total > eps:
+                    _cand_overlap = float(
+                        torch.sum(_cand_abs[already_rewarded]).item()
+                    )
+                    if _cand_overlap / _cand_total > _overlap_reject_frac:
+                        print(
+                            f"[SEED-OVERLAP] {assignment['source_name']}: "
+                            f"rejecting fallback step {int(event_step)} — "
+                            f"{_cand_overlap / _cand_total:.1%} overlap"
+                        )
+                        continue
                 candidate_rows.append(
                     {
                         "seed_vec": seed_vec,
@@ -13102,19 +13285,136 @@ class Driver(Supervisor):
         replay_cumulative_maps_pre_smooth: Dict[str, List[torch.Tensor]] = {}
         metadata_map: Dict[str, Dict[str, Any]] = {}
         source_support_masks: Dict[str, torch.Tensor] = {}
+        # Store each room's replay seeds so we can re-replay downstream
+        # rooms with expanded masks to fill boundary dead zones.
+        room_replay_seeds_store: Dict[str, List[Tuple[torch.Tensor, int, int]]] = {}
+        room_masks_store: Dict[str, torch.Tensor] = {}
+        room_sink_types: Dict[str, str] = {}
         final_weights = torch.zeros(num_pc_total, dtype=torch.float32, device=device)
+        # Track which cells have received reward from earlier replays.
+        # Checkpoint masks are refined at replay time by subtracting this.
+        already_rewarded = torch.zeros(
+            num_pc_total, dtype=torch.bool, device=device
+        )
+        reward_threshold_fraction = float(
+            getattr(self, "replay_boundary_reward_threshold", 0.01)
+        )
+        # Store per-source rewarded cell masks for exploit-time room masks
+        replay_derived_room_cells: Dict[str, torch.Tensor] = {}
 
         for assignment in room_assignments:
             source_name = str(assignment["source_name"])
-            raw_room_mask_t = torch.as_tensor(
-                assignment["room_mask"], dtype=torch.bool, device=device
-            ).view(-1)
-            if not bool(torch.any(raw_room_mask_t).item()):
-                continue
-
             sink_type = str(assignment["sink_type"])
             sink_idx = assignment["sink_idx"]
             support_region = assignment["support_region"]
+
+            # --- Refine checkpoint masks at replay time ---
+            # Determine upstream direction first, then flood fill from
+            # only upstream-side boundary cells with already_rewarded
+            # as additional barrier.
+            if sink_type == "checkpoint":
+                other_boundaries = assignment.get("other_boundaries")
+                _replay_barrier = already_rewarded.clone()
+                if other_boundaries is not None:
+                    _replay_barrier |= other_boundaries.to(device)
+
+                # Determine upstream direction from already_rewarded
+                geom = checkpoint_geometry.get(int(sink_idx))
+                cp_boundary = boundary_masks.get(int(sink_idx))
+                cp_boundary_t = (
+                    cp_boundary.to(device) if cp_boundary is not None else None
+                )
+                upstream_sign = None  # None = unknown, use all boundary cells
+                signed_boundary = None
+                if geom is not None and cp_boundary_t is not None:
+                    frame_cx, frame_cy = geom["frame_center"]
+                    nx, ny = geom["frame_normal"]
+                    signed_boundary = (
+                        ((centers[:, 0] - frame_cx) * nx)
+                        + ((centers[:, 1] - frame_cy) * ny)
+                    )
+                    pos_side_rewarded = bool(
+                        torch.any(
+                            already_rewarded & cp_boundary_t
+                            & (signed_boundary > 0)
+                        ).item()
+                    )
+                    neg_side_rewarded = bool(
+                        torch.any(
+                            already_rewarded & cp_boundary_t
+                            & (signed_boundary < 0)
+                        ).item()
+                    )
+                    if pos_side_rewarded and not neg_side_rewarded:
+                        assignment["direction_key"] = "pos_to_neg"
+                        upstream_sign = -1.0  # upstream is negative side
+                    elif neg_side_rewarded and not pos_side_rewarded:
+                        assignment["direction_key"] = "neg_to_pos"
+                        upstream_sign = 1.0  # upstream is positive side
+                    else:
+                        goal_signed = (
+                            (float(goal_x) - frame_cx) * nx
+                            + (float(goal_z) - frame_cy) * ny
+                        )
+                        # Upstream is AWAY from goal
+                        assignment["direction_key"] = (
+                            "pos_to_neg" if goal_signed > 0 else "neg_to_pos"
+                        )
+                        upstream_sign = -1.0 if goal_signed > 0 else 1.0
+                    print(
+                        f"[REPLAY-SIDE] {source_name}: "
+                        f"dir={assignment['direction_key']} "
+                        f"(pos_rewarded={pos_side_rewarded}, "
+                        f"neg_rewarded={neg_side_rewarded})"
+                    )
+
+                # Flood fill from upstream-side boundary cells only
+                cp_seed = cp_boundary_t.clone() if cp_boundary_t is not None else None
+                if cp_seed is not None:
+                    cp_seed = cp_seed & (~_replay_barrier)
+                    # Restrict seed to upstream side
+                    if upstream_sign is not None:
+                        upstream_mask = (signed_boundary * upstream_sign) >= 0
+                        cp_seed = cp_seed & upstream_mask
+                    if bool(torch.any(cp_seed).item()):
+                        cp_reachable = _flood_reachable_from_seed(
+                            replay_transition, cp_seed, _replay_barrier
+                        )
+                        raw_room_mask_t = visited.clone().to(device) & cp_reachable
+                        # Exclude downstream-side boundary cells — they
+                        # belong to the goal room even though the flood
+                        # reaches them (they're in the seed).
+                        if upstream_sign is not None:
+                            _downstream_barrier = cp_boundary_t & (~upstream_mask)
+                            raw_room_mask_t = raw_room_mask_t & (~_downstream_barrier)
+                        _cp_flood_count = int(
+                            torch.count_nonzero(raw_room_mask_t).item()
+                        )
+                        print(
+                            f"[REPLAY-FLOOD] {source_name}: "
+                            f"upstream_seed={int(cp_seed.sum())}, "
+                            f"reachable={_cp_flood_count}"
+                        )
+                    else:
+                        raw_room_mask_t = torch.as_tensor(
+                            assignment["room_mask"], dtype=torch.bool, device=device
+                        ).view(-1) & (~already_rewarded)
+                else:
+                    raw_room_mask_t = torch.as_tensor(
+                        assignment["room_mask"], dtype=torch.bool, device=device
+                    ).view(-1) & (~already_rewarded)
+            else:
+                raw_room_mask_t = torch.as_tensor(
+                    assignment["room_mask"], dtype=torch.bool, device=device
+                ).view(-1)
+
+            if not bool(torch.any(raw_room_mask_t).item()):
+                print(
+                    f"[REPLAY-SKIP] {source_name}: empty mask after "
+                    f"already_rewarded subtraction"
+                )
+                continue
+
             room_mask_t, support_refine_log = _refine_checkpoint_support_mask(
                 assignment,
                 raw_room_mask_t,
@@ -13124,6 +13424,9 @@ class Driver(Supervisor):
                     f"{source_name}: refined room support is empty; "
                     f"raw_support={int(torch.count_nonzero(raw_room_mask_t).item())}"
                 )
+            # Store mask and sink type for boundary re-replay pass
+            room_masks_store[source_name] = room_mask_t.clone()
+            room_sink_types[source_name] = sink_type
             fallback_seed = torch.as_tensor(
                 assignment["fallback_seed"], dtype=torch.float32, device=device
             ).view(-1)
@@ -13259,6 +13562,9 @@ class Driver(Supervisor):
                         "doorway_seed_fallback" if sink_type == "checkpoint" else "goal_seed_fallback"
                     )
 
+            # Store seeds for potential boundary re-replay later
+            room_replay_seeds_store[source_name] = list(replay_event_seeds)
+
             room_mask_float = room_mask_t.to(dtype=torch.float32)
             room_transition = replay_transition * (
                 room_mask_float.unsqueeze(0) * room_mask_float.unsqueeze(1)
@@ -13287,6 +13593,12 @@ class Driver(Supervisor):
                 float(getattr(self, "goal_map_goal_replay_carry_scale", 1.0))
                 if sink_type == "goal"
                 else 1.0
+            )
+            source_replay_timesteps = (
+                int(goal_replay_timesteps) if sink_type == "goal" else int(replay_timesteps)
+            )
+            source_replay_tau = (
+                float(goal_replay_tau) if sink_type == "goal" else float(replay_tau)
             )
             record_goal_replay_trajectory = bool(
                 sink_type == "goal"
@@ -13323,14 +13635,14 @@ class Driver(Supervisor):
                     torch.clamp(seed_vec.to(device=device, dtype=torch.float32), min=0.0),
                     torch.zeros_like(seed_vec, device=device, dtype=torch.float32),
                 )
-                for time_step in range(replay_timesteps):
+                for time_step in range(source_replay_timesteps):
                     if float(torch.max(torch.abs(v_t)).item()) <= eps:
                         break
                     u_t = torch.relu(v_t)
                     u_t_peak = torch.clamp(torch.max(torch.abs(u_t)), min=eps)
                     u_hat_t = u_t / u_t_peak
                     room_delta = room_delta + (
-                        float(math.exp(-float(time_step) / replay_tau)) * u_hat_t
+                        float(math.exp(-float(time_step) / source_replay_tau)) * u_hat_t
                     )
                     if record_goal_replay_trajectory:
                         replay_cumulative_steps.append(
@@ -13380,23 +13692,9 @@ class Driver(Supervisor):
                     f"{source_name}: nonzero mass outside owned support "
                     f"before composition (max={outside_support_mass:.3e})"
                 )
-            if sink_type == "checkpoint":
-                checkpoint_goal_overlap = int(
-                    torch.count_nonzero(room_mask_t & goal_room_mask).item()
-                )
-                if checkpoint_goal_overlap > 0:
-                    raise RuntimeError(
-                        f"{source_name}: refined support overlaps goal-room support "
-                        f"(n={checkpoint_goal_overlap})"
-                    )
-                goal_support_mass = float(
-                    torch.max(torch.abs(room_values[goal_room_mask])).item()
-                ) if bool(torch.any(goal_room_mask).item()) else 0.0
-                if goal_support_mass > 1e-8:
-                    raise RuntimeError(
-                        f"{source_name}: wrote nonzero mass into goal-room support "
-                        f"(max={goal_support_mass:.3e})"
-                    )
+            # Overlap with already-rewarded cells is prevented by the
+            # already_rewarded mask applied when building checkpoint masks.
+            # No explicit goal-room overlap guard needed.
             goal_validation = (
                 _compute_goal_validation_summary(assignment, room_values)
                 if sink_type == "goal"
@@ -13422,7 +13720,7 @@ class Driver(Supervisor):
                 "raw_support_count": int(torch.count_nonzero(raw_room_mask_t).item()),
                 "replay_count": int(len(replay_event_seeds)),
                 "replay_event_count": int(len(replay_event_seeds)),
-                "replay_steps": int(replay_timesteps),
+                "replay_steps": int(source_replay_timesteps),
                 "direction_key": assignment["direction_key"],
                 "seed_source": seed_source,
                 "seed_event_steps": list(seed_event_steps),
@@ -13441,7 +13739,221 @@ class Driver(Supervisor):
                 metadata_map[source_name]["goal_replay_carry_scale"] = float(
                     goal_replay_carry_scale
                 )
+                metadata_map[source_name]["goal_replay_timesteps"] = int(
+                    source_replay_timesteps
+                )
+                metadata_map[source_name]["goal_replay_tau"] = float(source_replay_tau)
             final_weights = torch.where(room_mask_t, room_values, final_weights)
+
+            # --- Track which cells received reward from this replay ---
+            room_peak = float(torch.max(torch.abs(room_values)).item())
+            _reward_thr = max(eps, reward_threshold_fraction * max(room_peak, eps))
+            newly_rewarded = room_mask_t & (torch.abs(room_values) > _reward_thr)
+            already_rewarded |= newly_rewarded
+            replay_derived_room_cells[source_name] = newly_rewarded.detach().cpu().clone()
+
+            # Claim the ENTIRE spread mask as already_rewarded — not just
+            # cells that received above-threshold reward.  Replay may not
+            # deposit meaningful reward in every cell of the room (corners,
+            # edges far from the seed), but those cells still belong to this
+            # room's territory.  Claiming the full mask prevents subsequent
+            # replays from including unreached cells in their masks.
+            _spread_claimed = int(
+                torch.count_nonzero(room_mask_t & (~already_rewarded)).item()
+            )
+            if _spread_claimed > 0:
+                already_rewarded |= room_mask_t
+                print(
+                    f"[REPLAY-TRACK] {source_name}: claimed full spread mask "
+                    f"(+{_spread_claimed} cells beyond threshold-rewarded)"
+                )
+
+            _newly_count = int(torch.count_nonzero(newly_rewarded).item())
+            _total_rewarded = int(torch.count_nonzero(already_rewarded).item())
+            print(
+                f"[REPLAY-TRACK] {source_name}: "
+                f"newly_rewarded={_newly_count}, "
+                f"total_rewarded={_total_rewarded}"
+            )
+
+        # --- Boundary re-replay pass ---
+        # Each checkpoint's downstream boundary cells were excluded from
+        # the goal (or previous checkpoint) replay to prevent leakage.
+        # Now re-replay the downstream room from its original seeds with
+        # an expanded mask that includes those boundary cells, producing
+        # a natural reward gradient instead of a warm-started false peak.
+        for _ra_idx, _ra in enumerate(room_assignments):
+            if _ra["sink_type"] != "checkpoint":
+                continue
+            _cp_idx = int(_ra["sink_idx"])
+            _cp_boundary = boundary_masks.get(_cp_idx)
+            if _cp_boundary is None:
+                continue
+            _cp_boundary_dev = _cp_boundary.to(device)
+
+            # Determine which boundary cells are downstream (goal-side)
+            _geom = checkpoint_geometry.get(_cp_idx)
+            if _geom is None:
+                continue
+            _fcx, _fcy = _geom["frame_center"]
+            _fnx, _fny = _geom["frame_normal"]
+            _signed = (
+                ((centers[:, 0] - _fcx) * _fnx)
+                + ((centers[:, 1] - _fcy) * _fny)
+            )
+            _dir_key = _ra.get("direction_key", "")
+            if _dir_key == "neg_to_pos":
+                _upstream_sign = 1.0
+            elif _dir_key == "pos_to_neg":
+                _upstream_sign = -1.0
+            else:
+                continue
+            _downstream_mask = (_signed * _upstream_sign) < 0
+            _downstream_boundary = _cp_boundary_dev & _downstream_mask
+            _unclaimed = _downstream_boundary & (~already_rewarded)
+            _unclaimed_count = int(torch.count_nonzero(_unclaimed).item())
+            if _unclaimed_count == 0:
+                continue
+
+            # Find the downstream room (replayed before this checkpoint)
+            _downstream_src = None
+            for _j in range(_ra_idx - 1, -1, -1):
+                _downstream_src = str(room_assignments[_j]["source_name"])
+                break
+            if _downstream_src is None or _downstream_src not in room_masks_store:
+                continue
+            _ds_seeds = room_replay_seeds_store.get(_downstream_src, [])
+            if not _ds_seeds:
+                continue
+
+            _ds_original_mask = room_masks_store[_downstream_src]
+            _expanded_mask = _ds_original_mask | _unclaimed
+            _expanded_float = _expanded_mask.to(dtype=torch.float32)
+            _expanded_transition = replay_transition * (
+                _expanded_float.unsqueeze(0) * _expanded_float.unsqueeze(1)
+            )
+
+            # Replay parameters matching the downstream room's type
+            _ds_sink_type = room_sink_types.get(_downstream_src, "")
+            _ds_carry_scale = (
+                float(getattr(self, "goal_map_goal_replay_carry_scale", 1.0))
+                if _ds_sink_type == "goal" else 1.0
+            )
+            _ds_retention_alpha = 0.0
+            if _ds_sink_type == "goal":
+                _ds_ret_mode = str(
+                    getattr(self, "goal_map_goal_replay_retention_mode", "baseline")
+                ).strip().lower()
+                if _ds_ret_mode == "boosted":
+                    _ds_retention_alpha = float(
+                        getattr(self, "goal_map_goal_seed_self_retention_alpha", 0.15)
+                    )
+
+            # Re-replay from original seeds with expanded mask
+            _fill_delta = torch.zeros(
+                num_pc_total, dtype=torch.float32, device=device
+            )
+            for _sv, _li, _es in _ds_seeds:
+                _v_t = torch.where(
+                    _expanded_mask,
+                    torch.clamp(
+                        _sv.to(device=device, dtype=torch.float32), min=0.0
+                    ),
+                    torch.zeros(
+                        num_pc_total, dtype=torch.float32, device=device
+                    ),
+                )
+                for _ts in range(replay_timesteps):
+                    if float(torch.max(torch.abs(_v_t)).item()) <= eps:
+                        break
+                    _u_t = torch.relu(_v_t)
+                    _u_peak = torch.clamp(
+                        torch.max(torch.abs(_u_t)), min=eps
+                    )
+                    _u_hat = _u_t / _u_peak
+                    _fill_delta = _fill_delta + (
+                        float(math.exp(-float(_ts) / replay_tau)) * _u_hat
+                    )
+                    _sc = float(_ds_carry_scale)
+                    if _ds_retention_alpha > 0.0:
+                        _sc = _sc + float(_ds_retention_alpha)
+                    _state_carry = _sc * _v_t
+                    _v_t = _expanded_float * torch.tanh(
+                        torch.relu(
+                            _state_carry
+                            + torch.mv(_expanded_transition, _v_t)
+                        )
+                    )
+
+            # Normalize per room peak (same as main replay)
+            _fill_delta = torch.where(
+                _expanded_mask, _fill_delta, torch.zeros_like(_fill_delta)
+            )
+            if room_norm_mode == "per_room_peak":
+                _fp = float(torch.max(torch.abs(_fill_delta)).item())
+                _fill_values = (
+                    _fill_delta / max(_fp, eps) if _fp > eps else _fill_delta
+                )
+            else:
+                _fill_values = _fill_delta
+
+            # Only keep reward on the previously-unclaimed boundary cells
+            _boundary_values = torch.where(
+                _unclaimed, _fill_values, torch.zeros_like(_fill_values)
+            )
+            _boundary_peak = float(
+                torch.max(torch.abs(_boundary_values)).item()
+            )
+            if _boundary_peak <= eps:
+                print(
+                    f"[BOUNDARY-REREPLAY] {_downstream_src}: no reward "
+                    f"reached {_unclaimed_count} boundary cells from "
+                    f"cp{_cp_idx}"
+                )
+                continue
+
+            # Merge into downstream room's maps
+            _fill_cpu = _boundary_values.detach().cpu().clone().view(-1)
+            _src_total = torch.as_tensor(
+                total_maps_pre_smooth[_downstream_src],
+                dtype=torch.float32,
+            ).view(-1)
+            total_maps_pre_smooth[_downstream_src] = torch.where(
+                _unclaimed.cpu(), _fill_cpu, _src_total
+            )
+            path_maps_pre_smooth[_downstream_src] = (
+                total_maps_pre_smooth[_downstream_src]
+            )
+            final_weights = torch.where(
+                _unclaimed, _boundary_values, final_weights
+            )
+            source_support_masks[_downstream_src] = (
+                source_support_masks[_downstream_src] | _unclaimed.cpu()
+            )
+            if _downstream_src in replay_derived_room_cells:
+                replay_derived_room_cells[_downstream_src] = (
+                    replay_derived_room_cells[_downstream_src]
+                    | _unclaimed.cpu()
+                )
+            already_rewarded |= _unclaimed
+            _filled_count = int(
+                torch.count_nonzero(
+                    _boundary_values.abs() > eps
+                ).item()
+            )
+            print(
+                f"[BOUNDARY-REREPLAY] {_downstream_src}: filled "
+                f"{_filled_count}/{_unclaimed_count} downstream boundary "
+                f"cells from cp{_cp_idx} "
+                f"(peak={_boundary_peak:.4f})"
+            )
+
+        # --- Store replay-derived room masks for exploit-time use ---
+        self._replay_derived_room_masks = {}
+        for src_name, cell_mask in replay_derived_room_cells.items():
+            self._replay_derived_room_masks[src_name] = cell_mask
+        # Also store on goal_rcn so they persist to pkl
+        goal_rcn._replay_derived_room_masks = dict(self._replay_derived_room_masks)
 
         for source_name, support_mask_cpu in source_support_masks.items():
             source_map_cpu = torch.as_tensor(
@@ -13474,13 +13986,18 @@ class Driver(Supervisor):
         }
 
         selected_txt = "[" + ",".join(f"cp{int(idx)}" for idx in selected_order) + "]"
+        goal_replay_override_log = ""
+        if int(goal_replay_timesteps) != int(replay_timesteps):
+            goal_replay_override_log += f",goal_steps={int(goal_replay_timesteps)}"
+        if abs(float(goal_replay_tau) - float(replay_tau)) > 1e-9:
+            goal_replay_override_log += f",goal_tau={float(goal_replay_tau):.2f}"
         replay_log = (
             "goal_map=paper_room_local_replay("
             f"selected={selected_txt},"
             f"sources={len(source_names)},"
             f"room_norm={room_norm_mode},"
             f"replay_steps={replay_timesteps},"
-            f"tau={replay_tau:.2f})"
+            f"tau={replay_tau:.2f}{goal_replay_override_log})"
         )
         goal_rcn.goal_map_debug_log = (
             f"{replay_log},{history_log},{compact_log},{route_log},"
@@ -16979,8 +17496,8 @@ class Driver(Supervisor):
         )
     def _save_multi_goal_data(self):
         """Save multi-goal specific data"""
-        # Build room groups from wall geometry before saving.
-        self._build_room_groups_from_geometry()
+        # Room partition is now derived from replay boundaries at exploit time.
+        # No geometry-based room groups need to be pre-built.
         multi_goal_dir = os.path.join(self.network_dir, "multi_goal_rewards")
 
         # Save goal associations

@@ -84,6 +84,7 @@ class UnifiedMultiScalePCN:
         soft_cross_inhibition_scale: float = 0.35,
         soft_cross_inhibition_scale_in_learning: Optional[float] = None,
         soft_cross_inhibition_cap: float = 0.75,
+        cross_scale_inhibition_base_enabled: bool = True,
         post_competition_expression_power: float = 1.0,
         use_bvc_context_modulation: bool = True,
         bvc_context_gain_floor: float = 0.15,
@@ -118,6 +119,23 @@ class UnifiedMultiScalePCN:
         self.bvc_context_gain_strength = float(max(0.0, bvc_context_gain_strength))
         self.last_bvc_context_gain_per_pc = None
         self.last_bvc_context_gain_per_scale = None
+        self.last_raw_bvc_abs_mean_per_scale = None
+        self.last_raw_grid_abs_mean_per_scale = None
+        self.last_raw_grid_share_per_scale = None
+        self.last_balanced_bvc_abs_mean_per_scale = None
+        self.last_balanced_grid_abs_mean_per_scale = None
+        self.last_balanced_grid_share_per_scale = None
+        self.last_mixed_bvc_abs_mean_per_scale = None
+        self.last_mixed_grid_abs_mean_per_scale = None
+        self.last_mixed_grid_share_per_scale = None
+        self.last_bvc_gain_value_per_scale = None
+        self.last_grid_gain_value_per_scale = None
+        self.last_effective_grid_influence_mean_per_scale = None
+        self.last_bvc_afferent_source_sum_per_scale = None
+        self.last_grid_afferent_source_sum_per_scale = None
+        self.last_bvc_afferent_inhibition_mean_per_scale = None
+        self.last_grid_afferent_inhibition_mean_per_scale = None
+        self.last_afferent_inhibition_mean_per_scale = None
 
         # Support per-scale BVC layers (preferred), with backward-compatible single-layer fallback.
         if bvc_layers is not None:
@@ -288,6 +306,10 @@ class UnifiedMultiScalePCN:
             max(0.0, soft_cross_inhibition_scale_in_learning)
         )
         self.soft_cross_inhibition_cap = float(max(0.0, soft_cross_inhibition_cap))
+        self.cross_scale_inhibition_base_enabled = bool(
+            cross_scale_inhibition_base_enabled
+        )
+        self.cross_scale_inhibition_lambda_base = 0.20
         self.post_competition_expression_power = float(
             max(1.0, post_competition_expression_power)
         )
@@ -529,6 +551,18 @@ class UnifiedMultiScalePCN:
             self.tau_hd = 0.1
         if not hasattr(self, "post_competition_expression_power"):
             self.post_competition_expression_power = 1.0
+        if not hasattr(self, "cross_scale_inhibition_base_enabled"):
+            self.cross_scale_inhibition_base_enabled = True
+        else:
+            self.cross_scale_inhibition_base_enabled = bool(
+                self.cross_scale_inhibition_base_enabled
+            )
+        if not hasattr(self, "cross_scale_inhibition_lambda_base"):
+            self.cross_scale_inhibition_lambda_base = 0.20
+        else:
+            self.cross_scale_inhibition_lambda_base = float(
+                min(1.0, max(0.0, self.cross_scale_inhibition_lambda_base))
+            )
 
 
         if not isinstance(getattr(self, "activation_history", None), deque):
@@ -598,6 +632,46 @@ class UnifiedMultiScalePCN:
             self.post_competition_expression_ema = self.post_competition_expression_ema.to(
                 device=self.device, dtype=self.dtype
             )
+        for attr_name in (
+            "last_cross_scale_inhibition_mean_per_scale",
+            "last_cross_scale_inhibition_peak_per_scale",
+            "last_cross_scale_other_scale_activity_sum_per_scale",
+            "last_cross_scale_effective_factor_per_scale",
+            "last_raw_bvc_abs_mean_per_scale",
+            "last_raw_grid_abs_mean_per_scale",
+            "last_raw_grid_share_per_scale",
+            "last_balanced_bvc_abs_mean_per_scale",
+            "last_balanced_grid_abs_mean_per_scale",
+            "last_balanced_grid_share_per_scale",
+            "last_mixed_bvc_abs_mean_per_scale",
+            "last_mixed_grid_abs_mean_per_scale",
+            "last_mixed_grid_share_per_scale",
+            "last_bvc_gain_value_per_scale",
+            "last_grid_gain_value_per_scale",
+            "last_effective_grid_influence_mean_per_scale",
+            "last_bvc_afferent_source_sum_per_scale",
+            "last_grid_afferent_source_sum_per_scale",
+            "last_bvc_afferent_inhibition_mean_per_scale",
+            "last_grid_afferent_inhibition_mean_per_scale",
+            "last_afferent_inhibition_mean_per_scale",
+        ):
+            attr_value = getattr(self, attr_name, None)
+            if (
+                attr_value is None
+                or attr_value.shape != (self.num_scales,)
+                or attr_value.device != self.device
+            ):
+                setattr(
+                    self,
+                    attr_name,
+                    torch.zeros(self.num_scales, dtype=self.dtype, device=self.device),
+                )
+            else:
+                setattr(
+                    self,
+                    attr_name,
+                    attr_value.to(device=self.device, dtype=self.dtype),
+                )
 
 
     def reset_activations(self):
@@ -609,6 +683,7 @@ class UnifiedMultiScalePCN:
             self.post_competition_expression_ema.fill_(1.0)
         self._clear_gaussian_post_competition_diagnostics()
         self._clear_learning_post_competition_diagnostics()
+        self._clear_cross_scale_inhibition_diagnostics()
 
 
         if getattr(self, "hd_cell_trace", None) is not None:
@@ -1209,7 +1284,7 @@ class UnifiedMultiScalePCN:
         afferent_excitation: Optional[torch.Tensor] = None,
         learning_active: Optional[bool] = None,
         from_activations: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+        ) -> torch.Tensor:
         """
         Compute Gaussian cross-scale inhibition based on boundary proximity.
 
@@ -1230,6 +1305,12 @@ class UnifiedMultiScalePCN:
         # Initialize inhibition tensor
         _ref_activations = from_activations if from_activations is not None else self.place_cell_activations
         inhibition = torch.zeros_like(_ref_activations)
+        other_scale_activity_sums = torch.zeros(
+            self.num_scales, dtype=self.dtype, device=self.device
+        )
+        effective_factors = torch.zeros(
+            self.num_scales, dtype=self.dtype, device=self.device
+        )
         scale_preference = self.compute_scale_preference(proximity)
         effective_scale_preference = self._soften_scale_preference(
             scale_preference,
@@ -1253,12 +1334,25 @@ class UnifiedMultiScalePCN:
                     other_scales_activation += torch.sum(
                         _ref_activations[other_start:other_end]
                     )
+            other_scale_activity_sums[scale_idx] = torch.nan_to_num(
+                other_scales_activation,
+                nan=0.0,
+                posinf=0.0,
+                neginf=0.0,
+            )
 
             # Apply inhibition to this scale
             gamma_cross_scale = self.gamma_cross_per_scale[scale_idx]
+            effective_factor = self._compute_effective_cross_scale_factor(mismatch)
+            effective_factors[scale_idx] = torch.nan_to_num(
+                effective_factor,
+                nan=0.0,
+                posinf=0.0,
+                neginf=0.0,
+            )
             scale_inhibition = (
                 gamma_cross_scale
-                * mismatch
+                * effective_factor
                 * other_scales_activation
             )
             if use_soft_overlap:
@@ -1281,7 +1375,65 @@ class UnifiedMultiScalePCN:
 
             inhibition[start:end] = scale_inhibition
 
+        self.last_cross_scale_other_scale_activity_sum_per_scale = (
+            other_scale_activity_sums.detach()
+        )
+        self.last_cross_scale_effective_factor_per_scale = (
+            effective_factors.detach()
+        )
+
         return inhibition
+
+    def _compute_effective_cross_scale_factor(
+        self,
+        mismatch: torch.Tensor,
+    ) -> torch.Tensor:
+        """Blend in a fixed baseline cross-scale inhibition term when enabled."""
+        if not bool(getattr(self, "cross_scale_inhibition_base_enabled", False)):
+            return mismatch
+
+        lambda_base = torch.as_tensor(
+            getattr(self, "cross_scale_inhibition_lambda_base", 0.20),
+            dtype=mismatch.dtype,
+            device=mismatch.device,
+        )
+        return lambda_base + ((1.0 - lambda_base) * mismatch)
+
+    def _clear_cross_scale_inhibition_diagnostics(self) -> None:
+        """Reset live cross-scale inhibition telemetry for the current step."""
+        zeros = torch.zeros(self.num_scales, dtype=self.dtype, device=self.device)
+        self.last_cross_scale_inhibition_mean_per_scale = zeros.clone()
+        self.last_cross_scale_inhibition_peak_per_scale = zeros.clone()
+        self.last_cross_scale_other_scale_activity_sum_per_scale = zeros.clone()
+        self.last_cross_scale_effective_factor_per_scale = zeros.clone()
+
+    def _update_cross_scale_inhibition_applied_diagnostics(
+        self,
+        cross_scale_inhibition: torch.Tensor,
+    ) -> None:
+        """Store per-scale stats for the final live cross-scale inhibition term."""
+        mean_values = torch.zeros(self.num_scales, dtype=self.dtype, device=self.device)
+        peak_values = torch.zeros(self.num_scales, dtype=self.dtype, device=self.device)
+        for scale_idx in range(self.num_scales):
+            start = self.scale_boundaries[scale_idx]
+            end = self.scale_boundaries[scale_idx + 1]
+            block = cross_scale_inhibition[start:end]
+            if block.numel() == 0:
+                continue
+            mean_values[scale_idx] = torch.nan_to_num(
+                torch.mean(block),
+                nan=0.0,
+                posinf=0.0,
+                neginf=0.0,
+            )
+            peak_values[scale_idx] = torch.nan_to_num(
+                torch.max(torch.abs(block)),
+                nan=0.0,
+                posinf=0.0,
+                neginf=0.0,
+            )
+        self.last_cross_scale_inhibition_mean_per_scale = mean_values.detach()
+        self.last_cross_scale_inhibition_peak_per_scale = peak_values.detach()
 
     def _compute_scale_evidence_from_activations(
         self,
@@ -1492,6 +1644,7 @@ class UnifiedMultiScalePCN:
         effective_grid_influence_per_pc = self._effective_grid_influence_per_pc(
             learning_active=learning_active
         )
+        self._clear_cross_scale_inhibition_diagnostics()
 
         # --- Scale gate ---
         scale_preference = self.compute_scale_preference(proximity)
@@ -1523,6 +1676,7 @@ class UnifiedMultiScalePCN:
 
         # --- BVC afferent inhibition ---
         bvc_afferent_inhibition = self._buf_bvc_inh.zero_()
+        bvc_source_sums = torch.zeros(self.num_scales, dtype=self.dtype, device=self.device)
         for scale_idx in range(self.num_scales):
             pc_start = self.scale_boundaries[scale_idx]
             pc_end = self.scale_boundaries[scale_idx + 1]
@@ -1532,6 +1686,7 @@ class UnifiedMultiScalePCN:
                 torch.sum(self.bvc_activations[bvc_start:bvc_end])
                 * bvc_gain_per_pc[pc_start]
             )
+            bvc_source_sums[scale_idx] = bvc_sum_scale
             gamma_pb_scale = self.gamma_pb_per_pc[pc_start]
             if apply_scale_gate:
                 bvc_afferent_inhibition[pc_start:pc_end] = (
@@ -1544,6 +1699,7 @@ class UnifiedMultiScalePCN:
 
         # --- Grid afferent inhibition ---
         grid_afferent_inhibition = self._buf_grid_inh.zero_()
+        grid_source_sums = torch.zeros(self.num_scales, dtype=self.dtype, device=self.device)
         if self.grid_cell_activations is not None:
             for scale_idx in range(self.num_scales):
                 pc_start = self.scale_boundaries[scale_idx]
@@ -1554,6 +1710,7 @@ class UnifiedMultiScalePCN:
                     torch.sum(self.grid_cell_activations[gc_start:gc_end])
                     * grid_gain_per_pc[pc_start]
                 )
+                grid_source_sums[scale_idx] = gc_sum_scale
                 gamma_pg_scale = self.gamma_pg_per_pc[pc_start]
                 if apply_scale_gate:
                     grid_afferent_inhibition[pc_start:pc_end] = (
@@ -1567,6 +1724,13 @@ class UnifiedMultiScalePCN:
         afferent_inhibition = (
             (1.0 - effective_grid_influence_per_pc) * bvc_afferent_inhibition
             + effective_grid_influence_per_pc * grid_afferent_inhibition
+        )
+        self._update_afferent_inhibition_scale_diagnostics(
+            bvc_source_sums=bvc_source_sums,
+            grid_source_sums=grid_source_sums,
+            bvc_afferent_inhibition=bvc_afferent_inhibition,
+            grid_afferent_inhibition=grid_afferent_inhibition,
+            afferent_inhibition=afferent_inhibition,
         )
 
         # --- Within-scale recurrent inhibition (uses current_activations, not self.*) ---
@@ -1588,6 +1752,7 @@ class UnifiedMultiScalePCN:
                 from_activations=current_activations,
             )
             cross_scale_inhibition = learning_cross_scale_coupling * cross_scale_inhibition
+        self._update_cross_scale_inhibition_applied_diagnostics(cross_scale_inhibition)
 
         self.last_post_competition_scale_evidence = None
         self.last_post_competition_scale_theta = None
@@ -1745,6 +1910,17 @@ class UnifiedMultiScalePCN:
             )
             for s in range(self.num_scales)
         ]).detach()
+        self._update_live_afferent_scale_diagnostics(
+            raw_bvc_afferent_excitation=raw_bvc_afferent_excitation,
+            raw_grid_afferent_excitation=raw_grid_afferent_excitation,
+            balanced_bvc_afferent_excitation=bvc_afferent_excitation,
+            balanced_grid_afferent_excitation=grid_afferent_excitation,
+            mixed_bvc_afferent_excitation=mixed_bvc_afferent_excitation,
+            mixed_grid_afferent_excitation=mixed_grid_afferent_excitation,
+            bvc_gain_per_pc=bvc_gain_per_pc,
+            grid_gain_per_pc=grid_gain_per_pc,
+            effective_grid_influence_per_pc=effective_grid_influence_per_pc,
+        )
 
         # Delegate to the shared stateless competition stage.
         new_activations, new_activation_update, expression_state = (
@@ -2045,7 +2221,7 @@ class UnifiedMultiScalePCN:
                 if scale_idx < len(getattr(self, "last_grid_gain_per_scale", []))
                 else {"bvc_gain": 1.0, "grid_gain": 1.0}
             )
-            per_scale.append({
+            item = {
                 "scale_idx": int(scale_idx),
                 "raw_bvc_abs_mean": raw_bvc_block_abs,
                 "raw_grid_abs_mean": raw_grid_block_abs,
@@ -2061,7 +2237,8 @@ class UnifiedMultiScalePCN:
                 "effective_grid_influence": float(
                     torch.mean(effective_grid_influence_per_pc[pc_start:pc_end]).item()
                 ),
-            })
+            }
+            per_scale.append(item)
 
         self.last_grid_diagnostics = {
             "raw_bvc_abs_mean": raw_bvc_abs_mean,
@@ -2192,6 +2369,104 @@ class UnifiedMultiScalePCN:
             "gc_max": gc_max,
             "per_scale": per_scale,
         }
+
+    def _update_live_afferent_scale_diagnostics(
+        self,
+        raw_bvc_afferent_excitation: torch.Tensor,
+        raw_grid_afferent_excitation: torch.Tensor,
+        balanced_bvc_afferent_excitation: torch.Tensor,
+        balanced_grid_afferent_excitation: torch.Tensor,
+        mixed_bvc_afferent_excitation: torch.Tensor,
+        mixed_grid_afferent_excitation: torch.Tensor,
+        bvc_gain_per_pc: torch.Tensor,
+        grid_gain_per_pc: torch.Tensor,
+        effective_grid_influence_per_pc: torch.Tensor,
+    ) -> None:
+        """Cache per-scale afferent-drive components for later diagnostics persistence."""
+        raw_bvc_abs = torch.zeros(self.num_scales, dtype=self.dtype, device=self.device)
+        raw_grid_abs = torch.zeros(self.num_scales, dtype=self.dtype, device=self.device)
+        raw_grid_share = torch.zeros(self.num_scales, dtype=self.dtype, device=self.device)
+        balanced_bvc_abs = torch.zeros(self.num_scales, dtype=self.dtype, device=self.device)
+        balanced_grid_abs = torch.zeros(self.num_scales, dtype=self.dtype, device=self.device)
+        balanced_grid_share = torch.zeros(self.num_scales, dtype=self.dtype, device=self.device)
+        mixed_bvc_abs = torch.zeros(self.num_scales, dtype=self.dtype, device=self.device)
+        mixed_grid_abs = torch.zeros(self.num_scales, dtype=self.dtype, device=self.device)
+        mixed_grid_share = torch.zeros(self.num_scales, dtype=self.dtype, device=self.device)
+        bvc_gain_values = torch.zeros(self.num_scales, dtype=self.dtype, device=self.device)
+        grid_gain_values = torch.zeros(self.num_scales, dtype=self.dtype, device=self.device)
+        effective_grid_influence = torch.zeros(self.num_scales, dtype=self.dtype, device=self.device)
+
+        for scale_idx in range(self.num_scales):
+            pc_start = self.scale_boundaries[scale_idx]
+            pc_end = self.scale_boundaries[scale_idx + 1]
+
+            raw_bvc_block = raw_bvc_afferent_excitation[pc_start:pc_end]
+            raw_grid_block = raw_grid_afferent_excitation[pc_start:pc_end]
+            balanced_bvc_block = balanced_bvc_afferent_excitation[pc_start:pc_end]
+            balanced_grid_block = balanced_grid_afferent_excitation[pc_start:pc_end]
+            mixed_bvc_block = mixed_bvc_afferent_excitation[pc_start:pc_end]
+            mixed_grid_block = mixed_grid_afferent_excitation[pc_start:pc_end]
+
+            raw_bvc_abs[scale_idx] = torch.mean(torch.abs(raw_bvc_block))
+            raw_grid_abs[scale_idx] = torch.mean(torch.abs(raw_grid_block))
+            balanced_bvc_abs[scale_idx] = torch.mean(torch.abs(balanced_bvc_block))
+            balanced_grid_abs[scale_idx] = torch.mean(torch.abs(balanced_grid_block))
+            mixed_bvc_abs[scale_idx] = torch.mean(torch.abs(mixed_bvc_block))
+            mixed_grid_abs[scale_idx] = torch.mean(torch.abs(mixed_grid_block))
+
+            raw_denom = raw_bvc_abs[scale_idx] + raw_grid_abs[scale_idx] + 1e-12
+            balanced_denom = balanced_bvc_abs[scale_idx] + balanced_grid_abs[scale_idx] + 1e-12
+            mixed_denom = mixed_bvc_abs[scale_idx] + mixed_grid_abs[scale_idx] + 1e-12
+            raw_grid_share[scale_idx] = raw_grid_abs[scale_idx] / raw_denom
+            balanced_grid_share[scale_idx] = balanced_grid_abs[scale_idx] / balanced_denom
+            mixed_grid_share[scale_idx] = mixed_grid_abs[scale_idx] / mixed_denom
+
+            bvc_gain_values[scale_idx] = torch.mean(bvc_gain_per_pc[pc_start:pc_end])
+            grid_gain_values[scale_idx] = torch.mean(grid_gain_per_pc[pc_start:pc_end])
+            effective_grid_influence[scale_idx] = torch.mean(
+                effective_grid_influence_per_pc[pc_start:pc_end]
+            )
+
+        self.last_raw_bvc_abs_mean_per_scale = raw_bvc_abs.detach().clone()
+        self.last_raw_grid_abs_mean_per_scale = raw_grid_abs.detach().clone()
+        self.last_raw_grid_share_per_scale = raw_grid_share.detach().clone()
+        self.last_balanced_bvc_abs_mean_per_scale = balanced_bvc_abs.detach().clone()
+        self.last_balanced_grid_abs_mean_per_scale = balanced_grid_abs.detach().clone()
+        self.last_balanced_grid_share_per_scale = balanced_grid_share.detach().clone()
+        self.last_mixed_bvc_abs_mean_per_scale = mixed_bvc_abs.detach().clone()
+        self.last_mixed_grid_abs_mean_per_scale = mixed_grid_abs.detach().clone()
+        self.last_mixed_grid_share_per_scale = mixed_grid_share.detach().clone()
+        self.last_bvc_gain_value_per_scale = bvc_gain_values.detach().clone()
+        self.last_grid_gain_value_per_scale = grid_gain_values.detach().clone()
+        self.last_effective_grid_influence_mean_per_scale = (
+            effective_grid_influence.detach().clone()
+        )
+
+    def _update_afferent_inhibition_scale_diagnostics(
+        self,
+        bvc_source_sums: torch.Tensor,
+        grid_source_sums: torch.Tensor,
+        bvc_afferent_inhibition: torch.Tensor,
+        grid_afferent_inhibition: torch.Tensor,
+        afferent_inhibition: torch.Tensor,
+    ) -> None:
+        """Cache the exact afferent inhibition ingredients used this step."""
+        bvc_inh_means = torch.zeros(self.num_scales, dtype=self.dtype, device=self.device)
+        grid_inh_means = torch.zeros(self.num_scales, dtype=self.dtype, device=self.device)
+        afferent_inh_means = torch.zeros(self.num_scales, dtype=self.dtype, device=self.device)
+
+        for scale_idx in range(self.num_scales):
+            pc_start = self.scale_boundaries[scale_idx]
+            pc_end = self.scale_boundaries[scale_idx + 1]
+            bvc_inh_means[scale_idx] = torch.mean(bvc_afferent_inhibition[pc_start:pc_end])
+            grid_inh_means[scale_idx] = torch.mean(grid_afferent_inhibition[pc_start:pc_end])
+            afferent_inh_means[scale_idx] = torch.mean(afferent_inhibition[pc_start:pc_end])
+
+        self.last_bvc_afferent_source_sum_per_scale = bvc_source_sums.detach().clone()
+        self.last_grid_afferent_source_sum_per_scale = grid_source_sums.detach().clone()
+        self.last_bvc_afferent_inhibition_mean_per_scale = bvc_inh_means.detach().clone()
+        self.last_grid_afferent_inhibition_mean_per_scale = grid_inh_means.detach().clone()
+        self.last_afferent_inhibition_mean_per_scale = afferent_inh_means.detach().clone()
 
     def get_activations_per_scale(self) -> List[torch.Tensor]:
         """
@@ -2677,13 +2952,16 @@ class UnifiedMultiScalePCN:
                 pc_start = self.scale_boundaries[scale_idx]
                 pc_end = self.scale_boundaries[scale_idx + 1]
                 mismatch = 1.0 - effective_scale_preference[scale_idx]
+                effective_factor = self._compute_effective_cross_scale_factor(
+                    mismatch
+                )
                 other_scales_activation = (
                     total_scale_sum - scale_sums_tensor[:, scale_idx : scale_idx + 1]
                 )
                 scale_inhibition = (
                     preplay_cross_scale_inhibition_scale
                     * self.gamma_cross_per_scale[scale_idx]
-                    * mismatch
+                    * effective_factor
                     * other_scales_activation
                 )
                 if bool(ctx["use_soft_overlap"]):
@@ -3017,16 +3295,62 @@ class UnifiedMultiScalePCN:
             joint_prob_matrix * scale_sampling_variances,
             dim=0,
         ) / direction_denoms
-
-        joint_direction_scores = direction_probs * macro_returns
-        best_dir_idx = torch.argmax(joint_direction_scores)
-        expected_value = torch.sum(direction_probs * macro_returns)
-        combined_vector = torch.sum(
-            direction_probs.unsqueeze(1) * macro_vectors,
-            dim=0,
+        direction_probs = torch.nan_to_num(
+            direction_probs,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+        direction_probs = torch.clamp(direction_probs, min=0.0)
+        direction_prob_sum = torch.sum(direction_probs)
+        direction_prob_sum_valid = bool(torch.isfinite(direction_prob_sum).item())
+        if (not direction_prob_sum_valid) or float(direction_prob_sum.item()) <= eps:
+            direction_probs = torch.full(
+                (n_hd,),
+                1.0 / float(max(1, n_hd)),
+                dtype=self.dtype,
+                device=self.device,
+            )
+        else:
+            direction_probs = direction_probs / torch.clamp(direction_prob_sum, min=eps)
+        macro_returns = torch.nan_to_num(
+            macro_returns,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+        macro_vectors = torch.nan_to_num(
+            macro_vectors,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+        sampling_variances = torch.nan_to_num(
+            sampling_variances,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
         )
 
-        if torch.norm(combined_vector) < 1e-6:
+        joint_direction_scores = torch.nan_to_num(
+            direction_probs * macro_returns,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+        best_dir_idx = torch.argmax(joint_direction_scores)
+        expected_value = torch.sum(direction_probs * macro_returns)
+        combined_vector = torch.nan_to_num(
+            torch.sum(
+                direction_probs.unsqueeze(1) * macro_vectors,
+                dim=0,
+            ),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+
+        if float(torch.norm(combined_vector).item()) < 1e-6:
             best_angle = -best_dir_idx.to(dtype=self.dtype) * (
                 2.0 * np.pi / float(n_hd)
             )

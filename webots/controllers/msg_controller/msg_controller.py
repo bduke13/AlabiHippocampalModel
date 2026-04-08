@@ -116,8 +116,14 @@ def save_trial_parameters(world_name, trial_id, mode, **kwargs):
             "phase1_revisit_cosine_threshold": kwargs.get("phase1_revisit_cosine_threshold", 0.90),
             "phase1_revisit_window": kwargs.get("phase1_revisit_window", 200),
             "defer_experience_build_until_phase2_end": kwargs.get("defer_experience_build_until_phase2_end", True),
-            "goal_map_replay_timesteps": kwargs.get("goal_map_replay_timesteps", 12),
-            "goal_map_paper_replay_tau": kwargs.get("goal_map_paper_replay_tau", 8.0),
+            "goal_map_replay_timesteps": kwargs.get("goal_map_replay_timesteps", 10),
+            "goal_map_paper_replay_tau": kwargs.get("goal_map_paper_replay_tau", 4.0),
+            "goal_map_goal_replay_timesteps": kwargs.get(
+                "goal_map_goal_replay_timesteps", 8
+            ),
+            "goal_map_goal_replay_tau": kwargs.get(
+                "goal_map_goal_replay_tau", 4.0
+            ),
             "goal_map_goal_replay_event_count": kwargs.get(
                 "goal_map_goal_replay_event_count", 4
             ),
@@ -240,6 +246,7 @@ def save_trial_parameters(world_name, trial_id, mode, **kwargs):
             "pcn_soft_cross_inhibition_scale": kwargs.get("pcn_soft_cross_inhibition_scale", 0.35),
             "pcn_soft_cross_inhibition_scale_in_learning": kwargs.get("pcn_soft_cross_inhibition_scale_in_learning", 0.25),
             "pcn_soft_cross_inhibition_cap": kwargs.get("pcn_soft_cross_inhibition_cap", 0.75),
+            "pcn_cross_scale_inhibition_base_enabled": kwargs.get("pcn_cross_scale_inhibition_base_enabled", True),
         },
         "path_planning_parameters": {
             "optimal_path_distance": kwargs.get("optimal_path_distance"),
@@ -288,7 +295,7 @@ SCALES_DEFS_GRID = {
         "scale_index": 0,
         "name": "small",
         "sigma_pc_s": 1.0,  # Place field size for scale-dependent reward propagation
-        "num_pc": 1000,
+        "num_pc": 650,
         "sigma_r": 0.5, #0.5
         "sigma_theta": 1,
         "rcn_learning_rate": 0.1,
@@ -303,14 +310,14 @@ SCALES_DEFS_GRID = {
         "gamma_pb": 0.35,  # BVC-to-place afferent inhibition strength
         # Unified multi-scale parameters
         "d_opt": 0.7,  # Optimal boundary distance for this scale
-        "gamma_cross": 0.6,  # Reduced to ease scale starvation
+        "gamma_cross": 1.0,  # Reduced to ease scale starvation
         "sigma_tune_k": SIGMA_TUNE_K_SMALL,  # sigma_tune = sigma_tune_k * sigma_r
         # Optional per-cell d_opt jitter (biological heterogeneity around scale default)
         "d_opt_jitter_std": 0.15,
         "d_opt_jitter_range": 0.3,
         "d_opt_jitter_seed": 5000,
         # Grid cell parameters
-        "grid_influence": 0.3, # 0.3
+        "grid_influence": 0.25, # 0.3
         "learning_grid_influence_scale": 1.0,
         "gamma_pg": 0.35, # 0.3
         "grid_balance_modalities": False,
@@ -349,31 +356,31 @@ SCALES_DEFS_GRID = {
         "scale_index": 1,
         "name": "medium",
         "sigma_pc_s": 1.5,  # Place field size for scale-dependent reward propagation
-        "num_pc": 500,
+        "num_pc": 300,
         "sigma_r": 1.0, #2
         "sigma_theta": 3,
         "rcn_learning_rate": 0.1,
         # BVC parameters
-        "num_bvc_per_dir": 50,  # Number of BVCs per head direction
+        "num_bvc_per_dir": 80,  # Number of BVCs per head direction
         # Weight initialization parameters
         "w_in_init_ratio": 0.25,  # Proportion of BVC->PC weights active initially
         "w_grid_init_ratio": 0.3,  # Proportion of GC->PC weights active initially
         "w_grid_init_strategy": "balanced_modules",
         # Place cell recurrent inhibition parameters
-        "gamma_pp": 0.7,  # Place-to-place recurrent inhibition strength
-        "gamma_pb": 0.3,  # BVC-to-place afferent inhibition strength
+        "gamma_pp": 0.9,  # Place-to-place recurrent inhibition strength 0.7 default
+        "gamma_pb": 0.3,  # BVC-to-place afferent inhibition strength, 0.3 default
         # Unified multi-scale parameters
         "d_opt": 2.5,
-        "gamma_cross": 0.65,
+        "gamma_cross": 1.5,
         "sigma_tune_k": SIGMA_TUNE_K_MEDIUM,  # sigma_tune = sigma_tune_k * sigma_r
         # Optional per-cell d_opt jitter (biological heterogeneity around scale default)
         "d_opt_jitter_std": 0.35,
         "d_opt_jitter_range": 0.7,
         "d_opt_jitter_seed": 5001,
         # Grid cell parameters
-        "grid_influence": 0.35, #0.35
+        "grid_influence": 0.25, #0.35
         "learning_grid_influence_scale": 1.0,
-        "gamma_pg": 0.35,
+        "gamma_pg": 0.36, # default 0.35
         "grid_balance_modalities": False,
         "grid_balance_ema": 0.95,
         "grid_balance_min_gain": 0.1,
@@ -410,7 +417,7 @@ SCALES_DEFS_GRID = {
         "scale_index": 2,
         "name": "large",
         "sigma_pc_s": 3.0,  # Place field size for scale-dependent reward propagation
-        "num_pc": 250,
+        "num_pc": 150,
         "sigma_r": 1.5, # 2.0
         "sigma_theta": 5,
         "rcn_learning_rate": 0.1,
@@ -421,11 +428,11 @@ SCALES_DEFS_GRID = {
         "w_grid_init_ratio": 0.2,  # Proportion of GC->PC weights active initially
         "w_grid_init_strategy": "balanced_modules",
         # Place cell recurrent inhibition parameters
-        "gamma_pp": 0.7,  # Place-to-place recurrent inhibition strength
-        "gamma_pb": 0.25,  # BVC-to-place afferent inhibition strength
+        "gamma_pp": 1.1,  # Place-to-place recurrent inhibition strength / 0.7 default
+        "gamma_pb": 0.28,  # BVC-to-place afferent inhibition strength / 0.25 default
         # Unified multi-scale parameters
         "d_opt": 5.0,
-        "gamma_cross": 0.7,
+        "gamma_cross": 2.0,
         "sigma_tune_k": SIGMA_TUNE_K_LARGE,  # sigma_tune = sigma_tune_k * sigma_r
         # Optional per-cell d_opt jitter (biological heterogeneity around scale default)
         "d_opt_jitter_std": 0.45,
@@ -437,9 +444,9 @@ SCALES_DEFS_GRID = {
         "large_scale_plateau_onset_sigma": 1.0,
         "large_scale_plateau_full_sigma": 2.0,
         # Grid cell parameters
-        "grid_influence": 0.35,  # 0.35
+        "grid_influence": 0.25,  # 0.35
         "learning_grid_influence_scale": 1.0,
-        "gamma_pg": 0.25,
+        "gamma_pg": 0.28, # 0.25 default
         "grid_balance_modalities": False,
         "grid_balance_ema": 0.95,
         "grid_balance_min_gain": 0.1,
@@ -802,6 +809,9 @@ def _run_single_trial(bot, mode, trial_id, start_loc, target_goal, stats_collect
         pcn_soft_cross_inhibition_scale=trial_kwargs.get("pcn_soft_cross_inhibition_scale", 0.35),
         pcn_soft_cross_inhibition_scale_in_learning=trial_kwargs.get("pcn_soft_cross_inhibition_scale_in_learning", 0.25),
         pcn_soft_cross_inhibition_cap=trial_kwargs.get("pcn_soft_cross_inhibition_cap", 0.75),
+        pcn_cross_scale_inhibition_base_enabled=trial_kwargs.get(
+            "pcn_cross_scale_inhibition_base_enabled", True
+        ),
         use_bvc_context_modulation=trial_kwargs.get("use_bvc_context_modulation", True),
         bvc_context_gain_floor=trial_kwargs.get("bvc_context_gain_floor", 0.0),
         bvc_context_gain_strength=trial_kwargs.get("bvc_context_gain_strength", 1.0),
@@ -840,6 +850,12 @@ def _run_single_trial(bot, mode, trial_id, start_loc, target_goal, stats_collect
         ),
         goal_map_paper_replay_tau=trial_kwargs.get(
             "goal_map_paper_replay_tau", goal_map_paper_replay_tau
+        ),
+        goal_map_goal_replay_timesteps=trial_kwargs.get(
+            "goal_map_goal_replay_timesteps", goal_map_goal_replay_timesteps
+        ),
+        goal_map_goal_replay_tau=trial_kwargs.get(
+            "goal_map_goal_replay_tau", goal_map_goal_replay_tau
         ),
         goal_map_goal_replay_event_count=trial_kwargs.get(
             "goal_map_goal_replay_event_count", goal_map_goal_replay_event_count
@@ -1396,6 +1412,9 @@ def _run_learn_coverage_auto_trials(mode, **kwargs):
             pcn_soft_cross_inhibition_scale=prepared_kwargs.get("pcn_soft_cross_inhibition_scale", 0.35),
             pcn_soft_cross_inhibition_scale_in_learning=prepared_kwargs.get("pcn_soft_cross_inhibition_scale_in_learning", 0.25),
             pcn_soft_cross_inhibition_cap=prepared_kwargs.get("pcn_soft_cross_inhibition_cap", 0.75),
+            pcn_cross_scale_inhibition_base_enabled=prepared_kwargs.get(
+                "pcn_cross_scale_inhibition_base_enabled", True
+            ),
             gcn_scale_invariant=prepared_kwargs.get("gcn_scale_invariant", True),
             gcn_use_adaptive_minmax=prepared_kwargs.get("gcn_use_adaptive_minmax", False),
             goal_assoc_unique_topk=prepared_kwargs.get("goal_assoc_unique_topk", 16),
@@ -1417,6 +1436,12 @@ def _run_learn_coverage_auto_trials(mode, **kwargs):
             ),
             goal_map_paper_replay_tau=prepared_kwargs.get(
                 "goal_map_paper_replay_tau", goal_map_paper_replay_tau
+            ),
+            goal_map_goal_replay_timesteps=prepared_kwargs.get(
+                "goal_map_goal_replay_timesteps", goal_map_goal_replay_timesteps
+            ),
+            goal_map_goal_replay_tau=prepared_kwargs.get(
+                "goal_map_goal_replay_tau", goal_map_goal_replay_tau
             ),
             goal_map_goal_replay_event_count=prepared_kwargs.get(
                 "goal_map_goal_replay_event_count", goal_map_goal_replay_event_count
@@ -1890,6 +1915,9 @@ def _run_plotting_auto_trials(mode, **kwargs):
             pcn_soft_cross_inhibition_scale=kwargs.get("pcn_soft_cross_inhibition_scale", 0.35),
             pcn_soft_cross_inhibition_scale_in_learning=kwargs.get("pcn_soft_cross_inhibition_scale_in_learning", 0.25),
             pcn_soft_cross_inhibition_cap=kwargs.get("pcn_soft_cross_inhibition_cap", 0.75),
+            pcn_cross_scale_inhibition_base_enabled=kwargs.get(
+                "pcn_cross_scale_inhibition_base_enabled", True
+            ),
             gcn_scale_invariant=kwargs.get("gcn_scale_invariant", True),
             gcn_use_adaptive_minmax=kwargs.get("gcn_use_adaptive_minmax", False),
             goal_assoc_unique_topk=kwargs.get("goal_assoc_unique_topk", 16),
@@ -1911,6 +1939,12 @@ def _run_plotting_auto_trials(mode, **kwargs):
             ),
             goal_map_paper_replay_tau=kwargs.get(
                 "goal_map_paper_replay_tau", goal_map_paper_replay_tau
+            ),
+            goal_map_goal_replay_timesteps=kwargs.get(
+                "goal_map_goal_replay_timesteps", goal_map_goal_replay_timesteps
+            ),
+            goal_map_goal_replay_tau=kwargs.get(
+                "goal_map_goal_replay_tau", goal_map_goal_replay_tau
             ),
             goal_map_goal_replay_event_count=kwargs.get(
                 "goal_map_goal_replay_event_count", goal_map_goal_replay_event_count
@@ -2225,6 +2259,9 @@ def _run_plotting_coverage_auto_trials(mode, **kwargs):
             pcn_soft_cross_inhibition_scale=kwargs.get("pcn_soft_cross_inhibition_scale", 0.35),
             pcn_soft_cross_inhibition_scale_in_learning=kwargs.get("pcn_soft_cross_inhibition_scale_in_learning", 0.25),
             pcn_soft_cross_inhibition_cap=kwargs.get("pcn_soft_cross_inhibition_cap", 0.75),
+            pcn_cross_scale_inhibition_base_enabled=kwargs.get(
+                "pcn_cross_scale_inhibition_base_enabled", True
+            ),
             gcn_scale_invariant=kwargs.get("gcn_scale_invariant", True),
             gcn_use_adaptive_minmax=kwargs.get("gcn_use_adaptive_minmax", False),
             goal_assoc_unique_topk=kwargs.get("goal_assoc_unique_topk", 16),
@@ -2246,6 +2283,12 @@ def _run_plotting_coverage_auto_trials(mode, **kwargs):
             ),
             goal_map_paper_replay_tau=kwargs.get(
                 "goal_map_paper_replay_tau", goal_map_paper_replay_tau
+            ),
+            goal_map_goal_replay_timesteps=kwargs.get(
+                "goal_map_goal_replay_timesteps", goal_map_goal_replay_timesteps
+            ),
+            goal_map_goal_replay_tau=kwargs.get(
+                "goal_map_goal_replay_tau", goal_map_goal_replay_tau
             ),
             goal_map_goal_replay_event_count=kwargs.get(
                 "goal_map_goal_replay_event_count", goal_map_goal_replay_event_count
@@ -2557,8 +2600,10 @@ if __name__ == "__main__":
     phase1_revisit_cosine_threshold = 0.90   # mean revisit cosine similarity required
     phase1_revisit_window = 200        # rolling window size for revisit cosine history
     defer_experience_build_until_phase2_end = True
-    goal_map_replay_timesteps = 12
-    goal_map_paper_replay_tau = 8.0
+    goal_map_replay_timesteps = 10
+    goal_map_paper_replay_tau = 4.0
+    goal_map_goal_replay_timesteps = 8
+    goal_map_goal_replay_tau = 4.0
     goal_map_goal_replay_event_count = 4
     goal_map_checkpoint_replay_event_count = 3
     goal_map_replay_event_merge_gap_steps = 3
@@ -2642,6 +2687,7 @@ if __name__ == "__main__":
     pcn_soft_cross_inhibition_scale = 0.35
     pcn_soft_cross_inhibition_scale_in_learning = 0.25
     pcn_soft_cross_inhibition_cap = 0.75
+    pcn_cross_scale_inhibition_base_enabled = True
     goal_map_spatial_obstacle_block = True
     goal_map_obstacle_margin = 0.05
     goal_map_checkpoint_mode = "multi_route_memory_graph"
@@ -3075,6 +3121,9 @@ if __name__ == "__main__":
         MODE_PARAMS[_mode_name]["pcn_soft_cross_inhibition_scale"] = pcn_soft_cross_inhibition_scale
         MODE_PARAMS[_mode_name]["pcn_soft_cross_inhibition_scale_in_learning"] = pcn_soft_cross_inhibition_scale_in_learning
         MODE_PARAMS[_mode_name]["pcn_soft_cross_inhibition_cap"] = pcn_soft_cross_inhibition_cap
+        MODE_PARAMS[_mode_name]["pcn_cross_scale_inhibition_base_enabled"] = (
+            pcn_cross_scale_inhibition_base_enabled
+        )
         MODE_PARAMS[_mode_name]["gcn_scale_invariant"] = gcn_scale_invariant
         MODE_PARAMS[_mode_name]["gcn_use_adaptive_minmax"] = gcn_use_adaptive_minmax
         MODE_PARAMS[_mode_name]["goal_assoc_unique_topk"] = goal_assoc_unique_topk
@@ -3105,6 +3154,12 @@ if __name__ == "__main__":
         MODE_PARAMS[_mode_name].setdefault("defer_experience_build_until_phase2_end", defer_experience_build_until_phase2_end)
         MODE_PARAMS[_mode_name]["goal_map_replay_timesteps"] = goal_map_replay_timesteps
         MODE_PARAMS[_mode_name]["goal_map_paper_replay_tau"] = goal_map_paper_replay_tau
+        MODE_PARAMS[_mode_name]["goal_map_goal_replay_timesteps"] = (
+            goal_map_goal_replay_timesteps
+        )
+        MODE_PARAMS[_mode_name]["goal_map_goal_replay_tau"] = (
+            goal_map_goal_replay_tau
+        )
         MODE_PARAMS[_mode_name]["goal_map_goal_replay_event_count"] = (
             goal_map_goal_replay_event_count
         )

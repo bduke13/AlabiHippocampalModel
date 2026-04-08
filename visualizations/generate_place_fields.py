@@ -130,6 +130,7 @@ TOP_RANKED_FRACTION = 0.10
 TOP_RANKED_MAX_CELLS = 64
 TOP_RANKED_MIN_CELLS = 16
 LEARNING_VIEW_RESTRICT_TO_FORMED = True
+STRONG_FIELD_PERCENTILE = 50  # Only show fields with peak above this percentile of formed peaks
 SCALE_WINNER_RELATIVE_MARGIN_THRESHOLD = 0.20
 
 # Absolute paths
@@ -428,8 +429,14 @@ def _choose_top_cells(cell_indices, ranking_scores):
     return cell_indices[order[:num_to_plot]]
 
 
-def _build_winner_overlay(hmap_pcn, bin_data, cell_indices):
-    """Create a winner-take-all overlay for a chosen subset of cells."""
+def _build_winner_overlay(hmap_pcn, bin_data, cell_indices, cell_alphas=None):
+    """Create a winner-take-all overlay for a chosen subset of cells.
+
+    Args:
+        cell_alphas: Optional per-cell opacity array (0-1). When provided,
+            each cell's contribution is scaled by its alpha, letting weak
+            fields fade out while strong fields remain vivid.
+    """
     if len(cell_indices) == 0:
         return None
 
@@ -452,6 +459,13 @@ def _build_winner_overlay(hmap_pcn, bin_data, cell_indices):
     image = np.zeros((num_bins, 3), dtype=np.float32)
     nonzero = winner_idx >= 0
     image[nonzero] = normalized[nonzero, np.newaxis] * colors[winner_idx[nonzero]]
+
+    # Apply per-cell alpha scaling (dims weak fields, preserves strong ones)
+    if cell_alphas is not None:
+        per_bin_alpha = np.zeros(num_bins, dtype=np.float32)
+        per_bin_alpha[nonzero] = cell_alphas[winner_idx[nonzero]]
+        image[nonzero] *= per_bin_alpha[nonzero, np.newaxis]
+
     gridsize = bin_data["gridsize"]
     return image.reshape(gridsize, gridsize, 3).transpose(1, 0, 2)
 
@@ -926,21 +940,47 @@ def build_place_field_views(
             else:
                 meta_suffix = " [|dw_in| + |dw_grid|]"
 
+    # --- Strong-fields-only subset (percentile filter on formed peaks) ---
+    strong_threshold = float(np.percentile(formed["formed_peaks"], STRONG_FIELD_PERCENTILE))
+    strong_mask = formed["formed_peaks"] >= strong_threshold
+    strong_cells = formed_cells[strong_mask]
+    strong_peaks = formed["formed_peaks"][strong_mask]
+    strong_subset = _choose_top_cells(strong_cells, strong_peaks)
+
+    # Alpha weights for peak overlay (normalized peak -> opacity)
+    peak_alphas = None
+    if len(peak_subset) > 0:
+        peak_lookup = {
+            int(cell): float(peak)
+            for cell, peak in zip(formed_cells, formed["formed_peaks"])
+        }
+        peak_subset_peaks = np.array(
+            [peak_lookup[int(cell)] for cell in peak_subset],
+            dtype=np.float32,
+        )
+        max_peak = float(np.max(peak_subset_peaks))
+        peak_alphas = (peak_subset_peaks / max(max_peak, 1e-6)).astype(np.float32)
+        peak_alphas = np.clip(peak_alphas, 0.05, 1.0)
+
     print(
         f"  Formed fields: {len(formed_cells)} / {len(candidate_cells)} active cells; "
-        f"peak subset={len(peak_subset)}, learning subset={len(learning_subset)} by {learning_note}{meta_suffix}"
+        f"peak subset={len(peak_subset)}, learning subset={len(learning_subset)} by {learning_note}{meta_suffix}; "
+        f"strong fields (>p{STRONG_FIELD_PERCENTILE}): {len(strong_cells)} (threshold={strong_threshold:.3f})"
     )
 
     return {
         "extent": bin_data["extent"],
         "coverage_fraction": formed["coverage_fraction"],
         "coverage_mean_strength": formed["coverage_mean_strength"],
-        "peak_overlay": _build_winner_overlay(hmap_pcn, bin_data, peak_subset),
+        "peak_overlay": _build_winner_overlay(hmap_pcn, bin_data, peak_subset, cell_alphas=peak_alphas),
         "learning_overlay": _build_winner_overlay(hmap_pcn, bin_data, learning_subset),
+        "strong_overlay": _build_winner_overlay(hmap_pcn, bin_data, strong_subset),
         "formed_count": int(len(formed_cells)),
         "active_count": int(len(candidate_cells)),
         "peak_subset_count": int(len(peak_subset)),
         "learning_subset_count": int(len(learning_subset)),
+        "strong_subset_count": int(len(strong_subset)),
+        "strong_threshold": strong_threshold,
         "learning_note": learning_note,
     }
 
@@ -1023,7 +1063,7 @@ def visualize_environment(env_name):
         row_payloads.append(result)
 
     num_rows = len(row_labels)
-    num_cols = 3
+    num_cols = 4
     fig, axes = plt.subplots(num_rows, num_cols, figsize=(7 * num_cols, 6 * num_rows))
     if num_rows == 1:
         axes = np.asarray([axes])
@@ -1031,10 +1071,10 @@ def visualize_environment(env_name):
     fig.suptitle(f"{env_name} - Formed Place Fields", fontsize=16)
 
     for row_idx, (label, result) in enumerate(zip(row_labels, row_payloads)):
-        ax_cov, ax_peak, ax_learn = axes[row_idx]
+        ax_cov, ax_peak, ax_learn, ax_strong = axes[row_idx]
 
         if result is None:
-            for ax in (ax_cov, ax_peak, ax_learn):
+            for ax in (ax_cov, ax_peak, ax_learn, ax_strong):
                 ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
                 ax.set_xticks([])
                 ax.set_yticks([])
@@ -1065,7 +1105,7 @@ def visualize_environment(env_name):
         else:
             ax_peak.text(0.5, 0.5, "No peak overlay", ha="center", va="center", transform=ax_peak.transAxes)
         ax_peak.set_title(
-            f"{label}\nTop Peak-Formed Fields (n={result['peak_subset_count']})",
+            f"{label}\nTop Peak Fields, Alpha-Weighted (n={result['peak_subset_count']})",
             fontsize=13,
         )
         ax_peak.set_xlabel("X Position (m)", fontsize=11)
@@ -1083,6 +1123,19 @@ def visualize_environment(env_name):
         ax_learn.set_xlabel("X Position (m)", fontsize=11)
         ax_learn.set_ylabel("Y Position (m)", fontsize=11)
         ax_learn.grid(True, alpha=0.2)
+
+        if result.get("strong_overlay") is not None:
+            ax_strong.imshow(result["strong_overlay"], extent=extent, origin="lower")
+        else:
+            ax_strong.text(0.5, 0.5, "No strong fields", ha="center", va="center", transform=ax_strong.transAxes)
+        ax_strong.set_title(
+            f"{label}\nStrong Fields Only (n={result.get('strong_subset_count', 0)}, "
+            f">p{STRONG_FIELD_PERCENTILE}, thr={result.get('strong_threshold', 0):.3f})",
+            fontsize=13,
+        )
+        ax_strong.set_xlabel("X Position (m)", fontsize=11)
+        ax_strong.set_ylabel("Y Position (m)", fontsize=11)
+        ax_strong.grid(True, alpha=0.2)
 
     output_file = OUTPUT_DIR / f"{env_name}_place_fields.png"
     plt.tight_layout()
@@ -1357,8 +1410,8 @@ def visualize_environment(env_name):
 
                 fig_seg_pf, axes_seg_pf = plt.subplots(
                     len(segmented_labels),
-                    3,
-                    figsize=(21, 6 * len(segmented_labels)),
+                    4,
+                    figsize=(28, 6 * len(segmented_labels)),
                 )
                 if len(segmented_labels) == 1:
                     axes_seg_pf = np.asarray([axes_seg_pf])
@@ -1371,10 +1424,10 @@ def visualize_environment(env_name):
                 for row_idx, (label, result) in enumerate(
                     zip(segmented_labels, segmented_payloads)
                 ):
-                    ax_cov, ax_peak, ax_learn = axes_seg_pf[row_idx]
+                    ax_cov, ax_peak, ax_learn, ax_strong = axes_seg_pf[row_idx]
 
                     if result is None:
-                        for ax in (ax_cov, ax_peak, ax_learn):
+                        for ax in (ax_cov, ax_peak, ax_learn, ax_strong):
                             ax.text(
                                 0.5,
                                 0.5,
