@@ -141,8 +141,6 @@ def save_trial_parameters(world_name, trial_id, mode, **kwargs):
             "goal_map_path_replay_weight": kwargs.get("goal_map_path_replay_weight", 1.0),
             "goal_map_diffusion_replay_weight": kwargs.get("goal_map_diffusion_replay_weight", 0.0),
             "goal_map_experience_transition_topk": kwargs.get("goal_map_experience_transition_topk", 16),
-            "unified_reward_normalization_mode": kwargs.get("unified_reward_normalization_mode", "input_l1"),
-            "unified_goal_map_mode": kwargs.get("unified_goal_map_mode", "paper_room_local_replay"),
             "goal_map_room_normalization_mode": kwargs.get("goal_map_room_normalization_mode", "per_room_peak"),
             "goal_map_path_topk": kwargs.get("goal_map_path_topk", 16),
             "goal_map_path_decay": kwargs.get("goal_map_path_decay", 0.97),
@@ -233,19 +231,8 @@ def save_trial_parameters(world_name, trial_id, mode, **kwargs):
             "proximity_trimmed_sigma": kwargs.get("proximity_trimmed_sigma", 2.5),
             "proximity_pair_percentile": kwargs.get("proximity_pair_percentile", 25.0),
             "pcn_gate_mode": kwargs.get("pcn_gate_mode", "normal"),
-            "pcn_learning_adaptation_mode": kwargs.get("pcn_learning_adaptation_mode", "gaussian_post_competition_expression"),
             "pcn_learning_stdp_start_steps": kwargs.get("pcn_learning_stdp_start_steps", 8000),
             "pcn_learning_stop_ojas_on_stabilization": kwargs.get("pcn_learning_stop_ojas_on_stabilization", False),
-            "pcn_learning_cross_scale_coupling_start_steps": kwargs.get("pcn_learning_cross_scale_coupling_start_steps", 8000),
-            "pcn_learning_cross_scale_coupling_ramp_steps": kwargs.get("pcn_learning_cross_scale_coupling_ramp_steps", 12000),
-            "pcn_learning_cross_scale_coupling_min": kwargs.get("pcn_learning_cross_scale_coupling_min", 0.0),
-            "pcn_soft_scale_overlap": kwargs.get("pcn_soft_scale_overlap", True),
-            "pcn_soft_scale_overlap_in_learning": kwargs.get("pcn_soft_scale_overlap_in_learning", True),
-            "pcn_soft_scale_gate_floor": kwargs.get("pcn_soft_scale_gate_floor", 0.20),
-            "pcn_soft_scale_gate_floor_in_learning": kwargs.get("pcn_soft_scale_gate_floor_in_learning", 0.12),
-            "pcn_soft_cross_inhibition_scale": kwargs.get("pcn_soft_cross_inhibition_scale", 0.35),
-            "pcn_soft_cross_inhibition_scale_in_learning": kwargs.get("pcn_soft_cross_inhibition_scale_in_learning", 0.25),
-            "pcn_soft_cross_inhibition_cap": kwargs.get("pcn_soft_cross_inhibition_cap", 0.75),
             "pcn_cross_scale_inhibition_base_enabled": kwargs.get("pcn_cross_scale_inhibition_base_enabled", True),
         },
         "path_planning_parameters": {
@@ -287,7 +274,7 @@ def _steps_for_sigma(sigma_pc_s: float) -> int:
 # sigma_tune_s = sigma_tune_k_s * sigma_r_s
 SIGMA_TUNE_K_SMALL = 1.3
 SIGMA_TUNE_K_MEDIUM = 0.8
-SIGMA_TUNE_K_LARGE = 0.6
+SIGMA_TUNE_K_LARGE = 0.50 # default 0.6
 SIGMA_TUNE_K_XLARGE = 1.0
 
 SCALES_DEFS_GRID = {
@@ -318,7 +305,6 @@ SCALES_DEFS_GRID = {
         "d_opt_jitter_seed": 5000,
         # Grid cell parameters
         "grid_influence": 0.25, # 0.3
-        "learning_grid_influence_scale": 1.0,
         "gamma_pg": 0.35, # 0.3
         "grid_balance_modalities": False,
         "grid_balance_ema": 0.95,
@@ -371,7 +357,7 @@ SCALES_DEFS_GRID = {
         "gamma_pb": 0.3,  # BVC-to-place afferent inhibition strength, 0.3 default
         # Unified multi-scale parameters
         "d_opt": 2.5,
-        "gamma_cross": 1.5,
+        "gamma_cross": 1.1, # default 1.5
         "sigma_tune_k": SIGMA_TUNE_K_MEDIUM,  # sigma_tune = sigma_tune_k * sigma_r
         # Optional per-cell d_opt jitter (biological heterogeneity around scale default)
         "d_opt_jitter_std": 0.35,
@@ -379,8 +365,7 @@ SCALES_DEFS_GRID = {
         "d_opt_jitter_seed": 5001,
         # Grid cell parameters
         "grid_influence": 0.25, #0.35
-        "learning_grid_influence_scale": 1.0,
-        "gamma_pg": 0.36, # default 0.35
+        "gamma_pg": 0.37, # default 0.35
         "grid_balance_modalities": False,
         "grid_balance_ema": 0.95,
         "grid_balance_min_gain": 0.1,
@@ -432,7 +417,7 @@ SCALES_DEFS_GRID = {
         "gamma_pb": 0.28,  # BVC-to-place afferent inhibition strength / 0.25 default
         # Unified multi-scale parameters
         "d_opt": 5.0,
-        "gamma_cross": 2.0,
+        "gamma_cross": 1.5, # default 2
         "sigma_tune_k": SIGMA_TUNE_K_LARGE,  # sigma_tune = sigma_tune_k * sigma_r
         # Optional per-cell d_opt jitter (biological heterogeneity around scale default)
         "d_opt_jitter_std": 0.45,
@@ -445,7 +430,6 @@ SCALES_DEFS_GRID = {
         "large_scale_plateau_full_sigma": 2.0,
         # Grid cell parameters
         "grid_influence": 0.25,  # 0.35
-        "learning_grid_influence_scale": 1.0,
         "gamma_pg": 0.28, # 0.25 default
         "grid_balance_modalities": False,
         "grid_balance_ema": 0.95,
@@ -507,7 +491,6 @@ SCALES_DEFS_GRID = {
         "large_scale_plateau_full_sigma": 2.0,
         # Grid cell parameters
         "grid_influence": 0.35,  # 0.35
-        "learning_grid_influence_scale": 1.15,
         "gamma_pg": 0.32,
         "grid_balance_modalities": False,
         "grid_balance_ema": 0.95,
@@ -588,31 +571,19 @@ def _apply_unified_ablation_overrides(kwargs, scales):
             scale["module_scale_ratio"] = 1.0
             scale["activation_cache_size"] = 1024
             scale["activation_cache_quantization"] = 1e-4
-            scale["learning_grid_influence_scale"] = 1.0
             scale["grid_balance_modalities"] = False
         log.append("legacy_grid_runtime")
 
     if flags["ablation_disable_unified_scale_selection"]:
         prepared_kwargs["pcn_gate_mode"] = "no_gate_no_inhibition"
-        prepared_kwargs["pcn_soft_scale_overlap"] = False
-        prepared_kwargs["pcn_soft_scale_overlap_in_learning"] = False
-        prepared_kwargs["pcn_soft_scale_gate_floor"] = 0.0
-        prepared_kwargs["pcn_soft_scale_gate_floor_in_learning"] = 0.0
-        prepared_kwargs["pcn_soft_cross_inhibition_scale"] = 0.0
-        prepared_kwargs["pcn_soft_cross_inhibition_scale_in_learning"] = 0.0
-        prepared_kwargs["pcn_soft_cross_inhibition_cap"] = 0.0
         for scale in prepared_scales:
             scale["gamma_cross"] = 0.0
         log.append("disable_unified_scale_selection")
 
     if flags["ablation_disable_unified_cross_scale_learning"]:
-        prepared_kwargs["pcn_learning_cross_scale_coupling_start_steps"] = int(1e9)
-        prepared_kwargs["pcn_learning_cross_scale_coupling_ramp_steps"] = 1
-        prepared_kwargs["pcn_learning_cross_scale_coupling_min"] = 0.0
-        log.append("disable_unified_cross_scale_learning")
+        log.append("disable_unified_cross_scale_learning_deprecated")
 
     if flags["ablation_disable_unified_learning_adaptation"]:
-        prepared_kwargs["pcn_learning_adaptation_mode"] = "gaussian_post_competition_expression"
         log.append("disable_unified_learning_adaptation_deprecated")
 
     if flags["ablation_disable_unified_dopt_jitter"]:
@@ -781,34 +752,12 @@ def _run_single_trial(bot, mode, trial_id, start_loc, target_goal, stats_collect
         proximity_trimmed_sigma=trial_kwargs.get("proximity_trimmed_sigma", 2.5),
         proximity_pair_percentile=trial_kwargs.get("proximity_pair_percentile", 25.0),
         pcn_gate_mode=trial_kwargs.get("pcn_gate_mode", "normal"),
-        pcn_learning_adaptation_mode=trial_kwargs.get(
-            "pcn_learning_adaptation_mode", "gaussian_post_competition_expression"
-        ),
         pcn_learning_stdp_start_steps=trial_kwargs.get(
             "pcn_learning_stdp_start_steps", 8000
         ),
         pcn_learning_stop_ojas_on_stabilization=trial_kwargs.get(
             "pcn_learning_stop_ojas_on_stabilization", False
         ),
-        pcn_learning_cross_scale_coupling_start_steps=trial_kwargs.get(
-            "pcn_learning_cross_scale_coupling_start_steps", 8000
-        ),
-        pcn_learning_cross_scale_coupling_ramp_steps=trial_kwargs.get(
-            "pcn_learning_cross_scale_coupling_ramp_steps", 12000
-        ),
-        pcn_learning_cross_scale_coupling_min=trial_kwargs.get(
-            "pcn_learning_cross_scale_coupling_min", 0.0
-        ),
-        pcn_soft_scale_overlap=trial_kwargs.get("pcn_soft_scale_overlap", True),
-        pcn_soft_scale_overlap_in_learning=trial_kwargs.get("pcn_soft_scale_overlap_in_learning", True),
-        pcn_soft_scale_gate_floor=trial_kwargs.get("pcn_soft_scale_gate_floor", 0.20),
-        pcn_soft_scale_gate_floor_in_learning=trial_kwargs.get(
-            "pcn_soft_scale_gate_floor_in_learning",
-            pcn_soft_scale_gate_floor_in_learning,
-        ),
-        pcn_soft_cross_inhibition_scale=trial_kwargs.get("pcn_soft_cross_inhibition_scale", 0.35),
-        pcn_soft_cross_inhibition_scale_in_learning=trial_kwargs.get("pcn_soft_cross_inhibition_scale_in_learning", 0.25),
-        pcn_soft_cross_inhibition_cap=trial_kwargs.get("pcn_soft_cross_inhibition_cap", 0.75),
         pcn_cross_scale_inhibition_base_enabled=trial_kwargs.get(
             "pcn_cross_scale_inhibition_base_enabled", True
         ),
@@ -877,8 +826,6 @@ def _run_single_trial(bot, mode, trial_id, start_loc, target_goal, stats_collect
         goal_map_path_replay_weight=trial_kwargs.get("goal_map_path_replay_weight", 1.0),
         goal_map_diffusion_replay_weight=trial_kwargs.get("goal_map_diffusion_replay_weight", 0.0),
         goal_map_experience_transition_topk=trial_kwargs.get("goal_map_experience_transition_topk", 16),
-        unified_reward_normalization_mode=trial_kwargs.get("unified_reward_normalization_mode", "input_l1"),
-        unified_goal_map_mode=trial_kwargs.get("unified_goal_map_mode", "paper_room_local_replay"),
         goal_map_room_normalization_mode=trial_kwargs.get(
             "goal_map_room_normalization_mode",
             goal_map_room_normalization_mode,
@@ -1384,34 +1331,12 @@ def _run_learn_coverage_auto_trials(mode, **kwargs):
             auto_trial_name=auto_trial_name,
             num_auto_trials=num_auto_trials,
             current_auto_trial=trial_num,
-            pcn_learning_adaptation_mode=prepared_kwargs.get(
-                "pcn_learning_adaptation_mode", "gaussian_post_competition_expression"
-            ),
             pcn_learning_stdp_start_steps=prepared_kwargs.get(
                 "pcn_learning_stdp_start_steps", 8000
             ),
             pcn_learning_stop_ojas_on_stabilization=prepared_kwargs.get(
                 "pcn_learning_stop_ojas_on_stabilization", False
             ),
-            pcn_learning_cross_scale_coupling_start_steps=prepared_kwargs.get(
-                "pcn_learning_cross_scale_coupling_start_steps", 8000
-            ),
-            pcn_learning_cross_scale_coupling_ramp_steps=prepared_kwargs.get(
-                "pcn_learning_cross_scale_coupling_ramp_steps", 12000
-            ),
-            pcn_learning_cross_scale_coupling_min=prepared_kwargs.get(
-                "pcn_learning_cross_scale_coupling_min", 0.0
-            ),
-            pcn_soft_scale_overlap=prepared_kwargs.get("pcn_soft_scale_overlap", True),
-            pcn_soft_scale_overlap_in_learning=prepared_kwargs.get("pcn_soft_scale_overlap_in_learning", True),
-            pcn_soft_scale_gate_floor=prepared_kwargs.get("pcn_soft_scale_gate_floor", 0.20),
-            pcn_soft_scale_gate_floor_in_learning=prepared_kwargs.get(
-                "pcn_soft_scale_gate_floor_in_learning",
-                pcn_soft_scale_gate_floor_in_learning,
-            ),
-            pcn_soft_cross_inhibition_scale=prepared_kwargs.get("pcn_soft_cross_inhibition_scale", 0.35),
-            pcn_soft_cross_inhibition_scale_in_learning=prepared_kwargs.get("pcn_soft_cross_inhibition_scale_in_learning", 0.25),
-            pcn_soft_cross_inhibition_cap=prepared_kwargs.get("pcn_soft_cross_inhibition_cap", 0.75),
             pcn_cross_scale_inhibition_base_enabled=prepared_kwargs.get(
                 "pcn_cross_scale_inhibition_base_enabled", True
             ),
@@ -1463,8 +1388,6 @@ def _run_learn_coverage_auto_trials(mode, **kwargs):
             goal_map_path_replay_weight=prepared_kwargs.get("goal_map_path_replay_weight", 1.0),
             goal_map_diffusion_replay_weight=prepared_kwargs.get("goal_map_diffusion_replay_weight", 0.0),
             goal_map_experience_transition_topk=prepared_kwargs.get("goal_map_experience_transition_topk", 16),
-            unified_reward_normalization_mode=prepared_kwargs.get("unified_reward_normalization_mode", "input_l1"),
-            unified_goal_map_mode=prepared_kwargs.get("unified_goal_map_mode", "paper_room_local_replay"),
             goal_map_room_normalization_mode=prepared_kwargs.get(
                 "goal_map_room_normalization_mode",
                 goal_map_room_normalization_mode,
@@ -1887,34 +1810,12 @@ def _run_plotting_auto_trials(mode, **kwargs):
             auto_trial_name=auto_trial_name,
             num_auto_trials=num_auto_trials,
             current_auto_trial=trial_num,
-            pcn_learning_adaptation_mode=kwargs.get(
-                "pcn_learning_adaptation_mode", "gaussian_post_competition_expression"
-            ),
             pcn_learning_stdp_start_steps=kwargs.get(
                 "pcn_learning_stdp_start_steps", 8000
             ),
             pcn_learning_stop_ojas_on_stabilization=kwargs.get(
                 "pcn_learning_stop_ojas_on_stabilization", False
             ),
-            pcn_learning_cross_scale_coupling_start_steps=kwargs.get(
-                "pcn_learning_cross_scale_coupling_start_steps", 8000
-            ),
-            pcn_learning_cross_scale_coupling_ramp_steps=kwargs.get(
-                "pcn_learning_cross_scale_coupling_ramp_steps", 12000
-            ),
-            pcn_learning_cross_scale_coupling_min=kwargs.get(
-                "pcn_learning_cross_scale_coupling_min", 0.0
-            ),
-            pcn_soft_scale_overlap=kwargs.get("pcn_soft_scale_overlap", True),
-            pcn_soft_scale_overlap_in_learning=kwargs.get("pcn_soft_scale_overlap_in_learning", True),
-            pcn_soft_scale_gate_floor=kwargs.get("pcn_soft_scale_gate_floor", 0.20),
-            pcn_soft_scale_gate_floor_in_learning=kwargs.get(
-                "pcn_soft_scale_gate_floor_in_learning",
-                pcn_soft_scale_gate_floor_in_learning,
-            ),
-            pcn_soft_cross_inhibition_scale=kwargs.get("pcn_soft_cross_inhibition_scale", 0.35),
-            pcn_soft_cross_inhibition_scale_in_learning=kwargs.get("pcn_soft_cross_inhibition_scale_in_learning", 0.25),
-            pcn_soft_cross_inhibition_cap=kwargs.get("pcn_soft_cross_inhibition_cap", 0.75),
             pcn_cross_scale_inhibition_base_enabled=kwargs.get(
                 "pcn_cross_scale_inhibition_base_enabled", True
             ),
@@ -1966,8 +1867,6 @@ def _run_plotting_auto_trials(mode, **kwargs):
             goal_map_path_replay_weight=kwargs.get("goal_map_path_replay_weight", 1.0),
             goal_map_diffusion_replay_weight=kwargs.get("goal_map_diffusion_replay_weight", 0.0),
             goal_map_experience_transition_topk=kwargs.get("goal_map_experience_transition_topk", 16),
-            unified_reward_normalization_mode=kwargs.get("unified_reward_normalization_mode", "input_l1"),
-            unified_goal_map_mode=kwargs.get("unified_goal_map_mode", "paper_room_local_replay"),
             goal_map_room_normalization_mode=kwargs.get(
                 "goal_map_room_normalization_mode",
                 goal_map_room_normalization_mode,
@@ -2231,34 +2130,12 @@ def _run_plotting_coverage_auto_trials(mode, **kwargs):
             auto_trial_name=auto_trial_name,
             num_auto_trials=num_auto_trials,
             current_auto_trial=trial_num,
-            pcn_learning_adaptation_mode=kwargs.get(
-                "pcn_learning_adaptation_mode", "gaussian_post_competition_expression"
-            ),
             pcn_learning_stdp_start_steps=kwargs.get(
                 "pcn_learning_stdp_start_steps", 8000
             ),
             pcn_learning_stop_ojas_on_stabilization=kwargs.get(
                 "pcn_learning_stop_ojas_on_stabilization", False
             ),
-            pcn_learning_cross_scale_coupling_start_steps=kwargs.get(
-                "pcn_learning_cross_scale_coupling_start_steps", 8000
-            ),
-            pcn_learning_cross_scale_coupling_ramp_steps=kwargs.get(
-                "pcn_learning_cross_scale_coupling_ramp_steps", 12000
-            ),
-            pcn_learning_cross_scale_coupling_min=kwargs.get(
-                "pcn_learning_cross_scale_coupling_min", 0.0
-            ),
-            pcn_soft_scale_overlap=kwargs.get("pcn_soft_scale_overlap", True),
-            pcn_soft_scale_overlap_in_learning=kwargs.get("pcn_soft_scale_overlap_in_learning", True),
-            pcn_soft_scale_gate_floor=kwargs.get("pcn_soft_scale_gate_floor", 0.20),
-            pcn_soft_scale_gate_floor_in_learning=kwargs.get(
-                "pcn_soft_scale_gate_floor_in_learning",
-                pcn_soft_scale_gate_floor_in_learning,
-            ),
-            pcn_soft_cross_inhibition_scale=kwargs.get("pcn_soft_cross_inhibition_scale", 0.35),
-            pcn_soft_cross_inhibition_scale_in_learning=kwargs.get("pcn_soft_cross_inhibition_scale_in_learning", 0.25),
-            pcn_soft_cross_inhibition_cap=kwargs.get("pcn_soft_cross_inhibition_cap", 0.75),
             pcn_cross_scale_inhibition_base_enabled=kwargs.get(
                 "pcn_cross_scale_inhibition_base_enabled", True
             ),
@@ -2310,8 +2187,6 @@ def _run_plotting_coverage_auto_trials(mode, **kwargs):
             goal_map_path_replay_weight=kwargs.get("goal_map_path_replay_weight", 1.0),
             goal_map_diffusion_replay_weight=kwargs.get("goal_map_diffusion_replay_weight", 0.0),
             goal_map_experience_transition_topk=kwargs.get("goal_map_experience_transition_topk", 16),
-            unified_reward_normalization_mode=kwargs.get("unified_reward_normalization_mode", "input_l1"),
-            unified_goal_map_mode=kwargs.get("unified_goal_map_mode", "paper_room_local_replay"),
             goal_map_room_normalization_mode=kwargs.get(
                 "goal_map_room_normalization_mode",
                 goal_map_room_normalization_mode,
@@ -2541,7 +2416,7 @@ if __name__ == "__main__":
         "REBUILD_REWARD_MAP": RobotMode.REBUILD_REWARD_MAP,
     }
 
-    SELECTED_MODE = "LEARN_LOCATIONS_COVERAGE"
+    SELECTED_MODE = "EXPLOIT_LOCATIONS_RANDOM"
     td_learning = False # keep off
     corners = [[8,-8]] # start point
     dmtp_start = [-9,9]
@@ -2613,8 +2488,6 @@ if __name__ == "__main__":
     goal_map_path_replay_weight = 1.0
     goal_map_diffusion_replay_weight = 0.0
     goal_map_experience_transition_topk = 16
-    unified_reward_normalization_mode = "input_l1"
-    unified_goal_map_mode = "paper_room_local_replay"
     goal_map_room_normalization_mode = "per_room_peak"
     goal_map_path_topk = 16
     goal_map_path_decay = 0.985
@@ -2668,25 +2541,10 @@ if __name__ == "__main__":
     proximity_pair_percentile = 25.0  # used only when proximity_mode == "opposite_pair_percentile"
     # Gate mode for unified PCN: "normal", "no_gate_no_inhibition", "no_gate_with_inhibition"
     pcn_gate_mode = "normal"
-    # Unified learning-time scale adaptation:
-    # each scale competes internally first, then a smoothed Gaussian gain
-    # modulates the final expressed output and learning uses that expressed code.
-    pcn_learning_adaptation_mode = "gaussian_post_competition_expression"
     pcn_learning_stdp_start_steps = 0
     pcn_learning_stop_ojas_on_stabilization = False
-    pcn_learning_cross_scale_coupling_start_steps = 0
-    pcn_learning_cross_scale_coupling_ramp_steps = 0
-    pcn_learning_cross_scale_coupling_min = 1.0
     # Re-enable unified grid/BVC balancing after the aliasing ablation pass.
     pcn_grid_balance_modalities = False
-    # Toggle for safer adaptive overlap in the unified forward path.
-    pcn_soft_scale_overlap = True
-    pcn_soft_scale_overlap_in_learning = True
-    pcn_soft_scale_gate_floor = 0.20
-    pcn_soft_scale_gate_floor_in_learning = 0.12
-    pcn_soft_cross_inhibition_scale = 0.35
-    pcn_soft_cross_inhibition_scale_in_learning = 0.25
-    pcn_soft_cross_inhibition_cap = 0.75
     pcn_cross_scale_inhibition_base_enabled = True
     goal_map_spatial_obstacle_block = True
     goal_map_obstacle_margin = 0.05
@@ -3107,20 +2965,9 @@ if __name__ == "__main__":
         MODE_PARAMS[_mode_name]["proximity_mode"] = proximity_mode
         MODE_PARAMS[_mode_name]["proximity_pair_percentile"] = proximity_pair_percentile
         MODE_PARAMS[_mode_name]["pcn_gate_mode"] = pcn_gate_mode
-        MODE_PARAMS[_mode_name]["pcn_learning_adaptation_mode"] = pcn_learning_adaptation_mode
         MODE_PARAMS[_mode_name]["pcn_learning_stdp_start_steps"] = pcn_learning_stdp_start_steps
         MODE_PARAMS[_mode_name]["pcn_learning_stop_ojas_on_stabilization"] = pcn_learning_stop_ojas_on_stabilization
-        MODE_PARAMS[_mode_name]["pcn_learning_cross_scale_coupling_start_steps"] = pcn_learning_cross_scale_coupling_start_steps
-        MODE_PARAMS[_mode_name]["pcn_learning_cross_scale_coupling_ramp_steps"] = pcn_learning_cross_scale_coupling_ramp_steps
-        MODE_PARAMS[_mode_name]["pcn_learning_cross_scale_coupling_min"] = pcn_learning_cross_scale_coupling_min
         MODE_PARAMS[_mode_name]["pcn_grid_balance_modalities"] = pcn_grid_balance_modalities
-        MODE_PARAMS[_mode_name]["pcn_soft_scale_overlap"] = pcn_soft_scale_overlap
-        MODE_PARAMS[_mode_name]["pcn_soft_scale_overlap_in_learning"] = pcn_soft_scale_overlap_in_learning
-        MODE_PARAMS[_mode_name]["pcn_soft_scale_gate_floor"] = pcn_soft_scale_gate_floor
-        MODE_PARAMS[_mode_name]["pcn_soft_scale_gate_floor_in_learning"] = pcn_soft_scale_gate_floor_in_learning
-        MODE_PARAMS[_mode_name]["pcn_soft_cross_inhibition_scale"] = pcn_soft_cross_inhibition_scale
-        MODE_PARAMS[_mode_name]["pcn_soft_cross_inhibition_scale_in_learning"] = pcn_soft_cross_inhibition_scale_in_learning
-        MODE_PARAMS[_mode_name]["pcn_soft_cross_inhibition_cap"] = pcn_soft_cross_inhibition_cap
         MODE_PARAMS[_mode_name]["pcn_cross_scale_inhibition_base_enabled"] = (
             pcn_cross_scale_inhibition_base_enabled
         )
@@ -3177,8 +3024,6 @@ if __name__ == "__main__":
         MODE_PARAMS[_mode_name]["goal_map_path_replay_weight"] = goal_map_path_replay_weight
         MODE_PARAMS[_mode_name]["goal_map_diffusion_replay_weight"] = goal_map_diffusion_replay_weight
         MODE_PARAMS[_mode_name]["goal_map_experience_transition_topk"] = goal_map_experience_transition_topk
-        MODE_PARAMS[_mode_name]["unified_reward_normalization_mode"] = unified_reward_normalization_mode
-        MODE_PARAMS[_mode_name]["unified_goal_map_mode"] = unified_goal_map_mode
         MODE_PARAMS[_mode_name]["goal_map_room_normalization_mode"] = goal_map_room_normalization_mode
         MODE_PARAMS[_mode_name]["goal_map_path_topk"] = goal_map_path_topk
         MODE_PARAMS[_mode_name]["goal_map_path_decay"] = goal_map_path_decay
@@ -3237,12 +3082,8 @@ if __name__ == "__main__":
         MODE_PARAMS[_mode_name]["loop_prune_min_top1"] = loop_prune_min_top1
         MODE_PARAMS[_mode_name]["loop_prune_min_top1_to_top2_ratio"] = loop_prune_min_top1_to_top2_ratio
 
-    MODE_PARAMS["LEARN_LOCATIONS_ADAPTIVE"]["pcn_learning_adaptation_mode"] = "gaussian_post_competition_expression"
     MODE_PARAMS["LEARN_LOCATIONS_ADAPTIVE"]["pcn_learning_stop_ojas_on_stabilization"] = True
     MODE_PARAMS["LEARN_LOCATIONS_ADAPTIVE"]["pcn_learning_stdp_start_steps"] = 0
-    MODE_PARAMS["LEARN_LOCATIONS_ADAPTIVE"]["pcn_learning_cross_scale_coupling_start_steps"] = 0
-    MODE_PARAMS["LEARN_LOCATIONS_ADAPTIVE"]["pcn_learning_cross_scale_coupling_ramp_steps"] = 0
-    MODE_PARAMS["LEARN_LOCATIONS_ADAPTIVE"]["pcn_learning_cross_scale_coupling_min"] = 1.0
 
     if SELECTED_MODE not in MODE_PARAMS or SELECTED_MODE not in MODES_MAP:
         print("Invalid mode selected.")

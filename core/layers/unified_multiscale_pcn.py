@@ -55,13 +55,7 @@ class UnifiedMultiScalePCN:
         gamma_cross: Union[float, List[float]] = 0.35,  # Cross-scale inhibition strength
         sigma_tune: float = 1.5,    # Backward-compatible fallback
         gate_mode: str = "normal",  # "normal" | "no_gate_no_inhibition" | "no_gate_with_inhibition"
-        soft_scale_overlap: bool = False,
-        soft_scale_overlap_in_learning: bool = True,
-        learning_adaptation_mode: str = "gaussian_post_competition_expression",
         learning_stdp_start_steps: int = 8000,
-        learning_cross_scale_coupling_start_steps: int = 8000,
-        learning_cross_scale_coupling_ramp_steps: int = 12000,
-        learning_cross_scale_coupling_min: float = 0.0,
         enable_correlation_weighting: bool = True,
         correlation_window: int = 100,
         correlation_update_freq: int = 10,
@@ -79,13 +73,7 @@ class UnifiedMultiScalePCN:
         tau_hd: float = 0.1,
         enable_connection_decay: bool = True,
         connection_decay_rate: float = 1e-5,
-        soft_scale_gate_floor: float = 0.20,
-        soft_scale_gate_floor_in_learning: Optional[float] = None,
-        soft_cross_inhibition_scale: float = 0.35,
-        soft_cross_inhibition_scale_in_learning: Optional[float] = None,
-        soft_cross_inhibition_cap: float = 0.75,
         cross_scale_inhibition_base_enabled: bool = True,
-        post_competition_expression_power: float = 1.0,
         use_bvc_context_modulation: bool = True,
         bvc_context_gain_floor: float = 0.15,
         bvc_context_gain_strength: float = 1.0,
@@ -246,25 +234,7 @@ class UnifiedMultiScalePCN:
         assert gate_mode in ("normal", "no_gate_no_inhibition", "no_gate_with_inhibition"), \
             f"Unknown gate_mode '{gate_mode}'"
         self.gate_mode = gate_mode
-        self.soft_scale_overlap = bool(soft_scale_overlap)
-        self.soft_scale_overlap_in_learning = bool(soft_scale_overlap_in_learning)
-        learning_adaptation_mode = str(learning_adaptation_mode).strip().lower()
-        if learning_adaptation_mode != "gaussian_post_competition_expression":
-            raise ValueError(
-                "UnifiedMultiScalePCN now only supports "
-                "'gaussian_post_competition_expression'."
-            )
-        self.learning_adaptation_mode = learning_adaptation_mode
         self.learning_stdp_start_steps = int(max(0, learning_stdp_start_steps))
-        self.learning_cross_scale_coupling_start_steps = int(
-            max(0, learning_cross_scale_coupling_start_steps)
-        )
-        self.learning_cross_scale_coupling_ramp_steps = int(
-            max(0, learning_cross_scale_coupling_ramp_steps)
-        )
-        self.learning_cross_scale_coupling_min = float(
-            min(1.0, max(0.0, learning_cross_scale_coupling_min))
-        )
         self.enable_correlation_weighting = bool(enable_correlation_weighting)
         self.correlation_window = int(max(10, correlation_window))
         self.correlation_update_freq = int(max(1, correlation_update_freq))
@@ -291,29 +261,10 @@ class UnifiedMultiScalePCN:
             min(0.999999, max(0.0, connection_decay_rate))
         )
         self.learning_step_count = int(getattr(self, "learning_step_count", 0))
-        self.soft_scale_gate_floor = float(min(0.95, max(0.0, soft_scale_gate_floor)))
-        if soft_scale_gate_floor_in_learning is None:
-            soft_scale_gate_floor_in_learning = min(self.soft_scale_gate_floor, 0.08)
-        self.soft_scale_gate_floor_in_learning = float(
-            min(0.95, max(0.0, soft_scale_gate_floor_in_learning))
-        )
-        self.soft_cross_inhibition_scale = float(max(0.0, soft_cross_inhibition_scale))
-        if soft_cross_inhibition_scale_in_learning is None:
-            soft_cross_inhibition_scale_in_learning = min(
-                self.soft_cross_inhibition_scale, 0.25
-            )
-        self.soft_cross_inhibition_scale_in_learning = float(
-            max(0.0, soft_cross_inhibition_scale_in_learning)
-        )
-        self.soft_cross_inhibition_cap = float(max(0.0, soft_cross_inhibition_cap))
         self.cross_scale_inhibition_base_enabled = bool(
             cross_scale_inhibition_base_enabled
         )
         self.cross_scale_inhibition_lambda_base = 0.20
-        self.post_competition_expression_power = float(
-            max(1.0, post_competition_expression_power)
-        )
-        self.post_competition_expression_ema_decay = float(0.90)
 
         self.alpha_pb = np.sqrt(0.5)
         self.grid_influence = float(torch.mean(self.grid_influence_per_pc).item())
@@ -549,8 +500,6 @@ class UnifiedMultiScalePCN:
             self.stdp_learning_rate = 0.01
         if not hasattr(self, "tau_hd"):
             self.tau_hd = 0.1
-        if not hasattr(self, "post_competition_expression_power"):
-            self.post_competition_expression_power = 1.0
         if not hasattr(self, "cross_scale_inhibition_base_enabled"):
             self.cross_scale_inhibition_base_enabled = True
         else:
@@ -620,18 +569,6 @@ class UnifiedMultiScalePCN:
             self.strength_update_counter = 0
         if not hasattr(self, "strength_update_frequency"):
             self.strength_update_frequency = 10
-        if (
-            not hasattr(self, "post_competition_expression_ema")
-            or self.post_competition_expression_ema.shape != (self.num_scales,)
-            or self.post_competition_expression_ema.device != self.device
-        ):
-            self.post_competition_expression_ema = torch.ones(
-                self.num_scales, dtype=self.dtype, device=self.device
-            )
-        else:
-            self.post_competition_expression_ema = self.post_competition_expression_ema.to(
-                device=self.device, dtype=self.dtype
-            )
         for attr_name in (
             "last_cross_scale_inhibition_mean_per_scale",
             "last_cross_scale_inhibition_peak_per_scale",
@@ -679,10 +616,6 @@ class UnifiedMultiScalePCN:
         self.place_cell_activations.zero_()
         self.activation_update.zero_()
         self.place_cell_trace = None
-        if hasattr(self, "post_competition_expression_ema"):
-            self.post_competition_expression_ema.fill_(1.0)
-        self._clear_gaussian_post_competition_diagnostics()
-        self._clear_learning_post_competition_diagnostics()
         self._clear_cross_scale_inhibition_diagnostics()
 
 
@@ -865,17 +798,6 @@ class UnifiedMultiScalePCN:
             dtype=self.dtype,
             device=self.device,
         )
-        self.learning_grid_influence_scale_per_pc = torch.cat(
-            [
-                torch.full(
-                    (cfg["num_pc"],),
-                    float(max(0.0, cfg.get("learning_grid_influence_scale", 1.0))),
-                    dtype=self.dtype,
-                    device=self.device,
-                )
-                for cfg in self.scale_configs
-            ]
-        )
         needs_reset = (
             not hasattr(self, "grid_balance_bvc_ema")
             or self.grid_balance_bvc_ema.numel() != self.num_scales
@@ -906,45 +828,6 @@ class UnifiedMultiScalePCN:
         """Return whether the online activation path is currently in learning mode."""
         return bool(self.enable_ojas or self.enable_stdp)
 
-    def _use_soft_scale_overlap(self, learning_active: Optional[bool] = None) -> bool:
-        """Resolve whether softened overlap should be applied for the current mode."""
-        if not bool(getattr(self, "soft_scale_overlap", False)):
-            return False
-        if learning_active is None:
-            learning_active = self._is_learning_active()
-        if learning_active and not bool(getattr(self, "soft_scale_overlap_in_learning", False)):
-            return False
-        return True
-
-    def _compute_learning_cross_scale_coupling(
-        self,
-        learning_active: Optional[bool] = None,
-    ) -> float:
-        """
-        Smoothly ramp cross-scale coupling from a mostly within-scale regime to
-        full coupling as fields stabilize.
-        """
-        if learning_active is None:
-            learning_active = self._is_learning_active()
-        if not learning_active:
-            return 1.0
-
-        start = int(getattr(self, "learning_cross_scale_coupling_start_steps", 0))
-        ramp = int(getattr(self, "learning_cross_scale_coupling_ramp_steps", 0))
-        min_coupling = float(
-            getattr(self, "learning_cross_scale_coupling_min", 0.0)
-        )
-        step = int(getattr(self, "learning_step_count", 0))
-
-        if step <= start:
-            return min_coupling
-        if ramp <= 0:
-            return 1.0
-
-        alpha = float(min(1.0, max(0.0, (step - start) / max(ramp, 1))))
-        alpha = alpha * alpha * (3.0 - 2.0 * alpha)
-        return min_coupling + ((1.0 - min_coupling) * alpha)
-
     def _is_stdp_learning_active(
         self,
         learning_active: Optional[bool] = None,
@@ -964,23 +847,9 @@ class UnifiedMultiScalePCN:
         self,
         learning_active: Optional[bool] = None,
     ) -> torch.Tensor:
-        """
-        Return the grid/BVC mixing vector for the current mode.
-
-        During learning we can modestly boost GC influence so place-field formation
-        retains more conjunctive anti-aliasing power, while keeping exploit/readout
-        closer to the configured base mixture.
-        """
-        if learning_active is None:
-            learning_active = self._is_learning_active()
-        if not learning_active:
-            return self.grid_influence_per_pc
-
-        scale = getattr(self, "learning_grid_influence_scale_per_pc", None)
-        if scale is None:
-            return self.grid_influence_per_pc
-        scale = scale.to(device=self.device, dtype=self.dtype)
-        return torch.clamp(self.grid_influence_per_pc * scale, min=0.0, max=1.0)
+        """Return the configured grid/BVC mixing vector."""
+        _ = learning_active
+        return self.grid_influence_per_pc
 
     def _initialize_grid_block_weights(
         self,
@@ -1254,30 +1123,6 @@ class UnifiedMultiScalePCN:
             return None
         return self.expand_scale_values_to_pc(self.last_scale_preference)
 
-    def _soften_scale_preference(
-        self,
-        preference: torch.Tensor,
-        learning_active: Optional[bool] = None,
-    ) -> torch.Tensor:
-        """
-        Convert strict scale preference into a softer overlap-friendly gate.
-
-        The preferred scale remains strongest, but non-preferred scales keep a
-        non-zero floor so the unified code does not collapse into a near
-        winner-take-all partition of the environment.
-        """
-        if not self._use_soft_scale_overlap(learning_active=learning_active):
-            return preference
-        floor_value = (
-            self.soft_scale_gate_floor_in_learning
-            if bool(learning_active)
-            else self.soft_scale_gate_floor
-        )
-        floor = torch.as_tensor(
-            floor_value, dtype=preference.dtype, device=preference.device
-        )
-        return floor + ((1.0 - floor) * preference)
-
     def compute_cross_scale_inhibition(
         self,
         proximity: float,
@@ -1312,12 +1157,7 @@ class UnifiedMultiScalePCN:
             self.num_scales, dtype=self.dtype, device=self.device
         )
         scale_preference = self.compute_scale_preference(proximity)
-        effective_scale_preference = self._soften_scale_preference(
-            scale_preference,
-            learning_active=learning_active,
-        )
-        use_soft_overlap = self._use_soft_scale_overlap(learning_active=learning_active)
-
+        effective_scale_preference = scale_preference
         # For each scale, compute how inappropriate the current distance is
         for scale_idx in range(self.num_scales):
             start = self.scale_boundaries[scale_idx]
@@ -1355,24 +1195,6 @@ class UnifiedMultiScalePCN:
                 * effective_factor
                 * other_scales_activation
             )
-            if use_soft_overlap:
-                scale_factor = (
-                    float(getattr(self, "soft_cross_inhibition_scale_in_learning", 0.25))
-                    if bool(learning_active)
-                    else float(getattr(self, "soft_cross_inhibition_scale", 0.35))
-                )
-                scale_inhibition = (
-                    scale_factor
-                    * scale_inhibition
-                )
-                if afferent_excitation is not None:
-                    cap_ratio = float(getattr(self, "soft_cross_inhibition_cap", 0.0))
-                    if cap_ratio > 0.0:
-                        cap = cap_ratio * torch.clamp(
-                            afferent_excitation[start:end], min=0.0
-                        )
-                        scale_inhibition = torch.minimum(scale_inhibition, cap)
-
             inhibition[start:end] = scale_inhibition
 
         self.last_cross_scale_other_scale_activity_sum_per_scale = (
@@ -1435,169 +1257,6 @@ class UnifiedMultiScalePCN:
         self.last_cross_scale_inhibition_mean_per_scale = mean_values.detach()
         self.last_cross_scale_inhibition_peak_per_scale = peak_values.detach()
 
-    def _compute_scale_evidence_from_activations(
-        self,
-        activations: torch.Tensor,
-        topk_mean_k: int = 1,
-    ) -> torch.Tensor:
-        """
-        Summarize post-competition evidence for each scale.
-
-        By default each scale reports the strength of its strongest currently
-        supported cell. When `topk_mean_k > 1`, the evidence becomes the mean of
-        the top-k active cells in that scale, which is more stable than a raw
-        single-cell maximum.
-        """
-        evidence = torch.zeros(
-            self.num_scales, dtype=activations.dtype, device=activations.device
-        )
-        k_req = int(max(1, topk_mean_k))
-        for scale_idx in range(self.num_scales):
-            start = self.scale_boundaries[scale_idx]
-            end = self.scale_boundaries[scale_idx + 1]
-            block = activations[start:end]
-            if block.numel() > 0:
-                if k_req <= 1:
-                    evidence[scale_idx] = torch.max(block)
-                else:
-                    positive = block[block > 0]
-                    source = positive if positive.numel() > 0 else block
-                    k = min(k_req, int(source.numel()))
-                    evidence[scale_idx] = torch.mean(torch.topk(source, k=k).values)
-        return evidence
-
-    def _expand_scale_pair_values_to_pc_matrix(
-        self,
-        scale_pair_values: torch.Tensor,
-    ) -> torch.Tensor:
-        """Expand a scale×scale matrix into a per-PC block matrix."""
-        pair_mask = torch.zeros(
-            (self.num_pc_total, self.num_pc_total),
-            dtype=scale_pair_values.dtype,
-            device=scale_pair_values.device,
-        )
-        for src_scale_idx in range(self.num_scales):
-            src_start = self.scale_boundaries[src_scale_idx]
-            src_end = self.scale_boundaries[src_scale_idx + 1]
-            for dst_scale_idx in range(self.num_scales):
-                weight = float(scale_pair_values[src_scale_idx, dst_scale_idx].item())
-                if abs(weight) <= 1e-12:
-                    continue
-                dst_start = self.scale_boundaries[dst_scale_idx]
-                dst_end = self.scale_boundaries[dst_scale_idx + 1]
-                pair_mask[src_start:src_end, dst_start:dst_end] = weight
-        return pair_mask
-
-    def _build_post_competition_recurrent_mask(self) -> torch.Tensor:
-        """Allow STDP for within-scale and adjacent-scale pairs (0↔1, 1↔2).
-
-        Non-adjacent pairs (e.g. 0↔2) are blocked because the Gaussian
-        eligibility competition makes those scales too dissimilar to
-        meaningfully co-activate at the same location.
-        """
-        mask = self._get_within_scale_block_mask().clone()
-        # Open adjacent-scale blocks
-        for s in range(self.num_scales - 1):
-            s0_start = self.scale_boundaries[s]
-            s0_end = self.scale_boundaries[s + 1]
-            s1_start = self.scale_boundaries[s + 1]
-            s1_end = self.scale_boundaries[s + 2]
-            mask[s0_start:s0_end, s1_start:s1_end] = 1.0
-            mask[s1_start:s1_end, s0_start:s0_end] = 1.0
-        return mask
-
-    def _clear_gaussian_post_competition_diagnostics(self) -> None:
-        """Clear Gaussian post-competition telemetry when the mechanism is inactive."""
-        self.last_gaussian_post_competition_scale_preference = None
-        self.last_gaussian_post_competition_raw_gain = None
-        self.last_gaussian_post_competition_gain = None
-        self.last_gaussian_post_competition_pair_weights = None
-
-    def _clear_learning_post_competition_diagnostics(self) -> None:
-        """Clear learning-only post-competition telemetry when inactive."""
-        self.last_learning_post_competition_alpha = None
-        self.last_learning_post_competition_eligibility_scale = None
-        self.last_learning_post_competition_mean_gain = None
-        self.last_learning_post_competition_survivor_fraction = None
-        self.last_learning_post_competition_survivor_count = None
-
-    def _compute_learning_gaussian_post_competition_expression_state(
-        self,
-        proximity: float,
-    ) -> Dict[str, torch.Tensor]:
-        """
-        Build a learning-only Gaussian post-competition eligibility state.
-
-        Each scale first completes its own within-scale competition. After that,
-        Gaussian boundary preference is used only to decide whether a scale is
-        eligible to remain expressed during learning. The Gaussian score is
-        sharpened, smoothed with the dedicated post-competition EMA, normalized,
-        and then converted into a smooth saturating scale-level eligibility:
-
-            raw_gain_s = G_s(d)^kappa / max_r G_r(d)^kappa
-            eligibility_s = 1 - (1 - gain_s)^kappa
-
-        All PCs within a scale receive the same eligibility factor. Activation
-        structure within an eligible scale is therefore set entirely by afferent
-        drive and competition, not by Gaussian per-cell amplitude modulation.
-        """
-        self._ensure_learning_caches()
-
-        scale_preference = self.compute_scale_preference(proximity)
-        pref_eps = torch.clamp(scale_preference, min=1e-6)
-        power_value = float(
-            max(1e-6, getattr(self, "post_competition_expression_power", 1.0))
-        )
-        power = torch.as_tensor(power_value, dtype=self.dtype, device=self.device)
-        sharpened = torch.pow(pref_eps, power)
-        raw_gain_scale = sharpened / torch.clamp(torch.max(sharpened), min=1e-6)
-
-        ema_decay = float(
-            min(
-                0.999999,
-                max(0.0, getattr(self, "post_competition_expression_ema_decay", 0.90)),
-            )
-        )
-        self.post_competition_expression_ema.mul_(ema_decay).add_(
-            raw_gain_scale * (1.0 - ema_decay)
-        )
-        gain_scale = self.post_competition_expression_ema / torch.clamp(
-            torch.max(self.post_competition_expression_ema), min=1e-6
-        )
-        gain_scale = torch.clamp(gain_scale, min=0.0, max=1.0)
-        eligibility_scale = 1.0 - torch.pow(
-            torch.clamp(1.0 - gain_scale, min=0.0, max=1.0),
-            power,
-        )
-        eligibility_scale = torch.clamp(eligibility_scale, min=0.0, max=1.0)
-        eligibility_per_pc = self.expand_scale_values_to_pc(eligibility_scale)
-
-        recurrent_mask = self._build_post_competition_recurrent_mask()
-
-        self.last_gaussian_post_competition_scale_preference = scale_preference.detach()
-        self.last_gaussian_post_competition_raw_gain = raw_gain_scale.detach()
-        self.last_gaussian_post_competition_gain = gain_scale.detach()
-        self.last_gaussian_post_competition_pair_weights = (
-            (gain_scale.unsqueeze(1) * gain_scale.unsqueeze(0)).detach()
-        )
-        self.last_learning_post_competition_alpha = power_value
-        self.last_learning_post_competition_eligibility_scale = (
-            eligibility_scale.detach()
-        )
-        self.last_learning_post_competition_mean_gain = float(
-            torch.mean(eligibility_scale).item()
-        )
-        self.last_learning_post_competition_survivor_fraction = None
-        self.last_learning_post_competition_survivor_count = None
-        return {
-            "scale_preference": scale_preference,
-            "raw_gain_scale": raw_gain_scale,
-            "gain_scale": gain_scale,
-            "eligibility_scale": eligibility_scale,
-            "eligibility_per_pc": eligibility_per_pc,
-            "recurrent_mask": recurrent_mask,
-        }
-
     def _apply_competition_stage(
         self,
         afferent_excitation: torch.Tensor,
@@ -1615,8 +1274,8 @@ class UnifiedMultiScalePCN:
         afferent/recurrent/cross-scale inhibition, the IIR update, and normalization.
         Reads current_activations for inhibition terms instead of self.place_cell_activations,
         and uses activation_update_in as the IIR state instead of self.activation_update.
-        Returns (new_activations, new_activation_update, expression_state) without
-        modifying any model state.
+        Returns (new_activations, new_activation_update) without modifying any
+        model state.
 
         Args:
             afferent_excitation: Pre-computed PC-space afferent drive (N,).
@@ -1632,9 +1291,6 @@ class UnifiedMultiScalePCN:
         Returns:
             new_activations: Reconstructed place-cell state (N,).
             new_activation_update: Updated IIR integrator state (N,).
-            expression_state: Dict from learning-only Gaussian post-competition
-                eligibility, or None. Caller needs this for the STDP
-                recurrent-learning mask.
         """
         if bvc_gain_per_pc is None:
             bvc_gain_per_pc = self._buf_ones
@@ -1652,27 +1308,6 @@ class UnifiedMultiScalePCN:
         self.last_scale_preference = scale_preference.detach()
         self.last_scale_preference_per_pc = scale_preference_per_pc.detach()
         self.last_proximity = float(proximity)
-        effective_scale_preference_per_pc = self._soften_scale_preference(
-            scale_preference_per_pc,
-            learning_active=learning_active,
-        )
-        self.last_learning_adaptation_mode = "gaussian_post_competition_expression"
-        learning_cross_scale_coupling = self._compute_learning_cross_scale_coupling(
-            learning_active=learning_active
-        )
-        self.last_learning_cross_scale_coupling = float(learning_cross_scale_coupling)
-
-        expression_state = None
-
-        # --- Scale gating (recall only) ---
-        # During learning, Gaussian scale preference does not gate excitation,
-        # inhibition, or the IIR integrator.  Competition relies solely on
-        # post-competition expression.  g_scale is only meaningful in recall
-        # with gate_mode == "normal".
-        apply_scale_gate = (not learning_active) and (self.gate_mode == "normal")
-        if apply_scale_gate:
-            g_scale = effective_scale_preference_per_pc
-            afferent_excitation = g_scale * afferent_excitation
 
         # --- BVC afferent inhibition ---
         bvc_afferent_inhibition = self._buf_bvc_inh.zero_()
@@ -1688,14 +1323,9 @@ class UnifiedMultiScalePCN:
             )
             bvc_source_sums[scale_idx] = bvc_sum_scale
             gamma_pb_scale = self.gamma_pb_per_pc[pc_start]
-            if apply_scale_gate:
-                bvc_afferent_inhibition[pc_start:pc_end] = (
-                    g_scale[pc_start:pc_end] * gamma_pb_scale * bvc_sum_scale
-                )
-            else:
-                bvc_afferent_inhibition[pc_start:pc_end] = (
-                    gamma_pb_scale * bvc_sum_scale
-                )
+            bvc_afferent_inhibition[pc_start:pc_end] = (
+                gamma_pb_scale * bvc_sum_scale
+            )
 
         # --- Grid afferent inhibition ---
         grid_afferent_inhibition = self._buf_grid_inh.zero_()
@@ -1712,14 +1342,9 @@ class UnifiedMultiScalePCN:
                 )
                 grid_source_sums[scale_idx] = gc_sum_scale
                 gamma_pg_scale = self.gamma_pg_per_pc[pc_start]
-                if apply_scale_gate:
-                    grid_afferent_inhibition[pc_start:pc_end] = (
-                        g_scale[pc_start:pc_end] * gamma_pg_scale * gc_sum_scale
-                    )
-                else:
-                    grid_afferent_inhibition[pc_start:pc_end] = (
-                        gamma_pg_scale * gc_sum_scale
-                    )
+                grid_afferent_inhibition[pc_start:pc_end] = (
+                    gamma_pg_scale * gc_sum_scale
+                )
 
         afferent_inhibition = (
             (1.0 - effective_grid_influence_per_pc) * bvc_afferent_inhibition
@@ -1751,11 +1376,7 @@ class UnifiedMultiScalePCN:
                 learning_active=learning_active,
                 from_activations=current_activations,
             )
-            cross_scale_inhibition = learning_cross_scale_coupling * cross_scale_inhibition
         self._update_cross_scale_inhibition_applied_diagnostics(cross_scale_inhibition)
-
-        self.last_post_competition_scale_evidence = None
-        self.last_post_competition_scale_theta = None
 
         # --- IIR update (stateless: operates on activation_update_in) ---
         activation_update = activation_update_in + self.tau_p * (
@@ -1765,38 +1386,11 @@ class UnifiedMultiScalePCN:
             - recurrent_inhibition
             - cross_scale_inhibition
         )
-        if apply_scale_gate:
-            activation_update = activation_update * g_scale
 
         # --- Nonlinearity ---
         new_activations = torch.tanh(torch.relu(activation_update))
 
-        # --- Post-competition expression ---
-        # Learning uses a Gaussian-derived scale-level eligibility mask only.
-        # Recall/preplay bypass Gaussian post-competition expression entirely.
-        # if learning_active:
-        #     expression_state = (
-        #         self._compute_learning_gaussian_post_competition_expression_state(
-        #             proximity=proximity,
-        #         )
-        #     )
-        #     activation_update = (
-        #         activation_update * expression_state["eligibility_per_pc"]
-        #     )
-        #     new_activations = (
-        #         new_activations * expression_state["eligibility_per_pc"]
-        #     )
-        # else:
-        #     expression_state = None
-        #     self._clear_gaussian_post_competition_diagnostics()
-        #     self._clear_learning_post_competition_diagnostics()
-        # --- Post-competition expression ---
-        # Disabled: no learning-time Gaussian eligibility masking.
-        expression_state = None
-        self._clear_gaussian_post_competition_diagnostics()
-        self._clear_learning_post_competition_diagnostics()
-
-        return new_activations, activation_update, expression_state
+        return new_activations, activation_update
 
     def get_place_cell_activations(
         self,
@@ -1923,7 +1517,7 @@ class UnifiedMultiScalePCN:
         )
 
         # Delegate to the shared stateless competition stage.
-        new_activations, new_activation_update, expression_state = (
+        new_activations, new_activation_update = (
             self._apply_competition_stage(
                 afferent_excitation=afferent_excitation,
                 proximity=proximity,
@@ -1998,12 +1592,7 @@ class UnifiedMultiScalePCN:
             recurrent_visibility_mask = self._get_recurrent_visibility_mask()
             recurrent_learning_mask = None
             if learning_active:
-                if expression_state is not None:
-                    recurrent_learning_mask = expression_state["recurrent_mask"]
-                else:
-                    recurrent_learning_mask = self._get_learning_recurrent_update_mask(
-                        float(self.last_learning_cross_scale_coupling)
-                    )
+                recurrent_learning_mask = recurrent_visibility_mask
 
             active_mask = (
                 gated_pc_activations > floor
@@ -2254,108 +1843,6 @@ class UnifiedMultiScalePCN:
             "effective_grid_influence": float(
                 torch.mean(effective_grid_influence_per_pc).item()
             ),
-            "learning_adaptation_mode": str(
-                getattr(
-                    self,
-                    "last_learning_adaptation_mode",
-                    "gaussian_post_competition_expression",
-                )
-            ),
-            "gaussian_post_competition_scale_preference": (
-                getattr(self, "last_gaussian_post_competition_scale_preference", None)
-                .detach()
-                .cpu()
-                .tolist()
-                if getattr(self, "last_gaussian_post_competition_scale_preference", None) is not None
-                else None
-            ),
-            "gaussian_post_competition_raw_gain": (
-                getattr(self, "last_gaussian_post_competition_raw_gain", None)
-                .detach()
-                .cpu()
-                .tolist()
-                if getattr(self, "last_gaussian_post_competition_raw_gain", None) is not None
-                else None
-            ),
-            "gaussian_post_competition_gain": (
-                getattr(self, "last_gaussian_post_competition_gain", None)
-                .detach()
-                .cpu()
-                .tolist()
-                if getattr(self, "last_gaussian_post_competition_gain", None) is not None
-                else None
-            ),
-            "gaussian_post_competition_pair_weights": (
-                getattr(self, "last_gaussian_post_competition_pair_weights", None)
-                .detach()
-                .cpu()
-                .tolist()
-                if getattr(self, "last_gaussian_post_competition_pair_weights", None) is not None
-                else None
-            ),
-            "learning_post_competition_alpha": (
-                float(getattr(self, "last_learning_post_competition_alpha", 0.0))
-                if getattr(self, "last_learning_post_competition_alpha", None) is not None
-                else None
-            ),
-            "learning_post_competition_mean_gain": (
-                (
-                    getattr(self, "last_learning_post_competition_mean_gain", None)
-                    .detach()
-                    .cpu()
-                    .tolist()
-                    if isinstance(
-                        getattr(self, "last_learning_post_competition_mean_gain", None),
-                        torch.Tensor,
-                    )
-                    else float(getattr(self, "last_learning_post_competition_mean_gain", 0.0))
-                )
-                if getattr(self, "last_learning_post_competition_mean_gain", None) is not None
-                else None
-            ),
-            "learning_post_competition_eligibility_scale": (
-                getattr(self, "last_learning_post_competition_eligibility_scale", None)
-                .detach()
-                .cpu()
-                .tolist()
-                if getattr(self, "last_learning_post_competition_eligibility_scale", None) is not None
-                else None
-            ),
-            "learning_post_competition_survivor_fraction": (
-                (
-                    getattr(self, "last_learning_post_competition_survivor_fraction", None)
-                    .detach()
-                    .cpu()
-                    .tolist()
-                    if isinstance(
-                        getattr(self, "last_learning_post_competition_survivor_fraction", None),
-                        torch.Tensor,
-                    )
-                    else float(
-                        getattr(self, "last_learning_post_competition_survivor_fraction", 0.0)
-                    )
-                )
-                if getattr(self, "last_learning_post_competition_survivor_fraction", None) is not None
-                else None
-            ),
-            "learning_post_competition_survivor_count": (
-                (
-                    getattr(self, "last_learning_post_competition_survivor_count", None)
-                    .detach()
-                    .cpu()
-                    .tolist()
-                    if isinstance(
-                        getattr(self, "last_learning_post_competition_survivor_count", None),
-                        torch.Tensor,
-                    )
-                    else int(getattr(self, "last_learning_post_competition_survivor_count", 0))
-                )
-                if getattr(self, "last_learning_post_competition_survivor_count", None) is not None
-                else None
-            ),
-            "learning_cross_scale_coupling": float(
-                getattr(self, "last_learning_cross_scale_coupling", 1.0)
-            ),
             "learning_stdp_active": bool(
                 getattr(self, "last_learning_stdp_active", True)
             ),
@@ -2482,20 +1969,6 @@ class UnifiedMultiScalePCN:
             activations_per_scale.append(self.place_cell_activations[start:end])
         return activations_per_scale
 
-    def _get_preplay_scale_gate(self) -> Optional[torch.Tensor]:
-        """
-        Return the gate used during unified preplay.
-
-        This mirrors the online activation path: downstream replay/preplay
-        should use the segmented post-competition expression gate rather than
-        the older raw scale-preference signal.
-        """
-        gate = self.get_segmented_expression_gate_per_pc()
-        if gate is None:
-            return None
-        gate = gate.to(device=self.device, dtype=self.dtype)
-        return torch.clamp(gate, min=0.0, max=1.0)
-
     def _get_recurrent_visibility_mask(self) -> Optional[torch.Tensor]:
         """Return recurrent visibility mask on this module's device/dtype if set."""
         mask = getattr(self, "recurrent_visibility_mask", None)
@@ -2523,23 +1996,6 @@ class UnifiedMultiScalePCN:
                 mask[start:end, start:end] = 1.0
             self.within_scale_block_mask = mask
         return mask.to(device=self.device, dtype=self.dtype)
-
-    def _get_learning_recurrent_update_mask(
-        self,
-        cross_scale_coupling: float,
-    ) -> torch.Tensor:
-        """
-        Return a recurrent update mask that is block-diagonal early in learning
-        and gradually admits cross-scale updates as coupling ramps up.
-        """
-        if cross_scale_coupling >= 0.999999:
-            return torch.ones(
-                (self.num_pc_total, self.num_pc_total),
-                dtype=self.dtype,
-                device=self.device,
-            )
-        within = self._get_within_scale_block_mask()
-        return within + ((1.0 - within) * float(max(0.0, cross_scale_coupling)))
 
     def _get_masked_recurrent_weights(self, direction: int) -> torch.Tensor:
         """
@@ -2779,19 +2235,9 @@ class UnifiedMultiScalePCN:
     def _build_preplay_rollout_context(self, proximity: float) -> Dict[str, Any]:
         """Precompute proximity-dependent tensors shared across one preplay call."""
         scale_preference = self.compute_scale_preference(proximity)
-        scale_preference_per_pc = self.compute_scale_preference_per_pc(proximity)
-        effective_scale_preference_per_pc = self._soften_scale_preference(
-            scale_preference_per_pc,
-            learning_active=False,
-        )
-        effective_scale_preference = self._soften_scale_preference(
-            scale_preference,
-            learning_active=False,
-        )
+        effective_scale_preference = scale_preference
         return {
             "proximity": float(proximity),
-            "apply_scale_gate": bool(self.gate_mode == "normal"),
-            "effective_scale_preference_per_pc": effective_scale_preference_per_pc,
             "effective_scale_preference": effective_scale_preference,
             "effective_grid_influence_per_pc": self._effective_grid_influence_per_pc(
                 learning_active=False
@@ -2804,15 +2250,6 @@ class UnifiedMultiScalePCN:
             ),
             "preplay_cross_scale_inhibition_scale": float(
                 max(0.0, getattr(self, "preplay_cross_scale_inhibition_scale", 1.0))
-            ),
-            "use_soft_overlap": bool(
-                self._use_soft_scale_overlap(learning_active=False)
-            ),
-            "soft_cross_inhibition_scale": float(
-                getattr(self, "soft_cross_inhibition_scale", 0.35)
-            ),
-            "soft_cross_inhibition_cap": float(
-                getattr(self, "soft_cross_inhibition_cap", 0.0)
             ),
         }
 
@@ -2853,16 +2290,9 @@ class UnifiedMultiScalePCN:
             ctx["preplay_cross_scale_inhibition_scale"]
         )
         effective_grid_influence_per_pc = ctx["effective_grid_influence_per_pc"]
-        effective_scale_preference_per_pc = ctx["effective_scale_preference_per_pc"]
         effective_scale_preference = ctx["effective_scale_preference"]
-        apply_scale_gate = bool(ctx["apply_scale_gate"])
 
         afferent_excitation = afferent_excitation_batch
-        if apply_scale_gate:
-            afferent_excitation = (
-                afferent_excitation
-                * effective_scale_preference_per_pc.unsqueeze(0)
-            )
 
         if preplay_afferent_inhibition_scale > 0.0:
             bvc_afferent_inhibition = torch.zeros(
@@ -2877,16 +2307,9 @@ class UnifiedMultiScalePCN:
                 bvc_end = self.bvc_boundaries[scale_idx + 1]
                 bvc_sum_scale = torch.sum(self.bvc_activations[bvc_start:bvc_end])
                 gamma_pb_scale = self.gamma_pb_per_pc[pc_start]
-                if apply_scale_gate:
-                    bvc_afferent_inhibition[pc_start:pc_end] = (
-                        effective_scale_preference_per_pc[pc_start:pc_end]
-                        * gamma_pb_scale
-                        * bvc_sum_scale
-                    )
-                else:
-                    bvc_afferent_inhibition[pc_start:pc_end] = (
-                        gamma_pb_scale * bvc_sum_scale
-                    )
+                bvc_afferent_inhibition[pc_start:pc_end] = (
+                    gamma_pb_scale * bvc_sum_scale
+                )
 
             grid_afferent_inhibition = torch.zeros(
                 self.num_pc_total,
@@ -2901,16 +2324,9 @@ class UnifiedMultiScalePCN:
                     gc_end = self.grid_boundaries[scale_idx + 1]
                     gc_sum_scale = torch.sum(self.grid_cell_activations[gc_start:gc_end])
                     gamma_pg_scale = self.gamma_pg_per_pc[pc_start]
-                    if apply_scale_gate:
-                        grid_afferent_inhibition[pc_start:pc_end] = (
-                            effective_scale_preference_per_pc[pc_start:pc_end]
-                            * gamma_pg_scale
-                            * gc_sum_scale
-                        )
-                    else:
-                        grid_afferent_inhibition[pc_start:pc_end] = (
-                            gamma_pg_scale * gc_sum_scale
-                        )
+                    grid_afferent_inhibition[pc_start:pc_end] = (
+                        gamma_pg_scale * gc_sum_scale
+                    )
 
             afferent_inhibition = (
                 preplay_afferent_inhibition_scale
@@ -2964,25 +2380,7 @@ class UnifiedMultiScalePCN:
                     * effective_factor
                     * other_scales_activation
                 )
-                if bool(ctx["use_soft_overlap"]):
-                    scale_inhibition = (
-                        float(ctx["soft_cross_inhibition_scale"])
-                        * scale_inhibition
-                    )
-                    cap_ratio = float(ctx["soft_cross_inhibition_cap"])
-                    if cap_ratio > 0.0:
-                        cap = cap_ratio * torch.clamp(
-                            afferent_excitation[:, pc_start:pc_end],
-                            min=0.0,
-                        )
-                        cross_scale_inhibition[:, pc_start:pc_end] = torch.minimum(
-                            scale_inhibition,
-                            cap,
-                        )
-                    else:
-                        cross_scale_inhibition[:, pc_start:pc_end] = scale_inhibition
-                else:
-                    cross_scale_inhibition[:, pc_start:pc_end] = scale_inhibition
+                cross_scale_inhibition[:, pc_start:pc_end] = scale_inhibition
 
         activation_update = self.tau_p * (
             afferent_excitation
@@ -2990,11 +2388,6 @@ class UnifiedMultiScalePCN:
             - recurrent_inhibition
             - cross_scale_inhibition
         )
-        if apply_scale_gate:
-            activation_update = (
-                activation_update
-                * effective_scale_preference_per_pc.unsqueeze(0)
-            )
 
         new_activations = torch.tanh(torch.relu(activation_update))
         if squeeze_output:

@@ -69,9 +69,7 @@ class UnifiedMultiScaleRCN:
         self.enable_hybrid_replay = True
         self.path_replay_weight = 0.8
         self.diffusion_replay_weight = 0.2
-        # Reward readout mode:
-        # - "input_l1" is the default for paper-style room-local replay.
-        # - "weight_mass" remains available for legacy unified comparisons.
+        # Reward readout uses the paper-style input-L1 normalization.
         self.reward_normalization_mode = "input_l1"
         # Wavefront-style replay: by default do not carry previous activation
         # mass forward, otherwise long replay collapses toward a plateau.
@@ -90,17 +88,7 @@ class UnifiedMultiScaleRCN:
         # Backward-compat alias from older checkpoints/scripts.
         self.experience_mix_eta = 0.2
         self.experience_transition_topk = 12
-        # Goal-map construction mode:
-        # - "competitive_path_neighbor": path backbone on experienced transitions,
-        #   followed by weak local spread on symmetric place-cell adjacency.
-        # - "trajectory_state_backbone": room-internal replay is built upstream
-        #   from compact trajectory states, then projected back into PC weights.
-        # - "room_masked_experience_replay": upstream code uses exact contact
-        #   seeds and room masks, but the within-room spread is simple additive
-        #   replay on the denoised unified experience graph.
-        # - "paper_room_local_replay": driver builds one room-local replay field
-        #   per assigned sink and only uses the RCN for readout/scoring.
-        # - "additive_replay": legacy replay accumulation used before this fix.
+        # The model now uses the paper-room-local goal-map path only.
         self.goal_map_generation_mode = "paper_room_local_replay"
         self.goal_map_path_topk = 16
         self.goal_map_path_decay = 0.96
@@ -115,14 +103,6 @@ class UnifiedMultiScaleRCN:
         self.goal_map_checkpoint_support_mode = "threshold_normalized"
         self.goal_map_checkpoint_stop_parent_replay = True
         self.goal_map_seed_gain = 1.0
-        # Optional local-source correction:
-        # near a goal/checkpoint source, a compact anchor ensemble can dominate
-        # reward readout without replacing the distal room-scale replay field.
-        self.goal_map_local_anchor_weights = None
-        self.goal_map_local_anchor_gate_d2 = None
-        self.goal_map_local_anchor_query_sigma = None
-        self.goal_map_local_anchor_names = None
-
         # Store scale configurations
         self.scale_configs = scale_configs if scale_configs else []
         self.num_scales = len(self.scale_configs)
@@ -155,10 +135,6 @@ class UnifiedMultiScaleRCN:
 
         # Effective weights (used for forward pass)
         self.w_in_effective = self.w_in.clone()
-        # Optional runtime-only denominator override used by exploit-time
-        # masking to keep reward normalization anchored to the full goal map.
-        self.reward_denominator_override = None
-
         # Scale boundaries for indexing
         if self.scale_configs:
             self.scale_boundaries = [0]
@@ -419,32 +395,6 @@ class UnifiedMultiScaleRCN:
             )
         return transition
 
-    def _resolve_goal_map_generation_mode(self) -> str:
-        """Return the active unified goal-map construction mode."""
-        mode = str(
-            getattr(self, "goal_map_generation_mode", "paper_room_local_replay")
-        ).strip().lower()
-        if mode in {"paper_room_local_replay", "paper_room_local", "paper_room"}:
-            return "paper_room_local_replay"
-        if mode in {"competitive_path_neighbor", "competitive", "path_backbone"}:
-            return "competitive_path_neighbor"
-        if mode in {
-            "trajectory_state_backbone",
-            "trajectory_state",
-            "state_backbone",
-            "room_state_backbone",
-        }:
-            return "trajectory_state_backbone"
-        if mode in {
-            "room_masked_experience_replay",
-            "masked_experience_replay",
-            "room_experience_replay",
-        }:
-            return "room_masked_experience_replay"
-        if mode in {"additive_replay", "legacy", "replay"}:
-            return "additive_replay"
-        return "paper_room_local_replay"
-
     def _row_max_normalize(self, transition: torch.Tensor) -> torch.Tensor:
         """
         Normalize each row by its strongest outgoing edge.
@@ -540,47 +490,6 @@ class UnifiedMultiScaleRCN:
             wave = wave.view(-1)
         edge_supported = transition * wave.unsqueeze(0)
         return torch.max(edge_supported, dim=1).values
-
-    def _competitive_propagation(
-        self,
-        transition: torch.Tensor,
-        seed_activations: torch.Tensor,
-        num_steps: int,
-        step_decay: float,
-        normalize_seed: bool = False,
-        frontier_only: bool = False,
-    ) -> torch.Tensor:
-        """
-        Competitive value propagation using max-backups.
-
-        Each step keeps the strongest downstream support instead of summing over
-        all successors, which prevents graph hubs from inflating far-away reward.
-        """
-        wave = torch.clamp(seed_activations.to(self.device, dtype=torch.float32), min=0.0)
-        if wave.numel() != self.num_place_cells_total:
-            wave = wave.view(-1)[: self.num_place_cells_total]
-        if normalize_seed:
-            seed_peak = float(torch.max(wave).item())
-            if seed_peak > 1e-12:
-                wave = wave / seed_peak
-        values = wave.clone()
-        frontier = wave.clone()
-        decay = float(min(0.9999, max(0.0, step_decay)))
-        eps = 1e-8
-
-        for _ in range(1, int(max(1, num_steps))):
-            source_wave = frontier if frontier_only else wave
-            wave = decay * self._competitive_backup_step(transition, source_wave)
-            if frontier_only:
-                frontier = torch.where(wave > (values + eps), wave, torch.zeros_like(wave))
-                values = torch.maximum(values, frontier)
-                active_wave = frontier
-            else:
-                values = torch.maximum(values, wave)
-                active_wave = wave
-            if float(torch.max(active_wave).item()) <= 1e-8:
-                break
-        return values
 
     def _competitive_neighbor_from_source(
         self,
@@ -994,17 +903,6 @@ class UnifiedMultiScaleRCN:
         1. Backward value propagation on experienced place-cell transitions.
         2. Weak local spread on symmetric place-cell adjacency.
         """
-        mode = self._resolve_goal_map_generation_mode()
-        if mode == "additive_replay":
-            self.replay_with_custom_activations(
-                unified_pcn=unified_pcn,
-                custom_activations=custom_activations,
-                use_scale_gate=True,
-            )
-            return "goal_map=additive_replay"
-        if mode == "trajectory_state_backbone":
-            mode = "competitive_path_neighbor"
-
         pcn_copy = copy.deepcopy(unified_pcn)
         recurrent_weights_max = torch.max(
             pcn_copy.w_rec_unified.to(self.device), dim=0
@@ -1052,145 +950,13 @@ class UnifiedMultiScaleRCN:
             f"checkpoint_relays={relay_trigger_count}/{relay_seed_count})"
         )
 
-    def _resolved_reward_normalization_mode(self) -> str:
-        """Return the active reward readout normalization mode."""
-        mode = str(getattr(self, "reward_normalization_mode", "input_l1")).strip().lower()
-        if mode in {"input_l1", "input", "l1", "v11"}:
-            return "input_l1"
-        if mode in {"weight_mass", "weight_l1", "legacy"}:
-            return "weight_mass"
-        return "input_l1"
-
     def _reward_denominators(self, place_cell_activations: torch.Tensor) -> torch.Tensor:
         """
         Compute one denominator per replay/query state.
 
-        The denominator follows the active readout mode:
-        - `input_l1`: normalize by imagined place-cell activity mass
-        - `weight_mass`: normalize by learned reward-weight mass
+        Reward readout uses paper-style normalization by imagined PC activity mass.
         """
-        mode = self._resolved_reward_normalization_mode()
-        if mode == "input_l1":
-            return torch.sum(torch.abs(place_cell_activations), dim=1).clamp(min=1e-4)
-
-        denom_override = getattr(self, "reward_denominator_override", None)
-        if denom_override is not None:
-            denom = torch.as_tensor(
-                denom_override,
-                dtype=place_cell_activations.dtype,
-                device=place_cell_activations.device,
-            ).clamp(min=1e-12)
-            if denom.dim() == 0:
-                return denom.expand(place_cell_activations.shape[0])
-            denom = denom.reshape(-1)
-            if denom.shape[0] == 1:
-                return denom.expand(place_cell_activations.shape[0])
-            if denom.shape[0] != place_cell_activations.shape[0]:
-                raise ValueError(
-                    "reward_denominator_override length mismatch: "
-                    f"{denom.shape[0]} vs batch {place_cell_activations.shape[0]}"
-                )
-            return denom
-
-        denom = torch.sum(torch.abs(self.w_in_effective), dim=1).squeeze().clamp(min=1e-12)
-        if denom.dim() == 0:
-            return denom.expand(place_cell_activations.shape[0])
-        return denom
-
-    def _apply_local_source_anchor_correction(
-        self,
-        place_cell_activations_batch: torch.Tensor,
-        base_activations: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Blend in local source anchors for states that are near a goal/checkpoint.
-
-        The proximity gate is estimated from the current activation pattern
-        itself by averaging each active PC's source-distance, measured from that
-        PC's field peak to the source support region. This makes the correction
-        available to imagined states during preplay as well as online states.
-        """
-        if self._resolve_goal_map_generation_mode() == "paper_room_local_replay":
-            return base_activations
-        anchor_weights = getattr(self, "goal_map_local_anchor_weights", None)
-        anchor_gate_d2 = getattr(self, "goal_map_local_anchor_gate_d2", None)
-        anchor_sigma = getattr(self, "goal_map_local_anchor_query_sigma", None)
-        if (
-            not isinstance(anchor_weights, torch.Tensor)
-            or not isinstance(anchor_gate_d2, torch.Tensor)
-            or anchor_weights.ndim != 2
-            or anchor_gate_d2.ndim != 2
-            or anchor_weights.shape != anchor_gate_d2.shape
-            or anchor_weights.shape[1] != place_cell_activations_batch.shape[1]
-        ):
-            return base_activations
-
-        anchor_weights = anchor_weights.to(
-            device=self.device,
-            dtype=place_cell_activations_batch.dtype,
-        )
-        anchor_gate_d2 = anchor_gate_d2.to(
-            device=self.device,
-            dtype=place_cell_activations_batch.dtype,
-        )
-
-        num_sources = int(anchor_weights.shape[0])
-        if num_sources <= 0:
-            return base_activations
-
-        if isinstance(anchor_sigma, torch.Tensor):
-            sigma_t = anchor_sigma.to(
-                device=self.device,
-                dtype=place_cell_activations_batch.dtype,
-            ).view(-1)
-            if sigma_t.numel() == 1:
-                sigma_t = sigma_t.expand(num_sources)
-            elif sigma_t.numel() != num_sources:
-                sigma_t = torch.full(
-                    (num_sources,),
-                    float(max(1e-6, float(sigma_t[0].item()))),
-                    dtype=place_cell_activations_batch.dtype,
-                    device=self.device,
-                )
-        else:
-            sigma_t = torch.full(
-                (num_sources,),
-                float(max(1e-6, float(anchor_sigma) if anchor_sigma is not None else 0.5)),
-                dtype=place_cell_activations_batch.dtype,
-                device=self.device,
-            )
-
-        anchor_denominators = torch.sum(
-            torch.abs(anchor_weights),
-            dim=1,
-        ).clamp(min=1e-12)
-        anchor_scores = torch.matmul(
-            place_cell_activations_batch,
-            anchor_weights.T,
-        ) / anchor_denominators.unsqueeze(0)
-
-        activity_mass = torch.sum(
-            torch.abs(place_cell_activations_batch),
-            dim=1,
-            keepdim=True,
-        ).clamp(min=1e-12)
-        estimated_d2 = torch.matmul(
-            torch.abs(place_cell_activations_batch),
-            anchor_gate_d2.T,
-        ) / activity_mass
-        query_gates = torch.exp(
-            -estimated_d2 / (2.0 * torch.clamp(sigma_t.unsqueeze(0), min=1e-6) ** 2)
-        )
-
-        blended = (
-            query_gates * anchor_scores
-            + (1.0 - query_gates) * base_activations.unsqueeze(1)
-        )
-        corrected = torch.maximum(
-            base_activations.unsqueeze(1),
-            blended,
-        ).max(dim=1).values
-        return corrected
+        return torch.sum(torch.abs(place_cell_activations), dim=1).clamp(min=1e-4)
 
     def update_reward_cell_activations(
         self,
@@ -1214,8 +980,7 @@ class UnifiedMultiScaleRCN:
         # Move to correct device
         place_cell_activations = place_cell_activations.to(self.device)
 
-        # Compute reward: r = W_in @ v^p, normalized according to the configured
-        # readout mode. `weight_mass` is the unified default.
+        # Compute reward: r = W_in @ v^p, normalized by imagined activity mass.
         safe_denominators = self._reward_denominators(place_cell_activations)
 
         # Result: (batch_size,)
@@ -1223,10 +988,6 @@ class UnifiedMultiScaleRCN:
             place_cell_activations,
             self.w_in_effective.T
         ).squeeze(1) / safe_denominators
-        activations = self._apply_local_source_anchor_correction(
-            place_cell_activations,
-            activations,
-        )
 
         # Clamp activations
         activations = torch.clamp(activations, 0, 1e6)
@@ -1583,73 +1344,6 @@ class UnifiedMultiScaleRCN:
             )
         return torch.cat(blocks, dim=0)
 
-    def get_activations_per_scale(self, place_cell_activations: torch.Tensor) -> List[float]:
-        """
-        Compute per-scale reward contributions for analysis.
-
-        Args:
-            place_cell_activations: Unified activation vector
-
-        Returns:
-            List of reward values per scale
-        """
-        rewards_per_scale = []
-
-        for scale_idx in range(self.num_scales):
-            start = self.scale_boundaries[scale_idx]
-            end = self.scale_boundaries[scale_idx + 1]
-
-            # Extract scale-specific weights and activations
-            w_scale = self.w_in_effective[:, start:end]
-            pc_scale = place_cell_activations[start:end]
-
-            # Compute reward for this scale
-            reward_scale = torch.sum(w_scale * pc_scale).item()
-            rewards_per_scale.append(reward_scale)
-
-        return rewards_per_scale
-
-    def compute_reward_contributions_batched(
-        self,
-        place_cell_activations_batch: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Compute per-scale reward contributions for a batch of unified states.
-
-        The denominator is shared across scales and matches the active reward
-        readout mode, so the per-scale contributions sum back to the unified
-        reward returned by `compute_reward_activations_batched()`.
-
-        Args:
-            place_cell_activations_batch: (batch_size, num_place_cells_total)
-
-        Returns:
-            Tensor of shape (batch_size, num_scales)
-        """
-        if place_cell_activations_batch.dim() == 1:
-            place_cell_activations_batch = place_cell_activations_batch.unsqueeze(0)
-
-        place_cell_activations_batch = place_cell_activations_batch.to(self.device)
-        denominators = self._reward_denominators(place_cell_activations_batch).unsqueeze(1)
-
-        per_scale_terms = []
-        for scale_idx in range(self.num_scales):
-            start = self.scale_boundaries[scale_idx]
-            end = self.scale_boundaries[scale_idx + 1]
-            scale_weights = self.w_in_effective[:, start:end]
-            scale_acts = place_cell_activations_batch[:, start:end]
-            numerators = torch.matmul(scale_acts, scale_weights.T).squeeze(1)
-            per_scale_terms.append(numerators)
-
-        if not per_scale_terms:
-            return torch.zeros(
-                (place_cell_activations_batch.shape[0], 0),
-                dtype=place_cell_activations_batch.dtype,
-                device=self.device,
-            )
-
-        return torch.stack(per_scale_terms, dim=1) / denominators
-
     def compute_reward_contribution_for_scale_batched(
         self,
         place_cell_activations_batch: torch.Tensor,
@@ -1658,8 +1352,7 @@ class UnifiedMultiScaleRCN:
         """
         Compute the reward contribution for a single scale over a batch.
 
-        This avoids the extra per-scale matmuls in
-        `compute_reward_contributions_batched()` when the caller only needs one
+        Used by scale-specific preplay scoring when the caller only needs one
         scale's contribution.
         """
         if place_cell_activations_batch.dim() == 1:
@@ -1704,18 +1397,13 @@ class UnifiedMultiScaleRCN:
         # Move to correct device
         place_cell_activations_batch = place_cell_activations_batch.to(self.device)
 
-        # Compute rewards using the same active normalization rule as the
-        # single-state path.
+        # Compute rewards using the same input-L1 normalization rule as the single-state path.
         safe_denominators = self._reward_denominators(place_cell_activations_batch)
 
         activations = torch.matmul(
             place_cell_activations_batch,
             self.w_in_effective.T
         ).squeeze(1) / safe_denominators
-        activations = self._apply_local_source_anchor_correction(
-            place_cell_activations_batch,
-            activations,
-        )
 
         # Clamp activations
         activations = torch.clamp(activations, 0, 1e6)

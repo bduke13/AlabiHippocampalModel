@@ -174,8 +174,6 @@ class Driver(Supervisor):
         goal_map_path_replay_weight: Optional[float] = None,
         goal_map_diffusion_replay_weight: Optional[float] = None,
         goal_map_experience_transition_topk: Optional[int] = None,
-        unified_reward_normalization_mode: str = "input_l1",
-        unified_goal_map_mode: str = "paper_room_local_replay",
         goal_map_room_normalization_mode: str = "per_room_peak",
         goal_map_path_topk: int = 16,
         goal_map_path_decay: float = 0.97,
@@ -222,19 +220,8 @@ class Driver(Supervisor):
         loop_prune_min_top1: float = 0.08,
         loop_prune_min_top1_to_top2_ratio: float = 1.15,
         pcn_gate_mode: str = "normal",
-        pcn_soft_scale_overlap: bool = True,
-        pcn_soft_scale_overlap_in_learning: bool = True,
-        pcn_learning_adaptation_mode: str = "gaussian_post_competition_expression",
         pcn_learning_stdp_start_steps: int = 8000,
         pcn_learning_stop_ojas_on_stabilization: bool = False,
-        pcn_learning_cross_scale_coupling_start_steps: int = 8000,
-        pcn_learning_cross_scale_coupling_ramp_steps: int = 12000,
-        pcn_learning_cross_scale_coupling_min: float = 0.0,
-        pcn_soft_scale_gate_floor: float = 0.20,
-        pcn_soft_scale_gate_floor_in_learning: float = 0.12,
-        pcn_soft_cross_inhibition_scale: float = 0.35,
-        pcn_soft_cross_inhibition_scale_in_learning: float = 0.25,
-        pcn_soft_cross_inhibition_cap: float = 0.75,
         pcn_cross_scale_inhibition_base_enabled: bool = True,
         unified_preplay_scale_arbitration: bool = True,
         unified_preplay_scale_prior_mix: float = 0.0,
@@ -345,44 +332,12 @@ class Driver(Supervisor):
         if self.pcn_gate_mode not in {"normal", "no_gate_no_inhibition", "no_gate_with_inhibition"}:
             print(f"[DRIVER] Unknown pcn_gate_mode='{self.pcn_gate_mode}', falling back to 'normal'")
             self.pcn_gate_mode = "normal"
-        self.pcn_soft_scale_overlap = bool(pcn_soft_scale_overlap)
-        self.pcn_soft_scale_overlap_in_learning = bool(
-            pcn_soft_scale_overlap_in_learning
-        )
-        self.pcn_learning_adaptation_mode = str(
-            pcn_learning_adaptation_mode
-        ).strip().lower()
-        if self.pcn_learning_adaptation_mode != "gaussian_post_competition_expression":
-            print(
-                "[DRIVER] Unknown pcn_learning_adaptation_mode="
-                f"'{self.pcn_learning_adaptation_mode}', falling back to "
-                "'gaussian_post_competition_expression'"
-            )
-            self.pcn_learning_adaptation_mode = "gaussian_post_competition_expression"
         self.pcn_learning_stdp_start_steps = int(
             max(0, pcn_learning_stdp_start_steps)
         )
         self.pcn_learning_stop_ojas_on_stabilization = bool(
             pcn_learning_stop_ojas_on_stabilization
         )
-        self.pcn_learning_cross_scale_coupling_start_steps = int(
-            max(0, pcn_learning_cross_scale_coupling_start_steps)
-        )
-        self.pcn_learning_cross_scale_coupling_ramp_steps = int(
-            max(0, pcn_learning_cross_scale_coupling_ramp_steps)
-        )
-        self.pcn_learning_cross_scale_coupling_min = float(
-            min(1.0, max(0.0, pcn_learning_cross_scale_coupling_min))
-        )
-        self.pcn_soft_scale_gate_floor = float(min(0.95, max(0.0, pcn_soft_scale_gate_floor)))
-        self.pcn_soft_scale_gate_floor_in_learning = float(
-            min(0.95, max(0.0, pcn_soft_scale_gate_floor_in_learning))
-        )
-        self.pcn_soft_cross_inhibition_scale = float(max(0.0, pcn_soft_cross_inhibition_scale))
-        self.pcn_soft_cross_inhibition_scale_in_learning = float(
-            max(0.0, pcn_soft_cross_inhibition_scale_in_learning)
-        )
-        self.pcn_soft_cross_inhibition_cap = float(max(0.0, pcn_soft_cross_inhibition_cap))
         self.pcn_cross_scale_inhibition_base_enabled = bool(
             pcn_cross_scale_inhibition_base_enabled
         )
@@ -485,34 +440,6 @@ class Driver(Supervisor):
             if goal_map_experience_transition_topk is None
             else int(max(1, goal_map_experience_transition_topk))
         )
-        goal_map_mode = str(unified_goal_map_mode).strip().lower()
-        if goal_map_mode not in {
-            "paper_room_local_replay",
-            "competitive_path_neighbor",
-            "additive_replay",
-            "trajectory_state_backbone",
-            "room_masked_experience_replay",
-        }:
-            print(
-                f"[DRIVER] Unknown unified_goal_map_mode='{unified_goal_map_mode}', "
-                "falling back to 'paper_room_local_replay'"
-            )
-            goal_map_mode = "paper_room_local_replay"
-        self.unified_goal_map_mode = goal_map_mode
-        reward_mode = str(unified_reward_normalization_mode).strip().lower()
-        if reward_mode not in {"input_l1", "weight_mass"}:
-            print(
-                f"[DRIVER] Unknown unified_reward_normalization_mode='{unified_reward_normalization_mode}', "
-                "falling back to 'input_l1'"
-            )
-            reward_mode = "input_l1"
-        if goal_map_mode == "paper_room_local_replay" and reward_mode != "input_l1":
-            print(
-                "[DRIVER] paper_room_local_replay forces "
-                "unified_reward_normalization_mode='input_l1'"
-            )
-            reward_mode = "input_l1"
-        self.unified_reward_normalization_mode = reward_mode
         room_norm_mode = str(goal_map_room_normalization_mode).strip().lower()
         if room_norm_mode not in {"per_room_peak", "none"}:
             print(
@@ -989,6 +916,7 @@ class Driver(Supervisor):
         self._last_unified_exploit_room_reward_mask = None
         self._unified_reward_hmap_cache = None
         self.last_unified_committed_hd_bin = None
+        self.last_unified_committed_score = None
         self._last_unified_commit_target_signature = None
         self._last_unified_active_checkpoint_target = None
         self._last_unified_commit_reset_reason = None
@@ -1242,17 +1170,8 @@ class Driver(Supervisor):
         """Apply controller-level replay and reward-readout knobs to a unified RCN."""
         if unified_rcn is None:
             return
-        active_goal_map_mode = str(
-            getattr(self, "unified_goal_map_mode", "paper_room_local_replay")
-        ).strip().lower()
         if goal_map_mode:
-            if active_goal_map_mode == "paper_room_local_replay":
-                path_w, diff_w = 1.0, 0.0
-            else:
-                goal_path = getattr(self, "goal_map_path_replay_weight", None)
-                goal_diff = getattr(self, "goal_map_diffusion_replay_weight", None)
-                path_w = float(max(0.0, goal_path if goal_path is not None else 1.0))
-                diff_w = float(max(0.0, goal_diff if goal_diff is not None else 0.0))
+            path_w, diff_w = 1.0, 0.0
             goal_exp_topk = getattr(self, "goal_map_experience_transition_topk", None)
         else:
             path_w = float(max(0.0, getattr(self, "hybrid_path_replay_weight", 0.8)))
@@ -1265,21 +1184,9 @@ class Driver(Supervisor):
         unified_rcn.diffusion_replay_weight = diff_w
         if goal_exp_topk is not None:
             unified_rcn.experience_transition_topk = int(max(1, goal_exp_topk))
-        unified_rcn.reward_normalization_mode = str(
-            getattr(self, "unified_reward_normalization_mode", "input_l1")
-        ).strip().lower()
+        unified_rcn.reward_normalization_mode = "input_l1"
         unified_rcn.replay_residual_mix = 0.0
-        unified_rcn.goal_map_generation_mode = active_goal_map_mode
-        unified_rcn.reward_denominator_override = None
-        if goal_map_mode and unified_rcn.goal_map_generation_mode == "room_masked_experience_replay":
-            unified_rcn.use_global_decay = False
-            unified_rcn.lambda_per_scale = [15.0, 25.0, 45.0]
-            unified_rcn.lambda_s = float(unified_rcn.lambda_per_scale[1])
-            unified_rcn.lambda_global = float(
-                sum(unified_rcn.lambda_per_scale) / float(len(unified_rcn.lambda_per_scale))
-            )
-            if hasattr(unified_rcn, "_build_lambda_per_pc"):
-                unified_rcn.lambda_per_pc = unified_rcn._build_lambda_per_pc()
+        unified_rcn.goal_map_generation_mode = "paper_room_local_replay"
         unified_rcn.goal_map_path_topk = int(max(1, getattr(self, "goal_map_path_topk", 16)))
         unified_rcn.goal_map_path_decay = float(
             min(0.9999, max(0.0, getattr(self, "goal_map_path_decay", 0.97)))
@@ -1497,34 +1404,9 @@ class Driver(Supervisor):
                 unified_pcn._build_d_opt_per_pc()
             if getattr(unified_pcn, "n_hd", None) != self.n_hd:
                 unified_pcn.n_hd = int(self.n_hd)
-            unified_pcn.soft_scale_overlap = bool(self.pcn_soft_scale_overlap)
-            unified_pcn.soft_scale_overlap_in_learning = bool(
-                self.pcn_soft_scale_overlap_in_learning
-            )
-            unified_pcn.learning_adaptation_mode = str(
-                self.pcn_learning_adaptation_mode
-            )
             unified_pcn.learning_stdp_start_steps = int(
                 self.pcn_learning_stdp_start_steps
             )
-            unified_pcn.learning_cross_scale_coupling_start_steps = int(
-                self.pcn_learning_cross_scale_coupling_start_steps
-            )
-            unified_pcn.learning_cross_scale_coupling_ramp_steps = int(
-                self.pcn_learning_cross_scale_coupling_ramp_steps
-            )
-            unified_pcn.learning_cross_scale_coupling_min = float(
-                self.pcn_learning_cross_scale_coupling_min
-            )
-            unified_pcn.soft_scale_gate_floor = float(self.pcn_soft_scale_gate_floor)
-            unified_pcn.soft_scale_gate_floor_in_learning = float(
-                self.pcn_soft_scale_gate_floor_in_learning
-            )
-            unified_pcn.soft_cross_inhibition_scale = float(self.pcn_soft_cross_inhibition_scale)
-            unified_pcn.soft_cross_inhibition_scale_in_learning = float(
-                self.pcn_soft_cross_inhibition_scale_in_learning
-            )
-            unified_pcn.soft_cross_inhibition_cap = float(self.pcn_soft_cross_inhibition_cap)
             unified_pcn.cross_scale_inhibition_base_enabled = bool(
                 self.pcn_cross_scale_inhibition_base_enabled
             )
@@ -1675,13 +1557,7 @@ class Driver(Supervisor):
                 gamma_cross=gamma_cross_values,
                 sigma_tune=sigma_tune,
                 gate_mode=self.pcn_gate_mode,
-                soft_scale_overlap=self.pcn_soft_scale_overlap,
-                soft_scale_overlap_in_learning=self.pcn_soft_scale_overlap_in_learning,
-                learning_adaptation_mode=self.pcn_learning_adaptation_mode,
                 learning_stdp_start_steps=self.pcn_learning_stdp_start_steps,
-                learning_cross_scale_coupling_start_steps=self.pcn_learning_cross_scale_coupling_start_steps,
-                learning_cross_scale_coupling_ramp_steps=self.pcn_learning_cross_scale_coupling_ramp_steps,
-                learning_cross_scale_coupling_min=self.pcn_learning_cross_scale_coupling_min,
                 enable_correlation_weighting=correlation_weighting_enabled,
                 correlation_window=correlation_window,
                 correlation_update_freq=correlation_update_freq,
@@ -1699,11 +1575,6 @@ class Driver(Supervisor):
                 tau_hd=tau_hd,
                 enable_connection_decay=enable_connection_decay,
                 connection_decay_rate=connection_decay_rate,
-                soft_scale_gate_floor=self.pcn_soft_scale_gate_floor,
-                soft_scale_gate_floor_in_learning=self.pcn_soft_scale_gate_floor_in_learning,
-                soft_cross_inhibition_scale=self.pcn_soft_cross_inhibition_scale,
-                soft_cross_inhibition_scale_in_learning=self.pcn_soft_cross_inhibition_scale_in_learning,
-                soft_cross_inhibition_cap=self.pcn_soft_cross_inhibition_cap,
                 cross_scale_inhibition_base_enabled=self.pcn_cross_scale_inhibition_base_enabled,
                 use_bvc_context_modulation=self.use_bvc_context_modulation,
                 bvc_context_gain_floor=self.bvc_context_gain_floor,
@@ -3942,6 +3813,7 @@ class Driver(Supervisor):
     ) -> None:
         """Clear unified exploit heading persistence with one explicit reason."""
         self.last_unified_committed_hd_bin = None
+        self.last_unified_committed_score = None
         self._last_unified_commit_reset_reason = str(reason)
         if clear_target_signature:
             self._last_unified_commit_target_signature = None
@@ -4304,34 +4176,9 @@ class Driver(Supervisor):
                 self._sync_unified_recurrent_visibility_mask(prune_weights=False)
                 self._exploit_visibility_synced = True
             original_w_in_effective = getattr(self.unified_rcn, "w_in_effective", None)
-            original_reward_denom_override = getattr(
-                self.unified_rcn,
-                "reward_denominator_override",
-                None,
-            )
             room_mask_log = "roommask=inactive"
             safety_mask_log = "door_safety=disabled(hard_mask_off)"
             if original_w_in_effective is not None:
-                reward_mode = str(
-                    getattr(self.unified_rcn, "reward_normalization_mode", "input_l1")
-                ).strip().lower()
-                goal_map_mode = str(
-                    getattr(self.unified_rcn, "goal_map_generation_mode", "")
-                ).strip().lower()
-                if (
-                    goal_map_mode != "paper_room_local_replay"
-                    and reward_mode in {"weight_mass", "weight_l1", "legacy"}
-                ):
-                    self.unified_rcn.reward_denominator_override = (
-                        torch.sum(torch.abs(original_w_in_effective))
-                        .detach()
-                        .to(
-                            device=self.unified_rcn.w_in.device,
-                            dtype=original_w_in_effective.dtype,
-                        )
-                    )
-                else:
-                    self.unified_rcn.reward_denominator_override = None
                 room_reward_mask, room_mask_log = self._get_unified_exploit_room_reward_mask(
                     self.unified_rcn.w_in.device
                 )
@@ -4439,6 +4286,12 @@ class Driver(Supervisor):
                         min=1e-9,
                     )
 
+                distances_per_hd = torch.nan_to_num(
+                    distances_per_hd,
+                    nan=0.0,
+                    posinf=0.0,
+                    neginf=0.0,
+                )
                 safe_thresholds = torch.full(
                     (self.n_hd,),
                     float(max(0.0, min_safe_distance)),
@@ -4450,107 +4303,21 @@ class Driver(Supervisor):
                     dtype=torch.bool,
                     device=self.device,
                 )
-                (
-                    safe_thresholds,
-                    doorway_safe_bins,
-                    safety_mask_log,
-                ) = self._get_unified_checkpoint_door_safety_profile(
-                    base_safe_distance=min_safe_distance,
-                    target_device=self.device,
-                    target_dtype=self.dtype,
+                safe_mask = torch.ones(
+                    self.n_hd,
+                    dtype=torch.bool,
+                    device=self.device,
                 )
-                hard_collision_distance = float(
-                    max(
-                        0.05,
-                        min(
-                            float(max(0.0, min_safe_distance)) * 0.15,
-                            getattr(self, "unified_hard_collision_distance", 0.12),
-                        ),
-                    )
+                safety_weights = torch.ones(
+                    self.n_hd,
+                    dtype=self.dtype,
+                    device=self.device,
                 )
-                distances_per_hd = torch.nan_to_num(
-                    distances_per_hd,
-                    nan=0.0,
-                    posinf=0.0,
-                    neginf=0.0,
-                )
-                safe_thresholds_clamped = torch.clamp(safe_thresholds, min=1e-6)
-                safety_weights = torch.clamp(
-                    distances_per_hd / safe_thresholds_clamped,
-                    min=0.0,
-                    max=1.0,
-                )
-                safety_weights = torch.nan_to_num(
-                    safety_weights,
-                    nan=0.0,
-                    posinf=1.0,
-                    neginf=0.0,
-                )
-                doorway_soft_mask = doorway_safe_bins & (
-                    distances_per_hd > hard_collision_distance
-                )
-                if torch.any(doorway_soft_mask):
-                    doorway_floor = float(
-                        max(
-                            0.20,
-                            min(
-                                0.60,
-                                getattr(self, "unified_checkpoint_door_probability_floor", 0.30),
-                            ),
-                        )
-                    )
-                    safety_weights = torch.where(
-                        doorway_soft_mask,
-                        torch.maximum(
-                            safety_weights,
-                            torch.full_like(safety_weights, doorway_floor),
-                        ),
-                        safety_weights,
-                    )
-                hard_block_mask = distances_per_hd <= hard_collision_distance
-                safety_weights = torch.where(
-                    hard_block_mask & (~doorway_safe_bins),
-                    torch.zeros_like(safety_weights),
-                    safety_weights,
-                )
-                safe_mask = safety_weights > 1e-6
-                fallback_log = ""
-                if not torch.any(safe_mask):
-                    max_clearance = torch.max(distances_per_hd)
-                    if float(max_clearance.item()) > 1e-6:
-                        safe_mask = distances_per_hd >= (max_clearance - 1e-6)
-                        safety_weights = torch.where(
-                            safe_mask,
-                            torch.ones_like(safety_weights),
-                            torch.zeros_like(safety_weights),
-                        )
-                        fallback_log = f",fallback=max_clearance({float(max_clearance.item()):.2f})"
-                    elif torch.any(doorway_safe_bins):
-                        safe_mask = doorway_safe_bins.clone()
-                        safety_weights = torch.where(
-                            safe_mask,
-                            torch.ones_like(safety_weights),
-                            torch.zeros_like(safety_weights),
-                        )
-                        fallback_log = ",fallback=doorway_bins"
-                    else:
-                        safe_mask = torch.ones(
-                            self.n_hd,
-                            dtype=torch.bool,
-                            device=self.device,
-                        )
-                        safety_weights = torch.ones_like(safety_weights)
-                        fallback_log = ",fallback=all_bins"
                 safety_mask_log = (
-                    f"{safety_mask_log},safe_bins={int(torch.sum(safe_mask).item())},"
-                    f"hard_collision={hard_collision_distance:.2f}{fallback_log}"
+                    "door_safety=disabled(preplay_no_actionable_mask),"
+                    f"safe_bins={int(torch.sum(safe_mask).item())}"
                 )
-                safe_probs = torch.nan_to_num(
-                    direction_probs * safety_weights,
-                    nan=0.0,
-                    posinf=0.0,
-                    neginf=0.0,
-                )
+                safe_probs = direction_probs.clone()
                 safe_returns = torch.nan_to_num(
                     macro_returns.clone(),
                     nan=0.0,
@@ -4580,17 +4347,6 @@ class Driver(Supervisor):
                 prob_sum = torch.sum(safe_probs)
                 prob_sum_is_finite = bool(torch.isfinite(prob_sum).item())
                 prob_sum_value = float(prob_sum.item()) if prob_sum_is_finite else 0.0
-                if prob_sum_value <= 1e-9 and torch.any(safe_mask):
-                    masked_returns = torch.where(
-                        safe_mask,
-                        macro_returns,
-                        torch.full_like(macro_returns, -1e9),
-                    )
-                    masked_returns = masked_returns - torch.max(masked_returns)
-                    safe_probs = torch.softmax(masked_returns, dim=0)
-                    prob_sum = torch.sum(safe_probs)
-                    prob_sum_is_finite = bool(torch.isfinite(prob_sum).item())
-                    prob_sum_value = float(prob_sum.item()) if prob_sum_is_finite else 0.0
                 if prob_sum_value <= 1e-9:
                     if debug_enabled:
                         print("[EXPLOIT-ACTION] safe_probs sum ≈ 0 → explore()")
@@ -4714,9 +4470,17 @@ class Driver(Supervisor):
                     "last_unified_committed_hd_bin",
                     None,
                 )
+                prev_committed_score = getattr(
+                    self,
+                    "last_unified_committed_score",
+                    None,
+                )
                 committed_score = None
-                final_persisted_bin = int(candidate_idx)
-                persistence_outcome = "init"
+                final_action_bin = int(candidate_idx)
+                final_persisted_bin = None
+                final_persisted_score = None
+                persistence_outcome = "transient"
+                candidate_can_commit = bool(use_committed_heading)
 
                 if prev_committed_idx is not None:
                     if not isinstance(prev_committed_idx, int):
@@ -4742,16 +4506,25 @@ class Driver(Supervisor):
                             clear_target_signature=False,
                         )
                         prev_committed_idx = None
+                        prev_committed_score = None
                     else:
-                        committed_score_tensor = torch.nan_to_num(
-                            joint_direction_scores[prev_committed_idx],
-                            nan=0.0,
-                            posinf=0.0,
-                            neginf=0.0,
-                        )
-                        committed_score = float(
-                            max(0.0, float(committed_score_tensor.item()))
-                        )
+                        try:
+                            committed_score = float(prev_committed_score)
+                        except (TypeError, ValueError):
+                            committed_score = None
+                        if committed_score is None or not np.isfinite(committed_score):
+                            persistence_reset_reason = (
+                                persistence_reset_reason or "committed_score_invalid"
+                            )
+                            self._reset_unified_heading_commit_state(
+                                reason="committed_score_invalid",
+                                clear_target_signature=False,
+                            )
+                            prev_committed_idx = None
+                            prev_committed_score = None
+                            committed_score = None
+                        else:
+                            committed_score = max(0.0, committed_score)
 
                 candidate_score_tensor = torch.nan_to_num(
                     joint_direction_scores[candidate_idx],
@@ -4766,22 +4539,44 @@ class Driver(Supervisor):
                     commit_threshold = float(
                         max(0.0, self.unified_preplay_commit_threshold)
                     )
-                    if candidate_score > committed_score * (1.0 + commit_threshold):
+                    commit_score_decay = 0.80
+                    if (
+                        candidate_can_commit
+                        and candidate_score > committed_score * (1.0 + commit_threshold)
+                    ):
                         persistence_outcome = "switch"
+                        final_action_bin = int(candidate_idx)
                         final_persisted_bin = int(candidate_idx)
+                        final_persisted_score = float(candidate_score)
                     else:
                         persistence_outcome = "hold"
+                        final_action_bin = int(prev_committed_idx)
                         final_persisted_bin = int(prev_committed_idx)
-                        action_angle = safe_angles[final_persisted_bin]
+                        final_persisted_score = float(
+                            max(0.0, committed_score * commit_score_decay)
+                        )
+                        action_angle = safe_angles[final_action_bin]
                         combined_vector = torch.stack(
                             [torch.cos(action_angle), torch.sin(action_angle)]
                         )
                 else:
-                    persistence_outcome = "init"
+                    if candidate_can_commit:
+                        persistence_outcome = "init"
+                        final_action_bin = int(candidate_idx)
+                        final_persisted_bin = int(candidate_idx)
+                        final_persisted_score = float(candidate_score)
 
-                self.last_unified_committed_hd_bin = int(final_persisted_bin)
+                self.last_unified_committed_hd_bin = (
+                    None if final_persisted_bin is None else int(final_persisted_bin)
+                )
+                self.last_unified_committed_score = (
+                    None if final_persisted_score is None else float(final_persisted_score)
+                )
                 prev_committed_txt = (
                     "none" if prev_committed_idx is None else f"idx{int(prev_committed_idx)}"
+                )
+                final_persisted_txt = (
+                    "none" if final_persisted_bin is None else f"idx{int(final_persisted_bin)}"
                 )
                 committed_score_txt = (
                     "none"
@@ -4797,7 +4592,7 @@ class Driver(Supervisor):
                     "[UNIFIED-PERSIST] "
                     f"candidate=idx{int(candidate_idx)} "
                     f"branch={candidate_branch} "
-                    f"final=idx{int(final_persisted_bin)} "
+                    f"final={final_persisted_txt} "
                     f"candidate_score={candidate_score:.4f} "
                     f"committed_prev={prev_committed_txt} "
                     f"committed_score={committed_score_txt} "
@@ -4811,7 +4606,7 @@ class Driver(Supervisor):
                 trace_signature = (
                     str(goal_map_debug),
                     int(preplay_commit_dir) if preplay_commit_dir is not None else None,
-                    int(final_persisted_bin),
+                    int(final_action_bin),
                     round(float(self.action_heading_deg), 1),
                     str(room_mask_log),
                 )
@@ -4838,7 +4633,20 @@ class Driver(Supervisor):
                     )
 
                 move_success = self._execute_movement(self.action_heading_deg)
-                if not move_success:
+                actual_move_distance = float(
+                    getattr(self, "last_executed_move_distance", 0.0)
+                )
+                nominal_action_distance = (
+                    float(self._get_nominal_forward_distance_per_step())
+                    * float(self._get_action_forward_steps())
+                )
+                stall_distance = max(1e-3, 0.15 * nominal_action_distance)
+                movement_stalled = bool(
+                    move_success and actual_move_distance < stall_distance
+                )
+                if movement_stalled:
+                    self._reset_unified_heading_commit_state(reason="movement_stalled")
+                elif not move_success:
                     self._reset_unified_heading_commit_state(reason="movement_failed")
                 if trace_enabled:
                     executed_heading_deg = float(self.current_heading_deg)
@@ -4854,9 +4662,6 @@ class Driver(Supervisor):
                         self,
                         "last_executed_move_hd_bin",
                         None,
-                    )
-                    actual_move_distance = float(
-                        getattr(self, "last_executed_move_distance", 0.0)
                     )
                     move_heading_txt = (
                         "none"
@@ -4876,7 +4681,7 @@ class Driver(Supervisor):
                         f"move_heading={move_heading_txt} "
                         f"move_bin={move_bin_txt} "
                         f"move_dist={actual_move_distance:.3f} "
-                        f"move_ok={int(bool(move_success))}"
+                        f"move_ok={int(bool(move_success and not movement_stalled))}"
                     )
 
                 self.last_scale_weights = scale_weights
@@ -4884,7 +4689,6 @@ class Driver(Supervisor):
             finally:
                 if original_w_in_effective is not None:
                     self.unified_rcn.w_in_effective = original_w_in_effective
-                    self.unified_rcn.reward_denominator_override = original_reward_denom_override
 
         #-------------------------------------------------------------------
         # 6) Build scales_data for hierarchical preplay
@@ -11774,12 +11578,6 @@ class Driver(Supervisor):
                 goal_radius = float(goal.get("radius", goal_radius))
                 break
 
-        goal_rcn.goal_map_local_anchor_weights = None
-        goal_rcn.goal_map_local_anchor_gate_d2 = None
-        goal_rcn.goal_map_local_anchor_query_sigma = None
-        goal_rcn.goal_map_local_anchor_names = None
-        goal_rcn.reward_denominator_override = None
-
         centers, visited, centers_log = self._get_unified_pc_spatial_support(device)
         if centers is None or visited is None:
             centers = torch.zeros((num_pc_total, 2), dtype=torch.float32, device=device)
@@ -14010,19 +13808,17 @@ class Driver(Supervisor):
         self,
         goal_x,
         goal_z,
-        _w_exp_norm,
         base_rcn,
         seed_sigma: Optional[float] = None,
         goal_name: Optional[str] = None,
     ):
         """
-        Build reward weights for any (goal_x, goal_z) using one unified seed and one
-        unified replay pass. Used for both real goals and doorway sub-goals.
+        Build reward weights for any (goal_x, goal_z) using the paper-room-local
+        unified replay path.
 
         Args:
             goal_x (float): Goal x-coordinate (hmap_loc[:, 0] convention)
             goal_z (float): Goal z-coordinate (hmap_loc[:, 1] convention)
-            _w_exp_norm (torch.Tensor): Legacy fallback transition matrix
             base_rcn: RCN to deepcopy; provides device and C_REWARD
 
         Returns:
@@ -14047,9 +13843,7 @@ class Driver(Supervisor):
                 self, "goal_map_goal_seed_center_min_radius", 0.0
             ),
         )
-        goal_map_mode = str(
-            getattr(self, "unified_goal_map_mode", "paper_room_local_replay")
-        ).strip().lower()
+        goal_map_mode = "paper_room_local_replay"
         relay_logs = []
         checkpoint_seed_bank = []
         checkpoint_seed_support_id_bank = {}
@@ -14147,13 +13941,6 @@ class Driver(Supervisor):
 
         replay_log = "goal_map=no_builder"
         if hasattr(goal_rcn, "build_goal_map_from_custom_activations"):
-            goal_rcn.goal_map_local_anchor_weights = None
-            goal_rcn.goal_map_local_anchor_gate_d2 = None
-            goal_rcn.goal_map_local_anchor_query_sigma = None
-            goal_rcn.goal_map_local_anchor_names = None
-            checkpoint_mode = str(
-                getattr(self, "goal_map_checkpoint_mode", "implicit_cascade")
-            ).strip().lower()
             visibility_log = self._sync_unified_recurrent_visibility_mask(prune_weights=True)
             visibility_mask, _, _ = self._get_unified_spatial_visibility_mask(
                 goal_rcn.w_in.device
@@ -14177,9 +13964,7 @@ class Driver(Supervisor):
             path_constraint = path_kernel if path_kernel is not None else visibility_mask
             segmented_log = "segmented=disabled"
             segmented_data = None
-            goal_map_mode = str(
-                getattr(self, "unified_goal_map_mode", "paper_room_local_replay")
-            ).strip().lower()
+            goal_map_mode = "paper_room_local_replay"
             if goal_map_mode == "paper_room_local_replay":
                 goal_rcn, replay_log = self._build_paper_room_local_goal_map(
                     goal_rcn=goal_rcn,
@@ -17345,40 +17130,15 @@ class Driver(Supervisor):
                 )
                 goal_rcn.goal_map_debug_log = replay_log
         elif hasattr(goal_rcn, "replay_with_custom_activations"):
-            visibility_log = self._sync_unified_recurrent_visibility_mask(prune_weights=True)
-            goal_rcn.replay_with_custom_activations(
-                unified_pcn=self.unified_pcn,
-                custom_activations=seed_activations,
-                use_scale_gate=True,
+            raise RuntimeError(
+                "Goal-map mode pruning removed the additive replay fallback; "
+                "expected paper-room-local goal-map construction."
             )
-            replay_log = f"goal_map=additive_replay,{history_log},{visibility_log}"
         else:
-            # Legacy fallback: use the supplied transition matrix directly if the
-            # unified replay helper is unavailable.
-            C_REWARD = float(getattr(goal_rcn, "C_REWARD", 5.0))
-            weight_update = torch.zeros_like(goal_rcn.w_in)
-            unified_replay_steps = max(
-                1, int(getattr(self, "goal_map_replay_timesteps", 12))
+            raise RuntimeError(
+                "Goal-map mode pruning removed the legacy unified replay fallback; "
+                "expected paper-room-local goal-map construction."
             )
-            lambda_unified = float(max(1.0, getattr(goal_rcn, "lambda_s", 20.0)))
-            A_unified = C_REWARD / max(lambda_unified, 1e-6)
-
-            v = seed_activations
-            for t in range(unified_replay_steps):
-                decay = math.exp(-t / lambda_unified)
-                norm_val = torch.sqrt(torch.max(
-                    torch.sum(v ** 2), torch.tensor(1e-12, device=rcn_device)
-                ))
-                v_norm = v / norm_val
-                v_norm = torch.where(torch.isnan(v_norm), torch.zeros_like(v_norm), v_norm)
-                weight_update[0, :] += A_unified * decay * v_norm
-                v = torch.tanh(torch.relu(torch.matmul(_w_exp_norm, v_norm) + v_norm))
-
-            max_val = torch.max(torch.abs(weight_update))
-            if torch.isfinite(max_val) and max_val > 1e3:
-                weight_update = weight_update / max_val
-            goal_rcn.w_in = goal_rcn.w_in + weight_update
-            replay_log = f"goal_map=legacy_fallback,{history_log}"
 
         goal_rcn.w_in = torch.clamp(goal_rcn.w_in, min=0.0)
         goal_rcn.w_in_effective = torch.clamp(goal_rcn.w_in.clone(), min=0.0)
@@ -17419,7 +17179,6 @@ class Driver(Supervisor):
                 goal_rcn, seed_log = self._compute_reward_weights(
                     goal_x,
                     goal_y,
-                    None,
                     self.unified_rcn,
                     seed_sigma=float(goal.get("radius", 0.8)),
                     goal_name=str(goal["name"]),
