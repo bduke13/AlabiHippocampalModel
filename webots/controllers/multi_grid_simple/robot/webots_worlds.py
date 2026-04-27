@@ -111,14 +111,14 @@ WORLD_CONFIGS = {
             ),
         ],
     },
-    "20x20_multi_goal": {
+    "20x20_open": {
         "size": [20.0, 20.0],
-        "world_file": "20x20_multi_goal.wbt",
+        "world_file": "20x20_open.wbt",
         "obstacles": [],
     },
-    "20x20_cross_multi_goal": {
+    "20x20_cross": {
         "size": [20.0, 20.0],
-        "world_file": "20x20_cross_multi_goal.wbt",
+        "world_file": "20x20_cross.wbt",
         "obstacles": [
             _rectangle_obstacle(
                 "horizontal_wall",
@@ -138,9 +138,9 @@ WORLD_CONFIGS = {
             ),
         ],
     },
-    "20x20_maze_multi_goal": {
+    "20x20_maze": {
         "size": [20.0, 20.0],
-        "world_file": "20x20_maze_multi_goal.wbt",
+        "world_file": "20x20_maze.wbt",
         "obstacles": [
             _rectangle_obstacle(
                 "MazeMid_HorizLeft",
