@@ -20,7 +20,7 @@ STATS_ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 os.chdir(STATS_ROOT_DIR)
 
 # Define worlds
-worlds = ["20x20_base", "20x20_grid", "20x20_cross_base", "20x20_cross_grid"]  # All available worlds
+worlds = ["20x20", "20x20_1obstacle", "20x20_2obstacles"]  # All available worlds
 
 # The corner we care about
 corner_to_analyze = (8, -8)
