@@ -7,11 +7,23 @@ from pathlib import Path
 
 try:
     from config import MODE_PARAMS, get_smoke_test_config
-    from launcher import launch_webots, prepare_controller_world
+    from launcher import (
+        canonical_world_name,
+        cleanup_generated_world,
+        cleanup_stale_generated_worlds,
+        launch_webots,
+        prepare_controller_world,
+    )
     from run_summary import update_run_summary
 except ImportError:  # Support package import from repo root.
     from .config import MODE_PARAMS, get_smoke_test_config
-    from .launcher import launch_webots, prepare_controller_world
+    from .launcher import (
+        canonical_world_name,
+        cleanup_generated_world,
+        cleanup_stale_generated_worlds,
+        launch_webots,
+        prepare_controller_world,
+    )
     from .run_summary import update_run_summary
 
 CONTROLLER_DIR = Path(__file__).resolve().parent
@@ -21,6 +33,7 @@ HMAP_ARTIFACTS = (
     "hmaps/hmap_pcn.pkl",
     "hmaps/hmap_hdn.pkl",
     "hmaps/hmap_bvc.pkl",
+    "hmaps/hmap_gcn.pkl",
 )
 
 
@@ -318,90 +331,100 @@ def _print_validation_suite_summary(
 
 def run_smoke_test_suite() -> list[SmokeTestResult]:
     smoke_config = get_smoke_test_config()
+    cleanup_stale_generated_worlds()
     world_copy = prepare_controller_world(
         smoke_config["world"],
         controller_name="multi_grid_simple",
         suffix="smoke",
     )
+    source_world_name = canonical_world_name(smoke_config["world"])
 
     results: list[SmokeTestResult] = []
+    try:
+        for mode in smoke_config["modes"]:
+            run_id = f"smoke_{mode.lower()}"
+            run_dir = RUNS_DIR / run_id
+            _reset_run_dir(run_dir)
 
-    for mode in smoke_config["modes"]:
-        run_id = f"smoke_{mode.lower()}"
-        run_dir = RUNS_DIR / run_id
-        _reset_run_dir(run_dir)
+            env = {
+                "MULTI_GRID_SIMPLE_SELECTED_MODE": mode,
+                "MULTI_GRID_SIMPLE_MODE_PARAMS_JSON": json.dumps(
+                    _mode_overrides(mode, smoke_config, run_id)
+                ),
+                "MULTI_GRID_SIMPLE_AUTOMATION_CONFIG_JSON": json.dumps(
+                    _automation_overrides()
+                ),
+                "MULTI_GRID_SIMPLE_CANONICAL_WORLD_NAME": source_world_name,
+            }
 
-        env = {
-            "MULTI_GRID_SIMPLE_SELECTED_MODE": mode,
-            "MULTI_GRID_SIMPLE_MODE_PARAMS_JSON": json.dumps(
-                _mode_overrides(mode, smoke_config, run_id)
-            ),
-            "MULTI_GRID_SIMPLE_AUTOMATION_CONFIG_JSON": json.dumps(
-                _automation_overrides()
-            ),
-        }
+            process = launch_webots(world_copy, env=env)
+            _wait_for_run_completion(
+                process,
+                timeout_seconds=smoke_config["timeout_seconds"],
+                label=f"Smoke test for {mode}",
+            )
 
-        process = launch_webots(world_copy, env=env)
-        _wait_for_run_completion(
-            process,
-            timeout_seconds=smoke_config["timeout_seconds"],
-            label=f"Smoke test for {mode}",
-        )
+            _verify_run_artifacts(mode, run_dir)
+            results.append(SmokeTestResult(mode=mode, run_id=run_id, run_dir=run_dir))
 
-        _verify_run_artifacts(mode, run_dir)
-        results.append(SmokeTestResult(mode=mode, run_id=run_id, run_dir=run_dir))
-
-        time.sleep(1.0)
+            time.sleep(1.0)
+    finally:
+        cleanup_generated_world(world_copy)
 
     return results
 
 
 def run_single_session_smoke_suite() -> list[SessionSmokeTestResult]:
     smoke_config = get_smoke_test_config()
+    cleanup_stale_generated_worlds()
     world_copy = prepare_controller_world(
         smoke_config["world"],
         controller_name="multi_grid_simple",
         suffix="session_smoke",
     )
+    source_world_name = canonical_world_name(smoke_config["world"])
 
     results: list[SessionSmokeTestResult] = []
+    try:
+        for mode in smoke_config["modes"]:
+            run_id_prefix = f"session_{mode.lower()}"
+            num_trials = int(smoke_config.get("series_num_trials", 2))
+            run_ids = [f"{run_id_prefix}_trial_{trial_index:03d}" for trial_index in range(1, num_trials + 1)]
+            run_dirs = [RUNS_DIR / run_id for run_id in run_ids]
+            for run_dir in run_dirs:
+                _reset_run_dir(run_dir)
 
-    for mode in smoke_config["modes"]:
-        run_id_prefix = f"session_{mode.lower()}"
-        num_trials = int(smoke_config.get("series_num_trials", 2))
-        run_ids = [f"{run_id_prefix}_trial_{trial_index:03d}" for trial_index in range(1, num_trials + 1)]
-        run_dirs = [RUNS_DIR / run_id for run_id in run_ids]
-        for run_dir in run_dirs:
-            _reset_run_dir(run_dir)
+            env = {
+                "MULTI_GRID_SIMPLE_SELECTED_MODE": mode,
+                "MULTI_GRID_SIMPLE_MODE_PARAMS_JSON": json.dumps(
+                    _mode_overrides(mode, smoke_config)
+                ),
+                "MULTI_GRID_SIMPLE_AUTOMATION_CONFIG_JSON": json.dumps(
+                    {
+                        **_automation_overrides(),
+                        "quit_on_completion": True,
+                    }
+                ),
+                "MULTI_GRID_SIMPLE_EXECUTION_CONFIG_JSON": json.dumps(
+                    _series_execution_overrides(smoke_config, run_id_prefix)
+                ),
+                "MULTI_GRID_SIMPLE_CANONICAL_WORLD_NAME": source_world_name,
+            }
 
-        env = {
-            "MULTI_GRID_SIMPLE_SELECTED_MODE": mode,
-            "MULTI_GRID_SIMPLE_MODE_PARAMS_JSON": json.dumps(
-                _mode_overrides(mode, smoke_config)
-            ),
-            "MULTI_GRID_SIMPLE_AUTOMATION_CONFIG_JSON": json.dumps(
-                {
-                    **_automation_overrides(),
-                    "quit_on_completion": True,
-                }
-            ),
-            "MULTI_GRID_SIMPLE_EXECUTION_CONFIG_JSON": json.dumps(
-                _series_execution_overrides(smoke_config, run_id_prefix)
-            ),
-        }
+            process = launch_webots(world_copy, env=env)
+            _wait_for_run_completion(
+                process,
+                timeout_seconds=smoke_config["timeout_seconds"],
+                label=f"Single-session smoke test for {mode}",
+            )
 
-        process = launch_webots(world_copy, env=env)
-        _wait_for_run_completion(
-            process,
-            timeout_seconds=smoke_config["timeout_seconds"],
-            label=f"Single-session smoke test for {mode}",
-        )
+            for run_dir in run_dirs:
+                _verify_run_artifacts(mode, run_dir)
 
-        for run_dir in run_dirs:
-            _verify_run_artifacts(mode, run_dir)
-
-        results.append(SessionSmokeTestResult(mode=mode, run_ids=run_ids, run_dirs=run_dirs))
-        time.sleep(1.0)
+            results.append(SessionSmokeTestResult(mode=mode, run_ids=run_ids, run_dirs=run_dirs))
+            time.sleep(1.0)
+    finally:
+        cleanup_generated_world(world_copy)
 
     return results
 
@@ -409,58 +432,63 @@ def run_single_session_smoke_suite() -> list[SessionSmokeTestResult]:
 def run_base_mode_validation_suite() -> list[ValidationResult]:
     smoke_config = get_smoke_test_config()
     validation_modes = smoke_config.get("validation_modes", ["LEARN_HEBB", "DMTP", "EXPLOIT"])
+    cleanup_stale_generated_worlds()
     world_copy = prepare_controller_world(
         smoke_config["world"],
         controller_name="multi_grid_simple",
         suffix="validation",
     )
+    source_world_name = canonical_world_name(smoke_config["world"])
 
     results: list[ValidationResult] = []
     failures: list[str] = []
+    try:
+        for mode in validation_modes:
+            run_id = f"validate_{mode.lower()}"
+            run_dir = RUNS_DIR / run_id
+            _reset_run_dir(run_dir)
 
-    for mode in validation_modes:
-        run_id = f"validate_{mode.lower()}"
-        run_dir = RUNS_DIR / run_id
-        _reset_run_dir(run_dir)
+            spec = _build_validation_spec(mode, smoke_config)
+            env = {
+                "MULTI_GRID_SIMPLE_SELECTED_MODE": mode,
+                "MULTI_GRID_SIMPLE_MODE_PARAMS_JSON": json.dumps(
+                    _mode_overrides(
+                        mode,
+                        smoke_config,
+                        run_id,
+                        extra_overrides=spec.mode_params_overrides,
+                    )
+                ),
+                "MULTI_GRID_SIMPLE_AUTOMATION_CONFIG_JSON": json.dumps(
+                    _automation_overrides()
+                ),
+                "MULTI_GRID_SIMPLE_CANONICAL_WORLD_NAME": source_world_name,
+            }
 
-        spec = _build_validation_spec(mode, smoke_config)
-        env = {
-            "MULTI_GRID_SIMPLE_SELECTED_MODE": mode,
-            "MULTI_GRID_SIMPLE_MODE_PARAMS_JSON": json.dumps(
-                _mode_overrides(
-                    mode,
-                    smoke_config,
-                    run_id,
-                    extra_overrides=spec.mode_params_overrides,
+            try:
+                process = launch_webots(world_copy, env=env)
+                _wait_for_run_completion(
+                    process,
+                    timeout_seconds=smoke_config["timeout_seconds"],
+                    label=f"Validation for {mode}",
                 )
-            ),
-            "MULTI_GRID_SIMPLE_AUTOMATION_CONFIG_JSON": json.dumps(
-                _automation_overrides()
-            ),
-        }
+                results.append(_validate_mode_run(spec, run_id, run_dir))
+            except Exception as exc:
+                if run_dir.exists():
+                    update_run_summary(
+                        run_dir,
+                        validation={
+                            "status": "failed",
+                            "suite": "base_mode_validation",
+                            "checked_at": datetime.now().isoformat(),
+                            "failure": str(exc),
+                        },
+                    )
+                failures.append(f"{mode}: {exc}")
 
-        try:
-            process = launch_webots(world_copy, env=env)
-            _wait_for_run_completion(
-                process,
-                timeout_seconds=smoke_config["timeout_seconds"],
-                label=f"Validation for {mode}",
-            )
-            results.append(_validate_mode_run(spec, run_id, run_dir))
-        except Exception as exc:
-            if run_dir.exists():
-                update_run_summary(
-                    run_dir,
-                    validation={
-                        "status": "failed",
-                        "suite": "base_mode_validation",
-                        "checked_at": datetime.now().isoformat(),
-                        "failure": str(exc),
-                    },
-                )
-            failures.append(f"{mode}: {exc}")
-
-        time.sleep(1.0)
+            time.sleep(1.0)
+    finally:
+        cleanup_generated_world(world_copy)
 
     _print_validation_suite_summary(results, failures)
 

@@ -16,6 +16,8 @@ def initialize_run_artifacts(
     randomize_start_loc: bool,
     start_loc,
     start_rotation,
+    load_networks_from_run_id,
+    load_hmaps_from_run_id,
     enable_ojas,
     enable_stdp,
     goal_location,
@@ -36,6 +38,16 @@ def initialize_run_artifacts(
     driver.run_dir = runs_root / run_id
     driver.hmap_dir = driver.run_dir / "hmaps"
     driver.network_dir = driver.run_dir / "networks"
+    driver.network_load_dir = (
+        runs_root / load_networks_from_run_id / "networks"
+        if load_networks_from_run_id
+        else driver.network_dir
+    )
+    driver.hmap_load_dir = (
+        runs_root / load_hmaps_from_run_id / "hmaps"
+        if load_hmaps_from_run_id
+        else driver.hmap_dir
+    )
     driver.visualization_dir = visualizations_root / run_id
     driver.config_path = driver.run_dir / "config.json"
     driver.metrics_path = driver.run_dir / "metrics.json"
@@ -52,6 +64,8 @@ def initialize_run_artifacts(
         "randomize_start_loc": randomize_start_loc,
         "start_loc": start_loc,
         "start_rotation": start_rotation,
+        "load_networks_from_run_id": load_networks_from_run_id,
+        "load_hmaps_from_run_id": load_hmaps_from_run_id,
         "enable_ojas": enable_ojas,
         "enable_stdp": enable_stdp,
         "goal_location": goal_location,
@@ -150,6 +164,12 @@ def save_driver_state(
             pickle.dump(bvc_cpu, output)
         files_saved.append(str(hmap_bvc_path))
 
+        hmap_gcn_path = driver.hmap_dir / "hmap_gcn.pkl"
+        with open(hmap_gcn_path, "wb") as output:
+            gcn_cpu = driver.hmap_gcn[: driver.step_count].cpu().numpy()
+            pickle.dump(gcn_cpu, output)
+        files_saved.append(str(hmap_gcn_path))
+
     return files_saved
 
 
@@ -161,6 +181,7 @@ def clear_driver_outputs(driver) -> None:
         driver.hmap_dir / "hmap_pcn.pkl",
         driver.hmap_dir / "hmap_bvc.pkl",
         driver.hmap_dir / "hmap_hdn.pkl",
+        driver.hmap_dir / "hmap_gcn.pkl",
     ]
 
     for file_path in files_to_remove:

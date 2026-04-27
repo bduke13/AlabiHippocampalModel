@@ -22,7 +22,8 @@ from driver_setup import (
 )
 from layers.pcn import PlaceCellLayer
 from layers.rcn import RewardCellLayer
-from layers.sbvc import BoundaryVectorCellLayer
+from layers.bvc import BoundaryVectorCellLayer
+from layers.gcn import GridCellLayer
 from robot.robot_mode import RobotMode
 from webots_control import (
     current_world_name,
@@ -52,6 +53,8 @@ class Driver(Supervisor):
         randomize_start_loc: bool = True,
         start_loc: Optional[List[int]] = None,
         start_rotation: Optional[List[float]] = None,
+        load_networks_from_run_id: Optional[str] = None,
+        load_hmaps_from_run_id: Optional[str] = None,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
         world_name: Optional[str] = None,
@@ -76,6 +79,10 @@ class Driver(Supervisor):
                 Defaults to None.
             start_rotation (Optional[List[float]], optional): Robot axis-angle rotation to restore
                 at trial start. Defaults to None.
+            load_networks_from_run_id (Optional[str], optional): Run ID whose saved networks should
+                be loaded into this run before execution. Defaults to None.
+            load_hmaps_from_run_id (Optional[str], optional): Run ID whose saved hmaps should
+                seed this run's histories before execution. Defaults to None.
             enable_ojas (Optional[bool], optional): Flag to enable Oja's learning rule.
                 If None, determined by robot mode. Defaults to None.
             enable_stdp (Optional[bool], optional): Flag to enable Spike-Timing-Dependent Plasticity.
@@ -100,6 +107,8 @@ class Driver(Supervisor):
         self.configured_start_rotation = (
             list(start_rotation) if start_rotation is not None else None
         )
+        self.load_networks_from_run_id = load_networks_from_run_id
+        self.load_hmaps_from_run_id = load_hmaps_from_run_id
         self.configured_randomize_start_loc = bool(randomize_start_loc)
         self.trial_completed = False
         self.trial_completion_reason = None
@@ -118,6 +127,8 @@ class Driver(Supervisor):
             randomize_start_loc=randomize_start_loc,
             start_loc=start_loc,
             start_rotation=start_rotation,
+            load_networks_from_run_id=load_networks_from_run_id,
+            load_hmaps_from_run_id=self.load_hmaps_from_run_id,
             enable_ojas=enable_ojas,
             enable_stdp=enable_stdp,
             goal_location=goal_location,
@@ -163,13 +174,14 @@ class Driver(Supervisor):
             learning_rate=0.1,
             device=self.device,
         )
+        self.load_gcn(device=self.device)
         initialize_head_direction_layer(self)
         initialize_histories(self)
 
         # progresses the simulation physics by the timestep property within this class
         self.step(self.timestep)
         # step_count measures how many times the hmaps were updated
-        self.step_count = 1
+        self.step_count = getattr(self, "history_step_count", 1)
 
         self.sense()
         self.compute_pcn_activations()
@@ -204,14 +216,22 @@ class Driver(Supervisor):
             PlaceCellLayer: The loaded or newly initialized place cell network.
         """
         try:
-            network_path = os.path.join(self.network_dir, "pcn.pkl")
+            network_path = os.path.join(self.network_load_dir, "pcn.pkl")
             with open(network_path, "rb") as f:
                 self.pcn = pickle.load(f)
                 self.pcn.reset_activations()
                 print("Loaded existing PCN from", network_path)
                 self.pcn.device = device
                 self.pcn.bvc_layer.device = device
-        except:
+        except Exception:
+            if self.load_networks_from_run_id:
+                print(
+                    "Could not load PCN from prior run",
+                    self.load_networks_from_run_id,
+                    "at",
+                    network_path,
+                    "- initializing a new PCN instead.",
+                )
             bvc = BoundaryVectorCellLayer(
                 n_res=self.lidar_resolution,
                 n_hd=n_hd,
@@ -264,12 +284,20 @@ class Driver(Supervisor):
             RewardCellLayer: The loaded or newly initialized reward cell network.
         """
         try:
-            network_path = os.path.join(self.network_dir, "rcn.pkl")
+            network_path = os.path.join(self.network_load_dir, "rcn.pkl")
             with open(network_path, "rb") as f:
                 self.rcn = pickle.load(f)
                 print("Loaded existing RCN from", network_path)
                 self.rcn.device = device
-        except:
+        except Exception:
+            if self.load_networks_from_run_id:
+                print(
+                    "Could not load RCN from prior run",
+                    self.load_networks_from_run_id,
+                    "at",
+                    network_path,
+                    "- initializing a new RCN instead.",
+                )
             self.rcn = RewardCellLayer(
                 num_place_cells=num_place_cells,
                 num_replay=num_replay,
@@ -279,6 +307,29 @@ class Driver(Supervisor):
             print("Initialized new RCN")
 
         return self.rcn
+
+    def load_gcn(self, device: torch.device):
+        """Initialize the grid-cell layer used for runtime history logging."""
+        self.gcn = GridCellLayer(
+            num_modules=self.num_grid_modules,
+            cells_per_module=self.num_grid_cells_per_module,
+            spread_range=self.grid_spread_range,
+            scale_multiplier=self.grid_scale_multiplier,
+            translation_scale=self.grid_translation_scale,
+            threshold=self.grid_threshold,
+            threshold_type="soft",
+            normalization="per-cell",
+            world_name=self.world_name,
+            device=str(device),
+            dtype=self.dtype,
+        )
+        print(
+            "Initialized GCN with",
+            self.gcn.total_grid_cells,
+            "cells for world",
+            self.world_name,
+        )
+        return self.gcn
 
     ########################################### RUN LOOP ###########################################
 
@@ -495,6 +546,11 @@ class Driver(Supervisor):
             distances=self.boundaries,
             hd_activations=self.hd_activations,
             collided=torch.any(self.collided),
+        )
+        curr_pos = robot_position(self.robot)
+        self.gcn_activations = self.gcn.get_grid_cell_activations(
+            [curr_pos[0], curr_pos[2]],
+            use_mask=False,
         )
         if self.show_bvc_activation:
             self.pcn.bvc_layer.plot_activation(self.boundaries.cpu())
@@ -747,6 +803,9 @@ class Driver(Supervisor):
             # Record Head Direction Network (HDN) activations
             self.hmap_hdn[self.step_count] = self.hd_activations.detach()
 
+            # Record Grid Cell Network (GCN) activations
+            self.hmap_gcn[self.step_count] = self.gcn_activations.detach()
+
         self.step_count += 1
 
     def get_actual_reward(self):
@@ -818,6 +877,16 @@ class Driver(Supervisor):
             files_saved=files_saved,
             extra=metrics_extra or None,
         )
+
+        if include_hmaps:
+            try:
+                from plot_run import run as generate_verification_plots
+            except ImportError:
+                from .plot_run import run as generate_verification_plots
+            try:
+                generate_verification_plots(self.run_id)
+            except Exception as exc:
+                print(f"[save] Warning: automatic plot generation failed for {self.run_id}: {exc}")
 
         if self.export_image_on_completion:
             image_path = (
