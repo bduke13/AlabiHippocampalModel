@@ -86,7 +86,7 @@ AUTOMATION_CONFIG = {
 
 LAUNCH_CONFIG = {
     "webots_executable": None,
-    "world": "10x10.wbt",
+    "world": "10x10_open.wbt",
     "mode": "fast",
     "batch": True,
     "no_rendering": True,
@@ -98,7 +98,7 @@ LAUNCH_CONFIG = {
 }
 
 SMOKE_TEST_CONFIG = {
-    "world": "10x10.wbt",
+    "world": "10x10_open.wbt",
     "modes": ["PLOTTING", "LEARN_OJAS"],
     "validation_modes": ["LEARN_HEBB", "DMTP", "EXPLOIT"],
     "run_time_hours": 0.001,

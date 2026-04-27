@@ -1,0 +1,76 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/robots/irobot/create/protos/Create.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/Roughcast.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/apartment_structure/protos/Wall.proto"
+
+WorldInfo {
+  info [
+    "10x10 single-obstacle environment for multi_grid_simple"
+  ]
+  title "10x10 Single Obstacle"
+  coordinateSystem "NUE"
+}
+Viewpoint {
+  orientation -0.7071057814660382 0.7071077809056435 5.551115123136879e-17 3.1415966524690035
+  position 6.802834452263558e-06 23.0531169312583 -6.802853685725279e-06
+  near 0.1
+  follow "agent"
+  followType "None"
+}
+TexturedBackground {
+}
+RectangleArena {
+  rotation 1 0 0 -1.5707953071795862
+  floorSize 10 10
+  floorAppearance NULL
+  wallHeight 0.4
+}
+DirectionalLight {
+  direction 0 -1 0
+}
+Wall {
+  translation -0.25 1.2 0
+  rotation 0 1 0 1.5708
+  name "CenterDivider"
+  size 4 2.4 0.5
+  appearance Roughcast {
+    colorOverride 0.8 0.6 0.25
+  }
+}
+DEF agent Create {
+  translation 0 0.0441865 0
+  rotation -0.6607352787486408 0.5303053028717288 0.5312298722427797 1.9727887896457816
+  controller "multi_grid_simple"
+  supervisor TRUE
+  bodySlot [
+    Solid {
+      translation 0 0 0.04
+      children [
+        Display {
+          width 100
+          height 100
+        }
+        Compass {
+        }
+        DEF range-finder RangeFinder {
+          fieldOfView 6.28
+          width 720
+          height 1
+          projection "cylindrical"
+          maxRange 20
+        }
+        Shape {
+          appearance PBRAppearance {
+          }
+          geometry Cylinder {
+            height 0.04
+            radius 0.05
+          }
+        }
+      ]
+    }
+  ]
+}

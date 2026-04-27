@@ -1,3 +1,4 @@
+import os
 import random
 from pathlib import Path
 
@@ -5,6 +6,9 @@ import numpy as np
 
 
 def current_world_name(supervisor) -> str:
+    configured_name = os.environ.get("MULTI_GRID_SIMPLE_CANONICAL_WORLD_NAME")
+    if configured_name:
+        return Path(configured_name).stem
     return Path(supervisor.getWorldPath()).stem
 
 

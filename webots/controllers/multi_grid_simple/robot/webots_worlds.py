@@ -1,155 +1,214 @@
-"""
-Webots World Configuration Definitions
+"""World metadata for the local multi_grid_simple controller.
 
-This module contains environment definitions for all Webots worlds including:
-- Environment size specifications
-- Obstacle definitions (walls, mazes, etc.)
-- World bounds and spatial constraints
-
-These configurations are used by:
-- Path planning modules for navigation
-- Controllers for environment-specific parameters
-- Analysis tools for world-specific metrics
-
-Author: Claude Code
+These configs intentionally mirror the actual `.wbt` obstacle geometry. Webots
+uses the floor plane as X/Z, with Y as height, and the `Wall` proto places its
+box geometry offset by half its thickness along local +Z. The helper below
+converts Wall translation/size/rotation into world-space rectangle bounds so we
+do not hand-maintain mismatched numbers.
 """
 
-# World Configuration Definitions
+from __future__ import annotations
+
+
+def _wall_bounds(
+    *,
+    translation_x: float,
+    translation_z: float,
+    size_x: float,
+    size_z: float,
+    rotation_y_degrees: int = 0,
+) -> list[list[float]]:
+    """Convert a Webots Wall proto pose into [min_x, min_z], [max_x, max_z]."""
+    if rotation_y_degrees == 0:
+        return [
+            [translation_x - size_x / 2.0, translation_z],
+            [translation_x + size_x / 2.0, translation_z + size_z],
+        ]
+    if rotation_y_degrees == 90:
+        return [
+            [translation_x, translation_z - size_x / 2.0],
+            [translation_x + size_z, translation_z + size_x / 2.0],
+        ]
+    if rotation_y_degrees == -90:
+        return [
+            [translation_x - size_z, translation_z - size_x / 2.0],
+            [translation_x, translation_z + size_x / 2.0],
+        ]
+    if abs(rotation_y_degrees) == 180:
+        return [
+            [translation_x - size_x / 2.0, translation_z - size_z],
+            [translation_x + size_x / 2.0, translation_z],
+        ]
+    raise ValueError(f"Unsupported wall rotation {rotation_y_degrees}.")
+
+
+def _rectangle_obstacle(
+    name: str,
+    *,
+    translation_x: float,
+    translation_z: float,
+    size_x: float,
+    size_z: float,
+    rotation_y_degrees: int = 0,
+) -> dict:
+    return {
+        "type": "rectangle",
+        "name": name,
+        "bounds": _wall_bounds(
+            translation_x=translation_x,
+            translation_z=translation_z,
+            size_x=size_x,
+            size_z=size_z,
+            rotation_y_degrees=rotation_y_degrees,
+        ),
+        "wall_pose": {
+            "translation": [translation_x, translation_z],
+            "size": [size_x, size_z],
+            "rotation_y_degrees": rotation_y_degrees,
+        },
+    }
+
+
 WORLD_CONFIGS = {
-    "20x20_multi_goal": {
-        "size": [20.0, 20.0],  # [width, height] in meters
-        "obstacles": []  # Open environment - no obstacles
+    "10x10_open": {
+        "size": [10.0, 10.0],
+        "world_file": "10x10_open.wbt",
+        "obstacles": [],
     },
-
+    "10x10_single_obstacle": {
+        "size": [10.0, 10.0],
+        "world_file": "10x10_single_obstacle.wbt",
+        "obstacles": [
+            _rectangle_obstacle(
+                "CenterDivider",
+                translation_x=-0.25,
+                translation_z=0.0,
+                size_x=4.0,
+                size_z=0.5,
+                rotation_y_degrees=90,
+            ),
+        ],
+    },
+    "10x10_two_obstacles": {
+        "size": [10.0, 10.0],
+        "world_file": "10x10_two_obstacles.wbt",
+        "obstacles": [
+            _rectangle_obstacle(
+                "UpperLeftBar",
+                translation_x=-2.25,
+                translation_z=1.0,
+                size_x=4.0,
+                size_z=0.5,
+                rotation_y_degrees=0,
+            ),
+            _rectangle_obstacle(
+                "LowerRightBar",
+                translation_x=1.0,
+                translation_z=-1.5,
+                size_x=4.0,
+                size_z=0.5,
+                rotation_y_degrees=90,
+            ),
+        ],
+    },
+    "20x20_multi_goal": {
+        "size": [20.0, 20.0],
+        "world_file": "20x20_multi_goal.wbt",
+        "obstacles": [],
+    },
     "20x20_cross_multi_goal": {
         "size": [20.0, 20.0],
+        "world_file": "20x20_cross_multi_goal.wbt",
         "obstacles": [
-            {
-                "type": "rectangle",
-                "name": "horizontal_wall",
-                # Wall at translation 0, z=-0.25, size 12x0.5 (horizontal)
-                # Bounds: x=[-6, 6], z=[-0.25, 0.25]
-                "bounds": [[-6.0, -0.25], [6.0, 0.25]]
-            },
-            {
-                "type": "rectangle",
-                "name": "vertical_wall",
-                # Wall at translation -0.25, z=0, size 12x0.5 (vertical, rotated 90°)
-                # Bounds: x=[-0.25, 0.25], z=[-6, 6]
-                "bounds": [[-0.25, -6.0], [0.25, 6.0]]
-            }
-        ]
+            _rectangle_obstacle(
+                "horizontal_wall",
+                translation_x=0.0,
+                translation_z=-0.25,
+                size_x=12.0,
+                size_z=0.5,
+                rotation_y_degrees=0,
+            ),
+            _rectangle_obstacle(
+                "vertical_wall",
+                translation_x=-0.25,
+                translation_z=0.0,
+                size_x=12.0,
+                size_z=0.5,
+                rotation_y_degrees=90,
+            ),
+        ],
     },
-
     "20x20_maze_multi_goal": {
         "size": [20.0, 20.0],
+        "world_file": "20x20_maze_multi_goal.wbt",
         "obstacles": [
-            {
-                "type": "rectangle",
-                "name": "MazeMid_HorizLeft",
-                # Wall at translation -5.25, z=3, rotated 0°, size 9.5x0.5
-                # Internal offset: +0.25 in Z → Box center at z=3.25
-                # Bounds: x=[-10, -0.5], z=[3.0, 3.5]
-                "bounds": [[-10.0, 3.0], [-0.5, 3.5]]
-            },
-            {
-                "type": "rectangle",
-                "name": "MazeMid_HorizRight",
-                # Wall at translation 5.25, z=-3.2, rotated 0°, size 9.5x0.5
-                # Internal offset: +0.25 in Z → Box center at z=-2.95
-                # Bounds: x=[0.5, 10], z=[-3.2, -2.7]
-                "bounds": [[0.5, -3.2], [10.0, -2.7]]
-            },
-            {
-                "type": "rectangle",
-                "name": "MazeMid_VertLeft",
-                # Wall at translation -4, z=-0.2, rotated 90°, size 6.4x0.5
-                # Internal offset rotates: +0.25 in X → Box center at x=-3.75
-                # Bounds: x=[-4.0, -3.5], z=[-3.4, 3.0]
-                "bounds": [[-4.0, -3.4], [-3.5, 3.0]]
-            },
-            {
-                "type": "rectangle",
-                "name": "MazeMid_VertRight",
-                # Wall at translation 3, z=0.5, rotated 90°, size 6.4x0.5
-                # Internal offset rotates: +0.25 in X → Box center at x=3.25
-                # Bounds: x=[3.0, 3.5], z=[-2.7, 3.7]
-                "bounds": [[3.0, -2.7], [3.5, 3.7]]
-            },
-            {
-                "type": "rectangle",
-                "name": "MazeBottom_VertCenter",
-                # Wall at translation 0.5, z=-8.5, rotated 90°, size 3x0.5
-                # Internal offset rotates: +0.25 in X → Box center at x=0.75
-                # Bounds: x=[0.5, 1.0], z=[-10, -7]
-                "bounds": [[0.5, -10.0], [1.0, -7.0]]
-            },
-            {
-                "type": "rectangle",
-                "name": "MazeBottom_VertTop",
-                # Wall at translation -1, z=8.5, rotated 90°, size 3x0.5
-                # Internal offset rotates: +0.25 in X → Box center at x=-0.75
-                # Bounds: x=[-1.0, -0.5], z=[7, 10]
-                "bounds": [[-1.0, 7.0], [-0.5, 10.0]]
-            }
-        ]
-    }
+            _rectangle_obstacle(
+                "MazeMid_HorizLeft",
+                translation_x=-5.25,
+                translation_z=3.0,
+                size_x=9.5,
+                size_z=0.5,
+                rotation_y_degrees=0,
+            ),
+            _rectangle_obstacle(
+                "MazeMid_HorizRight",
+                translation_x=5.25,
+                translation_z=-3.2,
+                size_x=9.5,
+                size_z=0.5,
+                rotation_y_degrees=0,
+            ),
+            _rectangle_obstacle(
+                "MazeMid_VertLeft",
+                translation_x=-4.0,
+                translation_z=-0.2,
+                size_x=6.4,
+                size_z=0.5,
+                rotation_y_degrees=90,
+            ),
+            _rectangle_obstacle(
+                "MazeMid_VertRight",
+                translation_x=3.0,
+                translation_z=0.5,
+                size_x=6.4,
+                size_z=0.5,
+                rotation_y_degrees=90,
+            ),
+            _rectangle_obstacle(
+                "MazeBottom_VertCenter",
+                translation_x=0.5,
+                translation_z=-8.5,
+                size_x=3.0,
+                size_z=0.5,
+                rotation_y_degrees=90,
+            ),
+            _rectangle_obstacle(
+                "MazeTop_VertCenter",
+                translation_x=-1.0,
+                translation_z=8.5,
+                size_x=3.0,
+                size_z=0.5,
+                rotation_y_degrees=90,
+            ),
+        ],
+    },
 }
 
 
 def get_world_config(world_name: str) -> dict:
-    """
-    Get configuration for a specific world.
-
-    Args:
-        world_name: Name of the world configuration to retrieve
-
-    Returns:
-        Dictionary containing world configuration
-
-    Raises:
-        ValueError: If world_name is not found in WORLD_CONFIGS
-    """
     if world_name not in WORLD_CONFIGS:
         available = list(WORLD_CONFIGS.keys())
         raise ValueError(f"Unknown world: {world_name}. Available worlds: {available}")
-
     return WORLD_CONFIGS[world_name].copy()
 
 
 def list_available_worlds() -> list:
-    """
-    Get list of all available world configurations.
-
-    Returns:
-        List of world names
-    """
     return list(WORLD_CONFIGS.keys())
 
 
 def get_world_size(world_name: str) -> list:
-    """
-    Get size of a specific world.
-
-    Args:
-        world_name: Name of the world
-
-    Returns:
-        [width, height] in meters
-    """
-    config = get_world_config(world_name)
-    return config["size"]
+    return get_world_config(world_name)["size"]
 
 
 def get_world_obstacles(world_name: str) -> list:
-    """
-    Get obstacles for a specific world.
-
-    Args:
-        world_name: Name of the world
-
-    Returns:
-        List of obstacle definitions
-    """
-    config = get_world_config(world_name)
-    return config["obstacles"]
+    return get_world_config(world_name)["obstacles"]
