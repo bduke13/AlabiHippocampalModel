@@ -8,39 +8,55 @@ torch.manual_seed(5)
 
 
 class PlaceCellLayer:
-    """Model a layer of place cells receiving input from Boundary Vector Cells.
+    """Model a layer of place cells receiving input from BVCs and optional GCs.
 
     Place cells develop spatially localized receptive fields (place fields) through
     competitive learning and synaptic plasticity.
 
-    This implementation is based on the model described in Chapter 3 of the
-    dissertation, specifically Equations (3.2a), (3.2b), and (3.3).
+    The grid-cell coupling mirrors the legacy multiscale controller's single-scale
+    BVC/GC convex-combination path when grid input is enabled by the runtime profile.
     """
 
     def __init__(
         self,
         bvc_layer,
         num_pc: int = 200,
+        num_grid_cells: int = 0,
         timestep: int = 32 * 3,
         n_hd: int = 8,
         enable_ojas: bool = False,
         enable_stdp: bool = False,
         w_in_init_ratio: float = 0.25,
+        w_grid_init_ratio: float = 0.25,
+        w_grid_init_strategy: str = "balanced_modules",
+        gc_num_modules: Optional[int] = None,
+        gc_cells_per_module: Optional[int] = None,
+        grid_influence: float = 0.0,
         device: torch.device = torch.device("cpu"),
         dtype: torch.dtype = torch.float32,
         gamma_pp: float = 0.5,
         gamma_pb: float = 0.3,
+        gamma_pg: float = 0.3,
+        alpha_pb: Optional[float] = None,
+        alpha_pg: Optional[float] = None,
     ):
         """Initialize the Place Cell Layer.
 
         Args:
             bvc_layer: The BVC layer used as input to place cell activations.
             num_pc: Number of place cells in the layer.
+            num_grid_cells: Number of grid cells providing input to the place-cell layer.
             timestep: Time step for simulation/learning updates in milliseconds.
             n_hd: Number of head direction cells.
             enable_ojas: Enable weight updates via competition.
             enable_stdp: Enable tripartite synapse weight updates via Spike-Timing-Dependent Plasticity.
             w_in_init_ratio: What proportion of the weights of BVC -> PCN are active initially
+            w_grid_init_ratio: What proportion of the weights of GC -> PCN are active initially.
+            w_grid_init_strategy: Grid-weight init strategy. `balanced_modules` mirrors the
+                old multiscale controller and spreads initial GC links across modules.
+            gc_num_modules: Number of grid modules used when `balanced_modules` is selected.
+            gc_cells_per_module: Cells per module used when `balanced_modules` is selected.
+            grid_influence: Fraction of GC contribution in the BVC/GC convex combination.
             device: Which device to place the tensors on (e.g., "cpu" or "cuda").
             dtype: PyTorch data type (e.g., torch.float32).
         """
@@ -59,12 +75,59 @@ class PlaceCellLayer:
         # Number of BVCs (Boundary Vector Cells)
         self.num_bvc = self.bvc_layer.num_bvc
 
+        # Number of grid cells and their contribution to the PCN.
+        self.num_grid_cells = int(num_grid_cells)
+        self.grid_influence = float(grid_influence)
+
         # Input weight matrix connecting place cells to BVCs
         # Shape: (num_pc, num_bvc)
         w_in_init = rng.binomial(n=1, p=w_in_init_ratio, size=(num_pc, self.num_bvc))
         w_in_init = torch.tensor(w_in_init, dtype=self.dtype, device=self.device)
         # We wrap in nn.Parameter so the weights can be learnable if needed
         self.w_in = torch.nn.Parameter(w_in_init, requires_grad=False)
+
+        if self.num_grid_cells > 0:
+            use_balanced = (
+                isinstance(w_grid_init_strategy, str)
+                and w_grid_init_strategy.lower() == "balanced_modules"
+                and isinstance(gc_num_modules, int)
+                and gc_num_modules is not None
+                and gc_num_modules > 0
+                and isinstance(gc_cells_per_module, int)
+                and gc_cells_per_module is not None
+                and gc_cells_per_module > 0
+            )
+
+            if use_balanced and (gc_num_modules * gc_cells_per_module >= self.num_grid_cells):
+                total_gc = self.num_grid_cells
+                selected_per_pc = int(round(w_grid_init_ratio * total_gc))
+                selected_per_pc = max(0, min(selected_per_pc, total_gc))
+                w_grid_np = np.zeros((num_pc, total_gc), dtype=np.int8)
+                base_q = selected_per_pc // gc_num_modules
+                remainder = selected_per_pc - (base_q * gc_num_modules)
+
+                for pc_index in range(num_pc):
+                    for module_index in range(gc_num_modules):
+                        module_start = module_index * gc_cells_per_module
+                        if module_start >= total_gc:
+                            break
+                        module_size = min(gc_cells_per_module, total_gc - module_start)
+                        quota = min(base_q + (1 if module_index < remainder else 0), module_size)
+                        if quota > 0:
+                            chosen = rng.choice(module_size, size=quota, replace=False)
+                            w_grid_np[pc_index, module_start + chosen] = 1
+                w_grid_init = torch.tensor(w_grid_np, dtype=self.dtype, device=self.device)
+            else:
+                w_grid_init = rng.binomial(
+                    n=1,
+                    p=w_grid_init_ratio,
+                    size=(num_pc, self.num_grid_cells),
+                )
+                w_grid_init = torch.tensor(w_grid_init, dtype=self.dtype, device=self.device)
+
+            self.w_grid = torch.nn.Parameter(w_grid_init, requires_grad=False)
+        else:
+            self.w_grid = None
 
         # Recurrent weight matrix for head direction and place cell interactions
         # Shape: (n_hd, num_pc, num_pc)
@@ -87,20 +150,33 @@ class PlaceCellLayer:
             self.num_bvc, dtype=self.dtype, device=self.device
         )
 
+        if self.num_grid_cells > 0:
+            self.grid_cell_activations = torch.zeros(
+                self.num_grid_cells,
+                dtype=self.dtype,
+                device=self.device,
+            )
+        else:
+            self.grid_cell_activations = None
+
         # Coefficient to modify effect of place cell recurrent inhibition (Γ_pp in Equation 3.2a)
         self.gamma_pp = gamma_pp
 
         # Coefficient to modify effect of boundary vector cell afferent inhibition (Γ_pb in Equation 3.2a)
         self.gamma_pb = gamma_pb
+        self.gamma_pg = gamma_pg
 
         # Time constant for the membrane potential dynamics of place cells (τ_p in Equation 3.2a)
         self.tau_p = 0.5
 
         # Normalization factor for synaptic weight updates (α_pb in Equation 3.3)
-        self.alpha_pb = np.sqrt(0.5)
+        self.alpha_pb = alpha_pb if alpha_pb is not None else np.sqrt(0.5)
+        self.alpha_pg = alpha_pg if alpha_pg is not None else np.sqrt(0.5)
 
         # Initial weights for the input connections from BVCs to place cells
         self.initial_w_in = torch.clone(self.w_in.data)
+        if self.w_grid is not None:
+            self.initial_w_grid = torch.clone(self.w_grid.data)
 
         # Temporary variable for the current activation update step
         # Shape: (num_pc,)
@@ -135,13 +211,15 @@ class PlaceCellLayer:
     def get_place_cell_activations(
         self,
         distances: np.ndarray,
+        grid_activations: Optional[torch.Tensor] = None,
         hd_activations: np.ndarray | None = None,
         collided: bool = False,
     ):
-        """Compute place cell activations from BVC and head direction inputs.
+        """Compute place cell activations from BVC, grid-cell, and head direction inputs.
 
         Args:
             distances: 1D NumPy array of distance readings (to be fed into the BVC layer).
+            grid_activations: 1D tensor of grid-cell activations for the current pose.
             hd_activations: 1D NumPy array of head direction cell activations.
             collided: Whether the agent has collided with an obstacle.
         """
@@ -173,11 +251,51 @@ class PlaceCellLayer:
 
         # Compute the input to place cells by taking the dot product of input weights and BVC activations
         # Afferent excitation term: ∑_j W_ij^{pb} v_j^b (Equation 3.2a)
-        self.afferent_excitation = torch.matmul(self.w_in, self.bvc_activations)
+        if self.grid_cell_activations is not None:
+            if grid_activations is None:
+                self.grid_cell_activations.zero_()
+            else:
+                self.grid_cell_activations = grid_activations.to(
+                    dtype=self.dtype, device=self.device
+                )
+
+        bvc_afferent_excitation = torch.matmul(self.w_in, self.bvc_activations)
+        grid_afferent_excitation = torch.zeros_like(bvc_afferent_excitation)
+        if self.grid_cell_activations is not None and self.w_grid is not None:
+            grid_afferent_excitation = torch.matmul(
+                self.w_grid, self.grid_cell_activations
+            )
+
+        if self.grid_influence <= 0.0:
+            self.afferent_excitation = bvc_afferent_excitation
+        elif self.grid_influence >= 1.0:
+            self.afferent_excitation = grid_afferent_excitation
+        else:
+            self.afferent_excitation = (
+                (1.0 - self.grid_influence) * bvc_afferent_excitation
+                + self.grid_influence * grid_afferent_excitation
+            )
 
         # Compute total BVC activity for afferent inhibition
         # Afferent inhibition term: Γ^{pb} ∑_j v_j^b (Equation 3.2a)
-        self.afferent_inhibition = self.gamma_pb * torch.sum(self.bvc_activations)
+        bvc_afferent_inhibition = self.gamma_pb * torch.sum(self.bvc_activations)
+        grid_afferent_inhibition = torch.tensor(
+            0.0, dtype=self.dtype, device=self.device
+        )
+        if self.grid_cell_activations is not None:
+            grid_afferent_inhibition = self.gamma_pg * torch.sum(
+                self.grid_cell_activations
+            )
+
+        if self.grid_influence <= 0.0:
+            self.afferent_inhibition = bvc_afferent_inhibition
+        elif self.grid_influence >= 1.0:
+            self.afferent_inhibition = grid_afferent_inhibition
+        else:
+            self.afferent_inhibition = (
+                (1.0 - self.grid_influence) * bvc_afferent_inhibition
+                + self.grid_influence * grid_afferent_inhibition
+            )
 
         # Compute total place cell activity for recurrent inhibition
         # Recurrent inhibition term: Γ^{pp} ∑_j v_j^p (Equation 3.2a)
@@ -259,16 +377,35 @@ class PlaceCellLayer:
                     bvc_activations_row
                     - (1 / self.alpha_pb) * pc_activations_col * self.w_in
                 )
-            )
+            ) * (1.0 - self.grid_influence)
 
             # In PyTorch, we can update the data directly or reassign
             with torch.no_grad():
                 self.w_in += self.weight_update
 
+            if (
+                self.grid_influence > 0.0
+                and self.grid_cell_activations is not None
+                and self.w_grid is not None
+            ):
+                grid_activations_row = self.grid_cell_activations.unsqueeze(0)
+                self.grid_weight_update = self.tau * (
+                    pc_activations_col
+                    * (
+                        grid_activations_row
+                        - (1 / self.alpha_pg) * pc_activations_col * self.w_grid
+                    )
+                ) * self.grid_influence
+
+                with torch.no_grad():
+                    self.w_grid += self.grid_weight_update
+
     def reset_activations(self):
         """Reset place cell activations and related variables to zero."""
         self.place_cell_activations.zero_()
         self.activation_update.zero_()
+        if self.grid_cell_activations is not None:
+            self.grid_cell_activations.zero_()
         self.place_cell_trace = None  # As in original code
 
     def preplay(self, direction: int, num_steps: int = 1) -> torch.Tensor:

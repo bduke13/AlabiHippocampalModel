@@ -185,6 +185,7 @@ class Driver(Supervisor):
         ):  # Delete existing pkls if in LEARN_OJAS
             self.clear()
 
+        self.load_gcn(device=self.device)
         self.load_pcn(
             num_place_cells=self.num_place_cells,
             n_hd=self.n_hd,
@@ -202,7 +203,6 @@ class Driver(Supervisor):
             learning_rate=0.1,
             device=self.device,
         )
-        self.load_gcn(device=self.device)
         initialize_head_direction_layer(self)
         initialize_histories(self)
 
@@ -243,10 +243,21 @@ class Driver(Supervisor):
         Returns:
             PlaceCellLayer: The loaded or newly initialized place cell network.
         """
+        use_grid_input = bool(self.runtime_profile.get("pcn_use_grid_input", False))
+        expected_grid_cells = self.gcn.total_grid_cells if use_grid_input else 0
         try:
             network_path = os.path.join(self.network_load_dir, "pcn.pkl")
             with open(network_path, "rb") as f:
                 self.pcn = pickle.load(f)
+                loaded_grid_cells = int(getattr(self.pcn, "num_grid_cells", 0))
+                has_grid_weights = getattr(self.pcn, "w_grid", None) is not None
+                if loaded_grid_cells != expected_grid_cells:
+                    raise ValueError(
+                        f"Loaded PCN grid-cell count {loaded_grid_cells} does not "
+                        f"match expected {expected_grid_cells}."
+                    )
+                if expected_grid_cells > 0 and not has_grid_weights:
+                    raise ValueError("Loaded PCN does not contain grid-cell weights.")
                 self.pcn.reset_activations()
                 print("Loaded existing PCN from", network_path)
                 self.pcn.device = device
@@ -273,9 +284,21 @@ class Driver(Supervisor):
             self.pcn = PlaceCellLayer(
                 bvc_layer=bvc,
                 num_pc=num_place_cells,
+                num_grid_cells=expected_grid_cells,
                 timestep=timestep,
                 n_hd=n_hd,
+                w_in_init_ratio=float(self.runtime_profile["w_in_init_ratio"]),
+                w_grid_init_ratio=float(self.runtime_profile["w_grid_init_ratio"]),
+                w_grid_init_strategy=str(self.runtime_profile["w_grid_init_strategy"]),
+                gc_num_modules=self.num_grid_modules,
+                gc_cells_per_module=self.num_grid_cells_per_module,
+                grid_influence=float(self.runtime_profile["grid_influence"]),
                 device=device,
+                gamma_pp=float(self.runtime_profile["gamma_pp"]),
+                gamma_pb=float(self.runtime_profile["gamma_pb"]),
+                gamma_pg=float(self.runtime_profile["gamma_pg"]),
+                alpha_pb=self.runtime_profile.get("alpha_pb"),
+                alpha_pg=self.runtime_profile.get("alpha_pg"),
             )
             print("Initialized new PCN")
 
@@ -571,16 +594,18 @@ class Driver(Supervisor):
         Uses current boundary- and HD-activations to update place-cell activations
         and store relevant data for analysis/debugging.
         """
-        # Update place cell activations based on sensor data
-        self.pcn.get_place_cell_activations(
-            distances=self.boundaries,
-            hd_activations=self.hd_activations,
-            collided=torch.any(self.collided),
-        )
         curr_pos = robot_position(self.robot)
         self.gcn_activations = self.gcn.get_grid_cell_activations(
             [curr_pos[0], curr_pos[2]],
             use_mask=True,
+        )
+
+        # Update place cell activations based on sensor data
+        self.pcn.get_place_cell_activations(
+            distances=self.boundaries,
+            grid_activations=self.gcn_activations,
+            hd_activations=self.hd_activations,
+            collided=torch.any(self.collided),
         )
         if self.show_bvc_activation:
             self.pcn.bvc_layer.plot_activation(self.boundaries.cpu())
