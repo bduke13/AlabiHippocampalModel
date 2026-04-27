@@ -14,32 +14,38 @@ def initialize_runtime_state(
     goal_location,
     max_dist: float,
     show_bvc_activation: bool,
+    runtime_parameters: dict,
 ) -> None:
     driver.show_bvc_activation = show_bvc_activation
 
-    driver.num_place_cells = 500
-    driver.num_bvc_per_dir = 50
-    driver.sigma_r = 0.5
-    driver.sigma_theta = 1
-    driver.n_hd = 8
-    driver.num_grid_modules = 8
-    driver.num_grid_cells_per_module = 50
-    driver.grid_spread_range = (1.2, 1.2)
-    driver.grid_scale_multiplier = 1.0
-    driver.grid_translation_scale = 1.0
-    driver.grid_threshold = 0.7
-    driver.timestep = 32 * 3
-    driver.tau_w = 5
+    driver.num_place_cells = int(runtime_parameters["num_place_cells"])
+    driver.num_bvc_per_dir = int(runtime_parameters["num_bvc_per_dir"])
+    driver.sigma_r = float(runtime_parameters["sigma_r"])
+    driver.sigma_theta = float(runtime_parameters["sigma_theta"])
+    driver.n_hd = int(runtime_parameters["n_hd"])
+    driver.num_grid_modules = int(runtime_parameters["num_grid_modules"])
+    driver.num_grid_cells_per_module = int(runtime_parameters["num_grid_cells_per_module"])
+    driver.grid_spread_range = tuple(runtime_parameters["grid_spread_range"])
+    driver.grid_scale_multiplier = float(runtime_parameters["grid_scale_multiplier"])
+    driver.grid_translation_scale = float(runtime_parameters["grid_translation_scale"])
+    driver.grid_threshold = float(runtime_parameters["grid_threshold"])
+    driver.grid_mask_resolution = int(runtime_parameters["grid_mask_resolution"])
+    driver.grid_smooth_sigma = float(runtime_parameters["grid_smooth_sigma"])
+    driver.timestep = int(runtime_parameters["timestep"])
+    driver.tau_w = int(runtime_parameters["tau_w"])
 
-    driver.max_speed = 16
-    driver.max_dist = max_dist
+    driver.max_speed = float(runtime_parameters["max_speed"])
+    driver.max_dist = float(max_dist)
     driver.left_speed = driver.max_speed
     driver.right_speed = driver.max_speed
-    driver.wheel_radius = 0.031
-    driver.axle_length = 0.271756
+    driver.wheel_radius = float(runtime_parameters["wheel_radius"])
+    driver.axle_length = float(runtime_parameters["axle_length"])
     driver.run_time_minutes = run_time_hours * 60
     driver.num_steps = int(driver.run_time_minutes * 60 // (2 * driver.timestep / 1000))
-    driver.goal_r = {"explore": 0.3, "exploit": 0.5}
+    driver.goal_r = {
+        "explore": float(runtime_parameters["goal_r_explore"]),
+        "exploit": float(runtime_parameters["goal_r_exploit"]),
+    }
     driver.goal_location = goal_location if goal_location is not None else [-3, 3]
 
 

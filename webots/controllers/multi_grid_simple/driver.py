@@ -25,6 +25,7 @@ from layers.rcn import RewardCellLayer
 from layers.bvc import BoundaryVectorCellLayer
 from layers.gcn import GridCellLayer
 from robot.robot_mode import RobotMode
+from runtime_profiles import resolve_runtime_profile
 from webots_control import (
     current_world_name,
     export_image,
@@ -55,15 +56,17 @@ class Driver(Supervisor):
         start_rotation: Optional[List[float]] = None,
         load_networks_from_run_id: Optional[str] = None,
         load_hmaps_from_run_id: Optional[str] = None,
+        runtime_profile: Optional[str] = None,
+        runtime_profile_overrides: Optional[dict] = None,
         enable_ojas: Optional[bool] = None,
         enable_stdp: Optional[bool] = None,
         world_name: Optional[str] = None,
         goal_location: Optional[List[float]] = None,
-        max_dist: float = 10,
+        max_dist: Optional[float] = None,
         show_bvc_activation: bool = False,
         run_id: Optional[str] = None,
-        quit_on_completion: bool = False,
-        pause_on_completion: bool = True,
+        quit_on_completion: bool = True,
+        pause_on_completion: bool = False,
         export_image_on_completion: bool = False,
         completion_image_path: Optional[str] = None,
     ):
@@ -83,6 +86,10 @@ class Driver(Supervisor):
                 be loaded into this run before execution. Defaults to None.
             load_hmaps_from_run_id (Optional[str], optional): Run ID whose saved hmaps should
                 seed this run's histories before execution. Defaults to None.
+            runtime_profile (Optional[str], optional): Named runtime parameter profile to use.
+                If omitted, a world-aware default profile is selected automatically.
+            runtime_profile_overrides (Optional[dict], optional): Flat override map applied on top
+                of the named runtime profile for one-off experiments.
             enable_ojas (Optional[bool], optional): Flag to enable Oja's learning rule.
                 If None, determined by robot mode. Defaults to None.
             enable_stdp (Optional[bool], optional): Flag to enable Spike-Timing-Dependent Plasticity.
@@ -118,6 +125,23 @@ class Driver(Supervisor):
         if world_name is None:
             world_name = current_world_name(self)
         self.world_name = world_name
+        self.runtime_profile_name, self.runtime_profile = resolve_runtime_profile(
+            requested_name=runtime_profile,
+            world_name=self.world_name,
+            overrides=runtime_profile_overrides,
+        )
+        print(f"Using runtime profile {self.runtime_profile_name}")
+        print(
+            "[runtime_profile]",
+            f"num_place_cells={self.runtime_profile['num_place_cells']},",
+            f"sigma_r={self.runtime_profile['sigma_r']},",
+            f"sigma_theta={self.runtime_profile['sigma_theta']},",
+            f"grid_scale_multiplier={self.runtime_profile['grid_scale_multiplier']},",
+            f"max_dist={self.runtime_profile['max_dist']}",
+        )
+        if max_dist is None:
+            max_dist = float(self.runtime_profile["max_dist"])
+
         initialize_run_artifacts(
             self,
             controller_dir=CONTROLLER_DIR,
@@ -129,6 +153,9 @@ class Driver(Supervisor):
             start_rotation=start_rotation,
             load_networks_from_run_id=load_networks_from_run_id,
             load_hmaps_from_run_id=self.load_hmaps_from_run_id,
+            runtime_profile_name=self.runtime_profile_name,
+            runtime_profile_overrides=runtime_profile_overrides,
+            runtime_parameters=self.runtime_profile,
             enable_ojas=enable_ojas,
             enable_stdp=enable_stdp,
             goal_location=goal_location,
@@ -142,6 +169,7 @@ class Driver(Supervisor):
             goal_location=goal_location,
             max_dist=max_dist,
             show_bvc_activation=show_bvc_activation,
+            runtime_parameters=self.runtime_profile,
         )
         initialize_robot_pose(
             self,
@@ -320,6 +348,8 @@ class Driver(Supervisor):
             threshold_type="soft",
             normalization="per-cell",
             world_name=self.world_name,
+            mask_resolution=self.grid_mask_resolution,
+            smooth_sigma=self.grid_smooth_sigma,
             device=str(device),
             dtype=self.dtype,
         )
@@ -550,7 +580,7 @@ class Driver(Supervisor):
         curr_pos = robot_position(self.robot)
         self.gcn_activations = self.gcn.get_grid_cell_activations(
             [curr_pos[0], curr_pos[2]],
-            use_mask=False,
+            use_mask=True,
         )
         if self.show_bvc_activation:
             self.pcn.bvc_layer.plot_activation(self.boundaries.cpu())

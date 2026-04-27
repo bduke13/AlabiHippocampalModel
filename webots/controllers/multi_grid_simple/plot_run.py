@@ -36,13 +36,41 @@ from typing import Optional
 import matplotlib
 
 matplotlib.use("Agg")
+from matplotlib import colors as mcolors
+from matplotlib import patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
+
+try:
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+except Exception:
+    make_axes_locatable = None
+
+try:
+    from scipy.interpolate import griddata as _griddata
+except Exception:
+    _griddata = None
 
 try:
     from scipy.stats import qmc as _qmc
 except Exception:
     _qmc = None
+
+try:
+    from layers.gcn import GridCellLayer
+except Exception:
+    try:
+        from .layers.gcn import GridCellLayer
+    except Exception:
+        GridCellLayer = None
+
+try:
+    from robot.webots_worlds import get_world_config
+except Exception:
+    try:
+        from .robot.webots_worlds import get_world_config
+    except Exception:
+        get_world_config = None
 
 try:
     from run_summary import update_run_summary
@@ -52,6 +80,21 @@ except ImportError:
 CONTROLLER_DIR = Path(__file__).resolve().parent
 RUNS_DIR = CONTROLLER_DIR / "runs"
 VIS_ROOT = CONTROLLER_DIR / "visualizations"
+
+plt.rcParams.update(
+    {
+        "font.size": 12,
+        "font.family": "serif",
+        "axes.labelsize": 14,
+        "axes.titlesize": 15,
+        "xtick.labelsize": 11,
+        "ytick.labelsize": 11,
+        "legend.fontsize": 11,
+        "figure.titlesize": 18,
+        "savefig.facecolor": "white",
+        "axes.facecolor": "white",
+    }
+)
 
 
 def _load_pkl(path: Path) -> np.ndarray:
@@ -63,6 +106,11 @@ def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as output_file:
         json.dump(payload, output_file, indent=2)
+
+
+def _save_figure(fig: plt.Figure, out_path: Path) -> None:
+    fig.savefig(out_path, dpi=300, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
 
 
 def load_run_artifacts(run_id: str) -> tuple[np.ndarray, np.ndarray, Optional[np.ndarray], dict]:
@@ -103,31 +151,119 @@ def plot_trajectory(
     x = hmap_loc[:, 0]
     z = hmap_loc[:, 2]
 
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.plot(x, z, color="steelblue", linewidth=0.8, alpha=0.8, label="path")
-    ax.plot(x[0], z[0], "go", markersize=7, label="start")
-    ax.plot(x[-1], z[-1], "rs", markersize=7, label="end")
+    fig, ax = plt.subplots(figsize=(7, 7))
+    ax.plot(x, z, color="#2a6f97", linewidth=1.2, alpha=0.9, label="Path")
+    ax.plot(x[0], z[0], "o", color="#2e8b57", markersize=7, label="Start")
+    ax.plot(x[-1], z[-1], "s", color="#b22222", markersize=7, label="End")
     ax.set_xlabel("X (m)")
     ax.set_ylabel("Z (m)")
     ax.set_aspect("equal")
+    ax.grid(True, alpha=0.25, linewidth=0.6)
     ax.legend(fontsize=8)
     ax.set_title(title or f"Trajectory - {run_id}")
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    _save_figure(fig, out_path)
     print(f"Saved trajectory plot: {out_path}")
 
 
 def _random_vibrant_colors(n: int, rng: np.random.Generator) -> np.ndarray:
-    colors = np.zeros((n, 3))
-    for index in range(n):
-        while True:
-            color = rng.random(3)
-            color[rng.integers(3)] = rng.uniform(0.8, 1.0)
-            if color.sum() > 1.2:
-                colors[index] = color
-                break
-    return colors
+    if n <= 0:
+        return np.zeros((0, 3))
+    hues = np.linspace(0.0, 1.0, n, endpoint=False)
+    rng.shuffle(hues)
+    saturations = rng.uniform(0.82, 0.98, size=n)
+    values = rng.uniform(0.92, 1.0, size=n)
+    hsv = np.column_stack((hues, saturations, values))
+    return mcolors.hsv_to_rgb(hsv)
+
+
+def _overlay_world_obstacles(ax: plt.Axes, config: dict) -> None:
+    if get_world_config is None:
+        return
+    world_name = config.get("world_name")
+    if not world_name:
+        return
+    try:
+        world = get_world_config(world_name)
+    except Exception:
+        return
+    for obstacle in world.get("obstacles", []):
+        if obstacle.get("type") != "rectangle":
+            continue
+        (x1, z1), (x2, z2) = obstacle["bounds"]
+        xmin, xmax = sorted((float(x1), float(x2)))
+        zmin, zmax = sorted((float(z1), float(z2)))
+        rect = mpatches.Rectangle(
+            (xmin, zmin),
+            xmax - xmin,
+            zmax - zmin,
+            facecolor="#f2f2f2",
+            edgecolor="#111111",
+            linewidth=1.0,
+            alpha=0.7,
+            zorder=6,
+        )
+        ax.add_patch(rect)
+
+
+def _grid_runtime_params_from_config(config: dict) -> dict:
+    runtime_params = dict(config.get("runtime_parameters") or {})
+    return {
+        "world_name": config.get("world_name"),
+        "num_modules": int(runtime_params.get("num_grid_modules", 8)),
+        "cells_per_module": int(runtime_params.get("num_grid_cells_per_module", 50)),
+        "spread_range": tuple(runtime_params.get("grid_spread_range", (1.2, 1.2))),
+        "scale_multiplier": float(runtime_params.get("grid_scale_multiplier", 1.0)),
+        "translation_scale": float(runtime_params.get("grid_translation_scale", 1.0)),
+        "threshold": float(runtime_params.get("grid_threshold", 0.7)),
+        "mask_resolution": int(runtime_params.get("grid_mask_resolution", 128)),
+        "smooth_sigma": float(runtime_params.get("grid_smooth_sigma", 1.5)),
+    }
+
+
+def _build_grid_layer_from_config(config: dict) -> Optional[GridCellLayer]:
+    if GridCellLayer is None:
+        return None
+    params = _grid_runtime_params_from_config(config)
+    world_name = params.get("world_name")
+    if not world_name:
+        return None
+    return GridCellLayer(
+        num_modules=params["num_modules"],
+        cells_per_module=params["cells_per_module"],
+        spread_range=params["spread_range"],
+        scale_multiplier=params["scale_multiplier"],
+        translation_scale=params["translation_scale"],
+        threshold=params["threshold"],
+        threshold_type="soft",
+        normalization="per-cell",
+        world_name=world_name,
+        mask_resolution=params["mask_resolution"],
+        smooth_sigma=params["smooth_sigma"],
+        device="cpu",
+    )
+
+
+def _apply_grid_mask_to_history(
+    hmap_loc: np.ndarray,
+    hmap_gcn: np.ndarray,
+    config: dict,
+) -> np.ndarray:
+    gcn = _build_grid_layer_from_config(config)
+    if gcn is None or not hasattr(gcn, "_mask") or gcn._mask is None:
+        return hmap_gcn
+
+    x = hmap_loc[:, 0].astype(np.float64, copy=False)
+    z = hmap_loc[:, 2].astype(np.float64, copy=False)
+    xi = np.rint((x + gcn.world_w / 2.0) * gcn._x_scale).astype(np.int64)
+    yi = np.rint((z + gcn.world_h / 2.0) * gcn._y_scale).astype(np.int64)
+    xi = np.clip(xi, 0, gcn.mask_resolution - 1)
+    yi = np.clip(yi, 0, gcn.mask_resolution - 1)
+
+    mask_lookup = gcn._mask.detach().cpu().numpy()[yi, xi, :]
+    if mask_lookup.shape != hmap_gcn.shape:
+        return hmap_gcn
+    return hmap_gcn * mask_lookup
 
 
 def _reference_grid_cell_parameters(
@@ -233,6 +369,62 @@ def _reference_grid_trajectory_activations(
     acts = np.clip((acts + 1.0) / 2.0, 0.0, 1.0)
     acts = np.clip((acts - threshold) / max(1.0 - threshold, 1e-8), 0.0, 1.0)
     return acts.astype(np.float32)
+
+
+def _render_place_cell_overlay(
+    *,
+    x: np.ndarray,
+    z: np.ndarray,
+    hmap_pcn: np.ndarray,
+    cell_indices: np.ndarray,
+    gridsize: int,
+    rng: np.random.Generator,
+) -> Optional[tuple[np.ndarray, list[float]]]:
+    xmin, xmax = x.min(), x.max()
+    zmin, zmax = z.min(), z.max()
+
+    if xmax == xmin:
+        xmin -= 0.5
+        xmax += 0.5
+    if zmax == zmin:
+        zmin -= 0.5
+        zmax += 0.5
+
+    xedges = np.linspace(xmin, xmax, gridsize + 1)
+    zedges = np.linspace(zmin, zmax, gridsize + 1)
+
+    n_plot = len(cell_indices)
+    total_act = np.zeros((gridsize, gridsize, n_plot), dtype=np.float64)
+    counts = np.zeros((gridsize, gridsize, n_plot), dtype=np.float64)
+
+    for render_index, cell_index in enumerate(cell_indices):
+        activations = hmap_pcn[:, cell_index]
+        mask = activations > 0
+        if not mask.any():
+            continue
+        xi = np.clip(np.digitize(x[mask], xedges) - 1, 0, gridsize - 1)
+        zi = np.clip(np.digitize(z[mask], zedges) - 1, 0, gridsize - 1)
+        for bin_x, bin_z, activation in zip(xi, zi, activations[mask]):
+            total_act[bin_x, bin_z, render_index] += activation
+            counts[bin_x, bin_z, render_index] += 1
+
+    mean_act = np.where(counts > 0, total_act / np.maximum(counts, 1.0), 0.0)
+    max_per_bin = mean_act.max(axis=2)
+    global_max = max_per_bin.max()
+    if global_max <= 0:
+        return None
+
+    best_cell = mean_act.argmax(axis=2)
+    norm = max_per_bin / global_max
+    colors = _random_vibrant_colors(n_plot, rng)
+    image = np.zeros((gridsize, gridsize, 3), dtype=np.float64)
+    for bin_x in range(gridsize):
+        for bin_z in range(gridsize):
+            level = norm[bin_x, bin_z]
+            if level > 0:
+                image[bin_x, bin_z] = level * colors[best_cell[bin_x, bin_z]]
+
+    return np.transpose(image, (1, 0, 2)), [xmin, xmax, zmin, zmax]
 
 
 def _find_best_grid_cell(hmap_gcn: np.ndarray) -> int:
@@ -484,7 +676,7 @@ def plot_place_cells(
     title: Optional[str] = None,
     seed: int = 42,
 ) -> None:
-    """Render a simple overlayed place-field map."""
+    """Render sampled and all-cell overlayed place-field maps."""
     rng = np.random.default_rng(seed)
 
     x = hmap_loc[:, 0]
@@ -497,65 +689,53 @@ def plot_place_cells(
         print(f"[plot_place_cells] No active place cells found in run {run_id}; skipping.")
         return
 
-    n_plot = len(active_indices) if num_cells_to_sample is None else min(num_cells_to_sample, len(active_indices))
-    cell_indices = rng.choice(active_indices, size=n_plot, replace=False)
-    print(f"[plot_place_cells] Rendering {n_plot}/{len(active_indices)} active cells.")
+    n_sampled = len(active_indices) if num_cells_to_sample is None else min(num_cells_to_sample, len(active_indices))
+    sampled_indices = rng.choice(active_indices, size=n_sampled, replace=False)
+    print(
+        f"[plot_place_cells] Rendering sampled/all overlays: "
+        f"{n_sampled}/{len(active_indices)} sampled, {len(active_indices)} total active."
+    )
 
-    xmin, xmax = x.min(), x.max()
-    zmin, zmax = z.min(), z.max()
+    sampled_render = _render_place_cell_overlay(
+        x=x,
+        z=z,
+        hmap_pcn=hmap_pcn,
+        cell_indices=sampled_indices,
+        gridsize=gridsize,
+        rng=rng,
+    )
+    all_render = _render_place_cell_overlay(
+        x=x,
+        z=z,
+        hmap_pcn=hmap_pcn,
+        cell_indices=active_indices,
+        gridsize=gridsize,
+        rng=rng,
+    )
 
-    if xmax == xmin:
-        xmin -= 0.5
-        xmax += 0.5
-    if zmax == zmin:
-        zmin -= 0.5
-        zmax += 0.5
-
-    xedges = np.linspace(xmin, xmax, gridsize + 1)
-    zedges = np.linspace(zmin, zmax, gridsize + 1)
-
-    total_act = np.zeros((gridsize, gridsize, n_plot))
-    counts = np.zeros((gridsize, gridsize, n_plot))
-
-    for render_index, cell_index in enumerate(cell_indices):
-        activations = hmap_pcn[:, cell_index]
-        mask = activations > 0
-        if not mask.any():
-            continue
-        xi = np.clip(np.digitize(x[mask], xedges) - 1, 0, gridsize - 1)
-        zi = np.clip(np.digitize(z[mask], zedges) - 1, 0, gridsize - 1)
-        for bin_x, bin_z, activation in zip(xi, zi, activations[mask]):
-            total_act[bin_x, bin_z, render_index] += activation
-            counts[bin_x, bin_z, render_index] += 1
-
-    mean_act = np.where(counts > 0, total_act / np.maximum(counts, 1), 0.0)
-    max_per_bin = mean_act.max(axis=2)
-    best_cell = mean_act.argmax(axis=2)
-
-    global_max = max_per_bin.max()
-    if global_max == 0:
+    if sampled_render is None and all_render is None:
         print("[plot_place_cells] All activations zero after binning; skipping.")
         return
-    norm = max_per_bin / global_max
 
-    colors = _random_vibrant_colors(n_plot, rng)
-    image = np.zeros((gridsize, gridsize, 3))
-    for bin_x in range(gridsize):
-        for bin_z in range(gridsize):
-            level = norm[bin_x, bin_z]
-            if level > 0:
-                image[bin_x, bin_z] = level * colors[best_cell[bin_x, bin_z]]
-
-    image = np.transpose(image, (1, 0, 2))
-
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.imshow(image, extent=[xmin, xmax, zmin, zmax], origin="lower", aspect="equal")
-    ax.set_xlabel("X (m)")
-    ax.set_ylabel("Z (m)")
-    ax.set_title(title or f"Place cells ({n_plot} sampled) - {run_id}")
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6.4))
+    for ax, render, panel_title in (
+        (axes[0], all_render, f"All {len(active_indices)} active cells"),
+        (axes[1], sampled_render, f"{n_sampled} sampled active cells"),
+    ):
+        ax.set_xlabel("X (m)")
+        ax.set_ylabel("Z (m)")
+        ax.set_aspect("equal")
+        ax.grid(False)
+        if render is None:
+            ax.text(0.5, 0.5, "No activity", ha="center", va="center", transform=ax.transAxes)
+            ax.set_title(panel_title)
+            continue
+        image, extent = render
+        ax.imshow(image, extent=extent, origin="lower", aspect="equal")
+        ax.set_title(panel_title)
+    fig.suptitle(title or f"Place cells - {run_id}", y=0.98)
+    fig.tight_layout(rect=[0, 0.02, 1, 0.95])
+    _save_figure(fig, out_path)
     print(f"Saved place-cell plot: {out_path}")
 
 
@@ -582,8 +762,9 @@ def _plot_grid_hexbin(
     ax.set_xlabel("X (m)")
     ax.set_ylabel("Z (m)")
     ax.set_aspect("equal")
+    ax.grid(True, alpha=0.2, linewidth=0.5)
     ax.set_title(title)
-    colorbar = plt.colorbar(hb, ax=ax, shrink=0.9)
+    colorbar = plt.colorbar(hb, ax=ax, shrink=0.88)
     colorbar.set_label(colorbar_label)
 
 
@@ -604,19 +785,18 @@ def plot_grid_cells(
     a deterministic post-hoc reconstruction using the local grid-cell layer
     parameterization so the plotting entrypoint remains backward compatible.
     """
-    del config
-
     source_label = "Runtime"
     if hmap_gcn is None:
+        params = _grid_runtime_params_from_config(config)
         source_label = "Post-hoc fallback"
         hmap_gcn = _reference_grid_trajectory_activations(
             hmap_loc,
-            num_modules=8,
-            cells_per_module=50,
-            spread_range=(1.2, 1.2),
-            scale_multiplier=1.0,
-            translation_scale=1.0,
-            threshold=0.7,
+            num_modules=params["num_modules"],
+            cells_per_module=params["cells_per_module"],
+            spread_range=params["spread_range"],
+            scale_multiplier=params["scale_multiplier"],
+            translation_scale=params["translation_scale"],
+            threshold=params["threshold"],
             seed=seed,
         )
 
@@ -633,13 +813,19 @@ def plot_grid_cells(
         print(f"[plot_grid_cells] No grid-cell activations available for run {run_id}; skipping.")
         return
 
+    if source_label == "Runtime":
+        masked_hmap_gcn = _apply_grid_mask_to_history(hmap_loc, hmap_gcn, config)
+        if not np.array_equal(masked_hmap_gcn, hmap_gcn):
+            print(f"[plot_grid_cells] Reapplied spatial mask for run {run_id} using saved world/profile config.")
+        hmap_gcn = masked_hmap_gcn
+
     x = hmap_loc[:, 0]
     z = hmap_loc[:, 2]
     cell_index = _find_best_grid_cell(hmap_gcn)
     mean_activations = np.mean(hmap_gcn, axis=1)
     cell_activations = hmap_gcn[:, cell_index]
 
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6.4))
     panel_title = title or f"Grid cells - {run_id}"
     _plot_grid_hexbin(
         axes[0],
@@ -661,9 +847,40 @@ def plot_grid_cells(
     )
 
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    _save_figure(fig, out_path)
     print(f"Saved grid-cell plot: {out_path}")
+
+
+def _plot_aliasing_contour(
+    ax: plt.Axes,
+    *,
+    xcenters: np.ndarray,
+    zcenters: np.ndarray,
+    aliasing_map: np.ndarray,
+    cmap: str,
+) -> tuple[object, np.ndarray]:
+    if _griddata is None:
+        raise RuntimeError("SciPy griddata is required for contour-style aliasing plots.")
+
+    XI, ZI = np.meshgrid(
+        np.linspace(float(xcenters.min()), float(xcenters.max()), 180),
+        np.linspace(float(zcenters.min()), float(zcenters.max()), 180),
+        indexing="xy",
+    )
+    XX, ZZ = np.meshgrid(xcenters, zcenters, indexing="xy")
+    points = np.column_stack([XX.ravel(), ZZ.ravel()])
+    values = aliasing_map.T.ravel()
+    finite_mask = np.isfinite(values)
+    points = points[finite_mask]
+    values = values[finite_mask]
+
+    interpolated = _griddata(points, values, (XI, ZI), method="cubic", fill_value=0.0)
+    levels = np.linspace(float(np.nanmin(interpolated)), float(np.nanmax(interpolated)), 25)
+    if np.allclose(levels[0], levels[-1]):
+        levels = np.linspace(0.0, max(float(np.nanmax(interpolated)), 1e-6), 25)
+    contour = ax.contourf(XI, ZI, interpolated, levels=levels, cmap=cmap)
+    ax.contour(XI, ZI, interpolated, levels=10, colors="black", alpha=0.22, linewidths=0.45)
+    return contour, interpolated
 
 
 def plot_aliasing_heatmap(
@@ -671,6 +888,7 @@ def plot_aliasing_heatmap(
     hmap_pcn: np.ndarray,
     *,
     run_id: str,
+    config: Optional[dict] = None,
     out_path: Path,
     stats_path: Optional[Path] = None,
     gridsize: Optional[int] = None,
@@ -694,47 +912,63 @@ def plot_aliasing_heatmap(
         min_distance_bins=min_distance_bins,
     )
 
-    aliasing_map = np.ma.masked_invalid(stats["aliasing_map"].T)
-    xedges = stats["xedges"]
-    zedges = stats["zedges"]
     finite_values = stats["aliasing_map"][np.isfinite(stats["aliasing_map"])]
     positive_values = finite_values[finite_values > 0]
-    if positive_values.size:
-        vmax = float(np.percentile(positive_values, display_percentile))
-        vmax = min(max(vmax, float(positive_values.max()) * 0.25), float(positive_values.max()))
-    else:
-        vmax = 1.0
+    vmax = float(np.percentile(positive_values, display_percentile)) if positive_values.size else 1.0
     vmax = max(vmax, 1e-6)
 
-    cmap = plt.get_cmap("magma").copy()
-    cmap.set_bad(color="#d9d9d9")
+    fig, ax = plt.subplots(figsize=(8.2, 7.2))
+    if _griddata is not None:
+        artist, interpolated = _plot_aliasing_contour(
+            ax,
+            xcenters=stats["xcenters"],
+            zcenters=stats["zcenters"],
+            aliasing_map=stats["aliasing_map"],
+            cmap="jet",
+        )
+        display_peak = float(np.nanmax(interpolated)) if np.size(interpolated) else 0.0
+    else:
+        aliasing_map = np.ma.masked_invalid(stats["aliasing_map"].T)
+        artist = ax.pcolormesh(
+            stats["xedges"],
+            stats["zedges"],
+            aliasing_map,
+            shading="auto",
+            cmap="jet",
+            vmin=0.0,
+            vmax=vmax,
+        )
+        display_peak = float(np.max(positive_values)) if positive_values.size else 0.0
 
-    fig, ax = plt.subplots(figsize=(7, 6))
-    mesh = ax.pcolormesh(
-        xedges,
-        zedges,
-        aliasing_map,
-        shading="auto",
-        cmap=cmap,
-        vmin=0.0,
-        vmax=vmax,
-    )
+    _overlay_world_obstacles(ax, config or {})
     ax.set_xlabel("X (m)")
     ax.set_ylabel("Z (m)")
     ax.set_aspect("equal")
-    ax.set_title(
-        title
-        or (
-            f"Spatial aliasing - {run_id}\n"
-            f"MSAI={stats['msai']:.3f}, valid bins={stats['valid_bin_count']}, "
-            f"far threshold={stats['distance_threshold']:.2f} m, display vmax={vmax:.3f}"
-        )
+    ax.grid(True, alpha=0.3, linewidth=0.6)
+    ax.set_title(title or f"Spatial aliasing - {run_id}", pad=12)
+
+    if make_axes_locatable is not None:
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("right", size="5%", pad=0.1)
+        colorbar = plt.colorbar(artist, cax=cax)
+    else:
+        colorbar = fig.colorbar(artist, ax=ax, shrink=0.9)
+    colorbar.set_label("SAI")
+
+    fig.text(
+        0.5,
+        0.02,
+        (
+            f"MSAI = {stats['msai']:.4f}    "
+            f"Valid bins = {stats['valid_bin_count']}    "
+            f"Far-bin threshold = {stats['distance_threshold']:.2f} m"
+        ),
+        ha="center",
+        va="bottom",
+        fontsize=12,
     )
-    colorbar = fig.colorbar(mesh, ax=ax, shrink=0.9)
-    colorbar.set_label("Spatial aliasing index")
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    fig.tight_layout(rect=[0, 0.06, 1, 0.98])
+    _save_figure(fig, out_path)
     print(f"Saved aliasing plot: {out_path}")
 
     if stats_path is not None:
@@ -755,6 +989,7 @@ def plot_aliasing_heatmap(
                 "display_percentile": display_percentile,
             },
             "display_vmax": vmax,
+            "display_peak": display_peak,
         }
         _write_json(stats_path, stats_payload)
         print(f"Saved aliasing stats: {stats_path}")
@@ -766,6 +1001,7 @@ def run(
     run_id: str,
     *,
     gridsize: int = 80,
+    place_gridsize: Optional[int] = None,
     num_cells_to_sample: Optional[int] = 30,
     seed: int = 42,
     aliasing_gridsize: Optional[int] = None,
@@ -785,6 +1021,7 @@ def run(
     world = config.get("world_name", "")
     mode = config.get("mode", "")
     base_title = f"{run_id}" + (f"  [{world} / {mode}]" if world or mode else "")
+    resolved_place_gridsize = place_gridsize if place_gridsize is not None else max(gridsize, 160)
 
     plot_trajectory(
         hmap_loc,
@@ -797,7 +1034,7 @@ def run(
         hmap_pcn,
         run_id=run_id,
         out_path=vis_dir / "place_cells.png",
-        gridsize=gridsize,
+        gridsize=resolved_place_gridsize,
         num_cells_to_sample=num_cells_to_sample,
         title=f"Place cells - {base_title}",
         seed=seed,
@@ -815,6 +1052,7 @@ def run(
         hmap_loc,
         hmap_pcn,
         run_id=run_id,
+        config=config,
         out_path=vis_dir / "aliasing_heatmap.png",
         stats_path=vis_dir / "aliasing_stats.json",
         gridsize=aliasing_gridsize,
@@ -849,7 +1087,14 @@ def main() -> None:
         type=int,
         default=80,
         metavar="G",
-        help="Grid resolution for place-cell binning (default: 80).",
+        help="Base grid resolution used by verification plots (default: 80).",
+    )
+    parser.add_argument(
+        "--place-gridsize",
+        type=int,
+        default=0,
+        metavar="G",
+        help="Explicit place-cell overlay grid resolution. Use 0 for the auto high-resolution default.",
     )
     parser.add_argument(
         "--seed",
@@ -908,6 +1153,7 @@ def main() -> None:
     vis_dir = run(
         args.run_id,
         gridsize=args.gridsize,
+        place_gridsize=None if args.place_gridsize == 0 else args.place_gridsize,
         num_cells_to_sample=num_cells,
         seed=args.seed,
         aliasing_gridsize=None if args.aliasing_gridsize == 0 else args.aliasing_gridsize,

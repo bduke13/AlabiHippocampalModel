@@ -12,6 +12,20 @@ Current status:
 - smoke tests and base-mode validation are working
 - plotting and run summaries are working
 
+## Environment
+
+Run controller-side scripts from the repo-local `.venv`, not the Windows Store
+`python`.
+
+Recommended from the repo root:
+
+```powershell
+.\.venv\Scripts\python ...
+```
+
+Top-level setup instructions live in:
+- [README.md](../../../README.md)
+
 ## Folder Layout
 
 - `multi_grid_simple.py`
@@ -75,6 +89,11 @@ Main launch/config environment variables:
 - `MULTI_GRID_SIMPLE_LAUNCH_CONFIG_JSON`
 - `MULTI_GRID_SIMPLE_SMOKE_TEST_CONFIG_JSON`
 
+Default unattended behavior:
+- automated runs now quit Webots on completion
+- they do not pause on completion unless you explicitly override that in
+  `MULTI_GRID_SIMPLE_AUTOMATION_CONFIG_JSON`
+
 Webots executable resolution order:
 1. `LAUNCH_CONFIG["webots_executable"]`
 2. `WEBOTS_EXECUTABLE`
@@ -96,6 +115,39 @@ The current mode parameter surface includes:
 - `run_id`
 - `load_networks_from_run_id`
 - `load_hmaps_from_run_id`
+- `runtime_profile`
+- `runtime_profile_overrides`
+
+## Runtime Profiles
+
+Named runtime profiles live in [runtime_profiles.py](./runtime_profiles.py).
+
+Current profiles:
+- `10x10_place_small`
+- `20x20_place_small`
+- `20x20_place_medium`
+- `20x20_place_large`
+
+Selection behavior:
+- if `runtime_profile` is set, that exact profile is used
+- if `runtime_profile` is omitted, the controller chooses a world-aware default
+  - `10x10_*` worlds default to `10x10_place_small`
+  - `20x20_*` worlds default to `20x20_place_medium`
+
+Override behavior:
+- `runtime_profile_overrides` applies a flat key/value patch on top of the selected profile
+- unknown override keys raise an error
+- explicit top-level `max_dist` still overrides the profile value for that run
+
+Each run writes both:
+- `runtime_profile`
+- `runtime_parameters`
+
+into `runs/<run_id>/config.json`, so the exact resolved settings are preserved.
+
+For future automation work, profile sweeps can be implemented by iterating the
+named registry in [runtime_profiles.py](./runtime_profiles.py) rather than
+hardcoding constants into the driver.
 
 Important reuse behavior:
 - `load_networks_from_run_id`
@@ -114,7 +166,7 @@ Example:
 ```powershell
 $env:MULTI_GRID_SIMPLE_SELECTED_MODE = "LEARN_OJAS"
 $env:MULTI_GRID_SIMPLE_MODE_PARAMS_JSON = '{"run_time_hours": 1, "run_id": "learn_1hr"}'
-python webots/controllers/multi_grid_simple/multi_grid_simple.py
+.\.venv\Scripts\python webots/controllers/multi_grid_simple/multi_grid_simple.py
 ```
 
 ### Evaluate A Learned Network In A Fresh Plotting Run
@@ -124,7 +176,7 @@ This reuses learned networks but starts with empty hmaps.
 ```powershell
 $env:MULTI_GRID_SIMPLE_SELECTED_MODE = "PLOTTING"
 $env:MULTI_GRID_SIMPLE_MODE_PARAMS_JSON = '{"run_time_hours": 1, "run_id": "plot_from_learned", "load_networks_from_run_id": "learn_1hr"}'
-python webots/controllers/multi_grid_simple/multi_grid_simple.py
+.\.venv\Scripts\python webots/controllers/multi_grid_simple/multi_grid_simple.py
 ```
 
 ### Continue Accumulating Hmaps From A Prior Run
@@ -134,7 +186,7 @@ This reuses learned networks and appends prior hmaps into the new run history.
 ```powershell
 $env:MULTI_GRID_SIMPLE_SELECTED_MODE = "PLOTTING"
 $env:MULTI_GRID_SIMPLE_MODE_PARAMS_JSON = '{"run_time_hours": 1, "run_id": "plot_append", "load_networks_from_run_id": "learn_1hr", "load_hmaps_from_run_id": "learn_1hr"}'
-python webots/controllers/multi_grid_simple/multi_grid_simple.py
+.\.venv\Scripts\python webots/controllers/multi_grid_simple/multi_grid_simple.py
 ```
 
 ## Programmatic Execution
@@ -159,7 +211,7 @@ Runs:
 - `LEARN_OJAS`
 
 ```powershell
-python -c "from webots.controllers.multi_grid_simple.smoke_test import run_smoke_test_suite; print(run_smoke_test_suite())"
+.\.venv\Scripts\python -c "from webots.controllers.multi_grid_simple.smoke_test import run_smoke_test_suite; print(run_smoke_test_suite())"
 ```
 
 ### Single-Session Smoke Suite
@@ -169,7 +221,7 @@ Runs repeated trials in one Webots session for:
 - `LEARN_OJAS`
 
 ```powershell
-python -c "from webots.controllers.multi_grid_simple.smoke_test import run_single_session_smoke_suite; print(run_single_session_smoke_suite())"
+.\.venv\Scripts\python -c "from webots.controllers.multi_grid_simple.smoke_test import run_single_session_smoke_suite; print(run_single_session_smoke_suite())"
 ```
 
 ### Base-Mode Validation Suite
@@ -180,7 +232,7 @@ Validates:
 - `EXPLOIT`
 
 ```powershell
-python -c "from webots.controllers.multi_grid_simple.smoke_test import run_base_mode_validation_suite; print(run_base_mode_validation_suite())"
+.\.venv\Scripts\python -c "from webots.controllers.multi_grid_simple.smoke_test import run_base_mode_validation_suite; print(run_base_mode_validation_suite())"
 ```
 
 ## Plotting
@@ -188,7 +240,7 @@ python -c "from webots.controllers.multi_grid_simple.smoke_test import run_base_
 Generate post-run plots by `run_id`:
 
 ```powershell
-python webots/controllers/multi_grid_simple/plot_run.py <run_id>
+.\.venv\Scripts\python webots/controllers/multi_grid_simple/plot_run.py <run_id>
 ```
 
 Current outputs:
@@ -212,7 +264,14 @@ Options:
 
 Example:
 ```powershell
-python webots/controllers/multi_grid_simple/plot_run.py smoke_learn_ojas --cells 0 --gridsize 80 --seed 42
+.\.venv\Scripts\python webots/controllers/multi_grid_simple/plot_run.py smoke_learn_ojas --cells 0 --gridsize 80 --seed 42
+```
+
+Example profile override for a 20x20 run:
+```powershell
+$env:MULTI_GRID_SIMPLE_SELECTED_MODE = "LEARN_OJAS"
+$env:MULTI_GRID_SIMPLE_MODE_PARAMS_JSON = '{"run_time_hours": 1, "run_id": "maze_medium", "runtime_profile": "20x20_place_medium", "start_loc": [-8, -8], "goal_location": [7, 7]}'
+.\.venv\Scripts\python webots/controllers/multi_grid_simple/multi_grid_simple.py
 ```
 
 Aliasing plot notes:
