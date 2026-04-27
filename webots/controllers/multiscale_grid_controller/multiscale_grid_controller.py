@@ -1481,7 +1481,7 @@ if __name__ == "__main__":
     large = ["large"]
 
     scale_names = multiscale # what scales you are using
-    run_time_hours = 15
+    run_time_hours = 5
     max_dist = 25
     plot_bvc = False
 

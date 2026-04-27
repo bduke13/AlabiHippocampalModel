@@ -1533,7 +1533,7 @@ class Driver(Supervisor):
         for gcn in self.gcns:
             if gcn is not None:
                 # Get grid cell activations for current position
-                grid_activations = gcn.get_grid_cell_activations(position, use_mask=False)
+                grid_activations = gcn.get_grid_cell_activations(position, use_mask=True)
                 self.grid_activations_list.append(grid_activations)
             else:
                 # If no grid cells for this scale, add None as placeholder
