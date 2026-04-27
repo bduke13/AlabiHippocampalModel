@@ -1,0 +1,6 @@
+[project]
+name = "gridmultiscalenew"
+version = "0.1.0"
+description = "Webots place-cell navigation experiments with single-scale and multiscale controller workspaces."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"

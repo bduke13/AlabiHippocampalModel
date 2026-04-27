@@ -1,89 +1,155 @@
+# GridMultiscaleNew
 
-# Self Organizing Place Cell Navigation Model
+Webots-based navigation experiments built around place cells, boundary vector cells, reward cells, and grid-cell analysis. The repo currently contains:
 
-## Citations
-A. Alabi, D. Vanderelst and A. A. Minai, "Context-Dependent Spatial Representations in the Hippocampus using Place Cell Dendritic Computation," 2022 International Joint Conference on Neural Networks (IJCNN), Padua, Italy, 2022, pp. 1-8, doi: 10.1109/IJCNN55064.2022.9892401.
-B. FILL IN ANY MORE
+- `webots/controllers/multi_grid_simple`
+  - the cleaner single-scale controller workspace
+- `webots/controllers/multiscale_grid_controller`
+  - the older feature-rich multiscale research controller
+- `visualizations/`
+  - legacy analysis and plotting scripts
 
-## Overview
-This project explores the role of place cells in the hippocampus of rodents, focusing on how they encode physical space. This model is based off of research that studies place cells in rat hippocampuses. This model aims to further the research of place cell based navigational models.
+## Recommended Python Setup
 
-## Usage
-1. **Initialize the Driver**: The `Driver` class controls the robot and its interactions with the environment. It handles the loading or initialization of neural networks (place cell network and reward cell network) and manages the robot's sensors and movements.
+Use a repo-local `uv` environment pinned to Python `3.12`.
 
-2. **Startup**: To start the simulation, use the `initialization` method of the `Driver` class.
+Why:
 
-    Example:
-    ```python
-    from driver import Driver
-    from enums import RobotMode
+- the Windows Store `python` on this machine is not the same environment used by all project tooling
+- some scripts need `torch`
+- Webots automation and local plotting are much easier to keep consistent with one explicit interpreter
 
-    driver = Driver(num_place_cells=200, num_reward_cells=10, num_head_directions=8, run_time_hours=2, timestep=96)
-    driver.initialization(mode=RobotMode.LEARN_OJAS, randomize_start_loc=True, run_time_hours=1)
-    ```
+### 1. Install `uv`
 
-3. **Running the Simulation**: After initializing, use the `run` method to start the simulation in the mode set in initialization.
+Preferred on Windows:
 
-    Example:
-    ```python
-    driver.run()
-    ```
+```powershell
+winget install --id=astral-sh.uv -e
+```
 
-4. **Customization**: Modify the `Driver` class parameters to suit your simulation needs, such as the number of place cells, reward cells, or the duration of the simulation.
+Alternative:
 
-## File Structure
-- `driver.py`: Contains the `Driver` class which manages the simulation.
-- `networks/`: Directory that contains neural network definitions used by the driver.
-  - `boundary_vector_cell_layer`: Layer that activates cells based on obstacles and their placements in the environment relative to the agent
-  - `head_direction_layer`: Layer that activates cells based on the robot's position relative to its starting orientation
-  - `place_cell_layer`: Layer that activates cells based on the robot's learned representation of location in the environment
-  - `reward_cell_layer`: Layer that associates a set of place cell activations to a reward value
-- `requirements.txt`: Lists the dependencies required to run the project.
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
 
-## Setting Up the Environment
+Restart the shell after install, then verify:
 
-1. **Clone the Git repository**:
-   - First, you clone the repository with the following command:
-     ```bash
-     git clone <repository_url>
-     ```
-   - Replace `<repository_url>` with the URL of the Git repository you want to clone.
+```powershell
+uv --version
+```
 
-2. **Navigate into the cloned repository's directory**:
-   - Once the repository is cloned, navigate into the directory:
-     ```bash
-     cd <repository_directory>
-     ```
-   - Replace `<repository_directory>` with the name of the cloned repository.
+### 2. Create the project environment
 
-3. **Create a virtual environment**:
-   - Inside the cloned repository directory, create a virtual environment:
-     ```bash
-     python -m venv venv
-     ```
-   - This will create a `venv` directory containing the virtual environment.
+From the repo root:
 
-4. **Activate the virtual environment**:
-   - Activate the virtual environment:
-     - On macOS/Linux:
-       ```bash
-       source venv/bin/activate
-       ```
-     - On Windows:
-       ```bash
-       .\venv\Scripts\activate
-       ```
+```powershell
+uv python install 3.12
+uv venv --python 3.12
+uv pip sync --index-strategy unsafe-best-match requirements-cu126.txt
+```
 
-5. **Install the dependencies from `requirements.txt`**:
-   - Once the virtual environment is activated, install the required packages:
-     ```bash
-     pip install -r requirements.txt
-     ```
-   - This command reads the `requirements.txt` file and installs all the Python packages listed in it into the virtual environment.
+This repo includes:
 
-By following these steps, you ensure that all dependencies are installed in an isolated environment, which helps avoid conflicts with other projects and keeps your development environment clean.
+- [.python-version](./.python-version)
+- [pyproject.toml](./pyproject.toml)
+- [requirements.txt](./requirements.txt)
+- [requirements-cu126.txt](./requirements-cu126.txt)
 
-## License
-MIT License
+`requirements-cu126.txt` wraps the pinned requirements with the PyTorch CUDA 12.6 wheel index.
+The `unsafe-best-match` flag is required here because the environment intentionally mixes PyPI with the PyTorch CUDA wheel index.
 
-Copyright (c) 2024 University of Cincinnati
+### 3. Verify the environment
+
+```powershell
+.\.venv\Scripts\python -c "import sys, torch; print(sys.executable); print(torch.__version__)"
+```
+
+The interpreter path should point at `.venv`, not the Windows Store Python path.
+
+## Webots Prerequisites
+
+You need a working Webots installation.
+
+The automation harness resolves the executable in this order:
+
+1. `LAUNCH_CONFIG["webots_executable"]`
+2. `WEBOTS_EXECUTABLE`
+3. `WEBOTS_HOME`
+4. `PATH`
+
+If needed, set one of:
+
+```powershell
+$env:WEBOTS_EXECUTABLE = "C:\Program Files\Webots\msys64\mingw64\bin\webots.exe"
+```
+
+or:
+
+```powershell
+$env:WEBOTS_HOME = "C:\Program Files\Webots"
+```
+
+## Daily Usage
+
+Prefer the repo-local interpreter explicitly:
+
+```powershell
+.\.venv\Scripts\python ...
+```
+
+That avoids falling back to the Windows Store interpreter.
+
+## `multi_grid_simple`
+
+The current single-scale workflow is documented in:
+
+- [webots/controllers/multi_grid_simple/README.md](./webots/controllers/multi_grid_simple/README.md)
+
+Typical entrypoints:
+
+- controller entrypoint:
+  - [multi_grid_simple.py](./webots/controllers/multi_grid_simple/multi_grid_simple.py)
+- automation runner:
+  - [launcher.py](./webots/controllers/multi_grid_simple/launcher.py)
+  - [runner.py](./webots/controllers/multi_grid_simple/runner.py)
+- post-run plotting:
+  - [plot_run.py](./webots/controllers/multi_grid_simple/plot_run.py)
+
+Example plotting command:
+
+```powershell
+.\.venv\Scripts\python webots/controllers/multi_grid_simple/plot_run.py <run_id>
+```
+
+Example smoke test command:
+
+```powershell
+.\.venv\Scripts\python -c "from webots.controllers.multi_grid_simple.smoke_test import run_smoke_test_suite; print(run_smoke_test_suite())"
+```
+
+## Troubleshooting
+
+### `torch` missing when a script is run
+
+You are almost certainly using the wrong interpreter.
+
+Check:
+
+```powershell
+python -c "import sys; print(sys.executable)"
+.\.venv\Scripts\python -c "import sys; print(sys.executable)"
+```
+
+Use the `.venv` one for project scripts.
+
+### Webots run behaves differently from local plotting
+
+Make sure both are using the same project dependencies. The safest path is:
+
+- run local scripts with `.\.venv\Scripts\python`
+- keep Webots automation launches initiated from that same environment when possible
+
+### Automation run fails when Webots is already open
+
+That can cause port reuse issues or leave a prior simulation instance in the way. Close the other run before starting a new automated batch test.
