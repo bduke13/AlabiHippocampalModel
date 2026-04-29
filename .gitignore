@@ -43,5 +43,4 @@ main.py
 *.wbproj
 
 # Ignore JSON for now
-*.jsonSCRATCHPAD.md
-SCRATCHPAD.md
+*.json

@@ -168,6 +168,25 @@ class GridCellLayer:
         spread = self.spread_params
         return torch.sign(z) * torch.pow(torch.abs(z), 1.0 / spread)
 
+    def _obstacle_mask_for_grid(self, X: np.ndarray, Y: np.ndarray, obs: dict) -> np.ndarray:
+        if obs.get("type") == "rectangle" and "bounds" in obs:
+            (x1, y1), (x2, y2) = obs["bounds"]
+            xmin, xmax = min(x1, x2), max(x1, x2)
+            ymin, ymax = min(y1, y2), max(y1, y2)
+            return (X >= xmin) & (X <= xmax) & (Y >= ymin) & (Y <= ymax)
+        if obs.get("type") == "oriented_rectangle":
+            cx, cy = obs.get("center", [0.0, 0.0])
+            length, width = obs.get("size", [0.0, 0.0])
+            yaw = float(obs.get("yaw", 0.0))
+            dx = X - float(cx)
+            dy = Y - float(cy)
+            c = np.cos(-yaw)
+            s = np.sin(-yaw)
+            lx = (c * dx) - (s * dy)
+            ly = (s * dx) + (c * dy)
+            return (np.abs(lx) <= 0.5 * float(length)) & (np.abs(ly) <= 0.5 * float(width))
+        return np.zeros_like(X, dtype=bool)
+
     def _build_obstacle_mask(self) -> np.ndarray:
         """Build obstacle-only mask (free space = 1, obstacles = 0)."""
         xs = np.linspace(-self.world_w / 2.0, self.world_w / 2.0, self.mask_resolution)
@@ -175,12 +194,7 @@ class GridCellLayer:
         X, Y = np.meshgrid(xs, ys)
         mask = np.ones_like(X, dtype=np.float32)
         for obs in self.world_obstacles:
-            if obs.get("type") == "rectangle":
-                (x1, y1), (x2, y2) = obs["bounds"]
-                xmin, xmax = min(x1, x2), max(x1, x2)
-                ymin, ymax = min(y1, y2), max(y1, y2)
-                inside = (X >= xmin) & (X <= xmax) & (Y >= ymin) & (Y <= ymax)
-                mask[inside] = 0.0
+            mask[self._obstacle_mask_for_grid(X, Y, obs)] = 0.0
         return mask.astype(np.float32)
 
     def _build_obstacle_mask_inflated(self, resolution: int, world_w: float, world_h: float) -> np.ndarray:
@@ -190,12 +204,7 @@ class GridCellLayer:
         X, Y = np.meshgrid(xs, ys)
         mask = np.ones_like(X, dtype=np.float32)
         for obs in self.world_obstacles:
-            if obs.get("type") == "rectangle":
-                (x1, y1), (x2, y2) = obs["bounds"]
-                xmin, xmax = min(x1, x2), max(x1, x2)
-                ymin, ymax = min(y1, y2), max(y1, y2)
-                inside = (X >= xmin) & (X <= xmax) & (Y >= ymin) & (Y <= ymax)
-                mask[inside] = 0.0
+            mask[self._obstacle_mask_for_grid(X, Y, obs)] = 0.0
         return mask.astype(np.float32)
 
     def _compute_activations_grid(self, X: np.ndarray, Y: np.ndarray) -> np.ndarray:
@@ -268,7 +277,7 @@ class GridCellLayer:
         for c in range(C):
             cell_activ = activ[:, :, c]
             cell_mask = self._build_cell_mask_with_smoothing(
-                cell_activ, free_mask_inflated, obstacle_mask_inflated, struct,
+                cell_activ, free_mask_inflated, obstacle_mask_inflated, X, Y, struct,
                 inflated_res, inflated_w, inflated_h
             )
             final_masks_inflated[:, :, c] = cell_mask
@@ -290,6 +299,8 @@ class GridCellLayer:
         activations: np.ndarray,
         free_mask: np.ndarray,
         obstacle_mask: np.ndarray,
+        grid_x: np.ndarray,
+        grid_y: np.ndarray,
         struct: np.ndarray,
         inflated_res: int,
         inflated_w: float,
@@ -318,14 +329,6 @@ class GridCellLayer:
 
         new_mask = np.zeros((res, res), dtype=np.float32)
 
-        def bounds_to_idx(xmin, xmax, ymin, ymax):
-            xi0 = int(np.floor((xmin + inflated_w / 2.0) * (inflated_res - 1) / inflated_w))
-            xi1 = int(np.ceil((xmax + inflated_w / 2.0) * (inflated_res - 1) / inflated_w))
-            yi0 = int(np.floor((ymin + inflated_h / 2.0) * (inflated_res - 1) / inflated_h))
-            yi1 = int(np.ceil((ymax + inflated_h / 2.0) * (inflated_res - 1) / inflated_h))
-            return (max(0, min(inflated_res - 1, xi0)), max(0, min(inflated_res - 1, xi1)),
-                    max(0, min(inflated_res - 1, yi0)), max(0, min(inflated_res - 1, yi1)))
-
         # Process each raw component
         for rid in range(1, raw_num + 1):
             comp = (raw_label == rid)
@@ -338,15 +341,7 @@ class GridCellLayer:
 
             # Wall-based splitting
             for obs in self.world_obstacles:
-                if obs.get("type") != "rectangle":
-                    continue
-                (x1, y1), (x2, y2) = obs["bounds"]
-                xmin, xmax = min(x1, x2), max(x1, x2)
-                ymin, ymax = min(y1, y2), max(y1, y2)
-                xi0, xi1, yi0, yi1 = bounds_to_idx(xmin, xmax, ymin, ymax)
-
-                obs_slice = np.zeros_like(comp, dtype=bool)
-                obs_slice[yi0 : yi1 + 1, xi0 : xi1 + 1] = True
+                obs_slice = self._obstacle_mask_for_grid(grid_x, grid_y, obs)
                 inter_obs = comp & obs_slice
                 if not inter_obs.any():
                     continue
@@ -362,12 +357,12 @@ class GridCellLayer:
                 pad = 1
 
                 if span_x <= span_y:
-                    x0o = max(0, xi0 - pad)
-                    x1o = min(res - 1, xi1 + pad)
+                    x0o = max(0, ix.min() - pad)
+                    x1o = min(res - 1, ix.max() + pad)
                     cut[comp_ymin : comp_ymax + 1, x0o : x1o + 1] = True
                 else:
-                    y0o = max(0, yi0 - pad)
-                    y1o = min(res - 1, yi1 + pad)
+                    y0o = max(0, iy.min() - pad)
+                    y1o = min(res - 1, iy.max() + pad)
                     cut[y0o : y1o + 1, comp_xmin : comp_xmax + 1] = True
 
                 comp = comp & (~cut)

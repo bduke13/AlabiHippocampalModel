@@ -1,348 +1,234 @@
-# %%
-import numpy as np
-import matplotlib.pyplot as plt
+"""Plot saved multiscale grid-cell activity diagnostics."""
+
+import argparse
+import json
 import os
+import pickle
 import sys
+from math import ceil
 from pathlib import Path
-import matplotlib.gridspec as gridspec
-import glob
 
-# Get the project root directory
-project_root = Path(__file__).resolve().parent.parent  # Adjust if needed
-sys.path.append(str(project_root))
+os.environ.setdefault("MPLBACKEND", "Agg")
 
-# Import from vis_utils
-from vis_utils import (
-    convert_xzy_hmaps,
-    CONTROLLER_PATH_PREFIX,
-    CONTROLLER_NAME,
-    WORLD_NAME,
-    OUTPUT_DIR
-)
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
 
 
-def _hmap_directory():
-    return os.path.join(
-        CONTROLLER_PATH_PREFIX, CONTROLLER_NAME, "pkl", WORLD_NAME, "hmaps"
-    )
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CONTROLLER_DIR = PROJECT_ROOT / "webots" / "controllers" / "multiscale_grid_controller"
+PKL_ROOT = CONTROLLER_DIR / "pkl"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+try:
+    from core.robot.webots_worlds import list_available_worlds
+
+    SUPPORTED_WORLDS = set(list_available_worlds())
+except Exception:
+    SUPPORTED_WORLDS = {
+        "20x20",
+        "20x20_1obstacle",
+        "20x20_2obstacles",
+        "20x20_goalBehindWall",
+    }
 
 
-def discover_available_gcn_scales():
-    """Discover all scales with saved GCN hmaps (supports prefixed trial files)."""
-    hmap_directory = _hmap_directory()
-    if not os.path.exists(hmap_directory):
-        return []
+def _as_numpy(value):
+    if hasattr(value, "detach"):
+        value = value.detach()
+    if hasattr(value, "cpu"):
+        value = value.cpu()
+    return np.asarray(value, dtype=np.float32)
 
-    scales = set()
-    for file_path in glob.glob(os.path.join(hmap_directory, "*hmap_gcn_scale_*.pkl")):
-        stem = os.path.splitext(os.path.basename(file_path))[0]
+
+def _load_pickle(path: Path):
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+
+def resolve_world(requested: str | None) -> str:
+    if requested:
+        return requested
+    candidates = []
+    for world_dir in PKL_ROOT.iterdir() if PKL_ROOT.exists() else []:
+        loc_path = world_dir / "hmaps" / "hmap_loc.pkl"
+        if world_dir.name in SUPPORTED_WORLDS and loc_path.exists():
+            candidates.append((loc_path.stat().st_mtime, world_dir.name))
+    if not candidates:
+        raise FileNotFoundError(f"No supported hmap data found under {PKL_ROOT}")
+    return sorted(candidates, reverse=True)[0][1]
+
+
+def world_dirs(world: str):
+    base = PKL_ROOT / world
+    return base / "hmaps", base / "networks", base / "vis_outputs" / "grid_cells"
+
+
+def load_locations(hmap_dir: Path) -> np.ndarray:
+    loc = _as_numpy(_load_pickle(hmap_dir / "hmap_loc.pkl"))
+    if loc.ndim != 2 or loc.shape[1] < 2:
+        raise ValueError(f"Bad hmap_loc shape: {loc.shape}")
+    return loc[:, :2]
+
+
+def discover_scales(hmap_dir: Path) -> list[int]:
+    scales = []
+    for path in sorted(hmap_dir.glob("hmap_gcn_scale_*.pkl")):
         try:
-            scales.add(int(stem.split("_")[-1]))
+            scales.append(int(path.stem.split("_")[-1]))
         except ValueError:
-            continue
-    return sorted(scales)
+            pass
+    return scales
 
 
-def _resolve_hmap_pair_for_scale(scale):
-    """
-    Resolve matching (loc, gcn) files for a scale.
-    Supports:
-    - non-prefixed: hmap_loc.pkl + hmap_gcn_scale_{scale}.pkl
-    - prefixed: {prefix}hmap_loc.pkl + {prefix}hmap_gcn_scale_{scale}.pkl
-    """
-    hmap_directory = _hmap_directory()
-    base_gcn = os.path.join(hmap_directory, f"hmap_gcn_scale_{scale}.pkl")
-    base_loc = os.path.join(hmap_directory, "hmap_loc.pkl")
-    if os.path.exists(base_gcn) and os.path.exists(base_loc):
-        return base_loc, base_gcn
+def load_gcn_hmaps(hmap_dir: Path) -> dict[int, np.ndarray]:
+    return {
+        scale: _as_numpy(_load_pickle(hmap_dir / f"hmap_gcn_scale_{scale}.pkl"))
+        for scale in discover_scales(hmap_dir)
+    }
 
-    matches = sorted(
-        glob.glob(os.path.join(hmap_directory, f"*hmap_gcn_scale_{scale}.pkl"))
-    )
-    for gcn_file in matches:
-        suffix = f"hmap_gcn_scale_{scale}.pkl"
-        prefix = os.path.basename(gcn_file)[: -len(suffix)]
-        loc_file = os.path.join(hmap_directory, f"{prefix}hmap_loc.pkl")
-        if os.path.exists(loc_file):
-            return loc_file, gcn_file
 
-    return None, None
+def align(xy: np.ndarray, values: np.ndarray):
+    n = min(len(xy), len(values))
+    xy = xy[:n]
+    values = values[:n]
+    good = np.isfinite(xy).all(axis=1) & np.isfinite(values).all(axis=1)
+    return xy[good], values[good]
 
-def load_grid_cell_data(scale):
-    """
-    Load grid cell data for a specific scale.
-    
-    Args:
-        scale (int): Scale to load
-        
-    Returns:
-        tuple: (hmap_loc, hmap_gcn)
-    """
-    import pickle
-    import os
-    import numpy as np
-    
-    loc_path, gcn_path = _resolve_hmap_pair_for_scale(scale)
-    if loc_path is None or gcn_path is None:
-        hmap_directory = _hmap_directory()
-        compact_path = os.path.join(hmap_directory, "hmap_compact_stats.pkl")
-        if os.path.exists(compact_path):
-            print(
-                f"Error: no full GCN hmap for scale {scale} in {hmap_directory}. "
-                f"Only compact stats found ({compact_path}); spatial GC plotting requires full hmaps."
-            )
-        else:
-            print(f"Error: no matching hmap_loc + hmap_gcn_scale_{scale} files found in {hmap_directory}.")
-        return None, None
 
-    with open(loc_path, "rb") as f:
-        hmap_loc = np.array(pickle.load(f))
-        if len(hmap_loc) > 1:
-            hmap_loc = hmap_loc[1:]
-    print(f"Loaded hmap_loc from {loc_path}")
-
-    with open(gcn_path, "rb") as f:
-        hmap_gcn = np.array(pickle.load(f))
-        if len(hmap_gcn) > 1:
-            hmap_gcn = hmap_gcn[1:]
-    print(f"Loaded hmap_gcn_scale_{scale} from {gcn_path}")
-    
-    return hmap_loc, hmap_gcn
-
-def plot_average_grid_activation(
-    hmap_x,
-    hmap_y,
-    hmap_data,
-    scale,
-    ax=None,
-    cmap='viridis',
-):
-    """
-    Plots a hexbin plot for the average activation of all grid cells.
-    
-    Args:
-        hmap_x: X coordinates of the grid.
-        hmap_y: Y coordinates of the grid.
-        hmap_data: Activation data for the cells.
-        scale: Scale identifier for title
-        ax: Matplotlib axis to plot on (optional)
-        cmap: Colormap to use
-    
-    Returns:
-        matplotlib.axes.Axes: The axis with the plot
-    """
-    # Create plot if no axis is provided
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(10, 8))
-    
-    # Calculate the average activation across all grid cells
-    average_activations = np.mean(hmap_data, axis=1)
-    
-    # Use hexbin for the plot
+def draw_hex(ax, xy: np.ndarray, values: np.ndarray, title: str, bins: int, cmap: str = "viridis"):
     hb = ax.hexbin(
-        hmap_x,
-        hmap_y,
-        C=average_activations,
-        gridsize=100,
+        xy[:, 0],
+        xy[:, 1],
+        C=values,
+        gridsize=bins,
         reduce_C_function=np.mean,
+        mincnt=1,
+        linewidths=0.0,
         cmap=cmap,
-        edgecolors="none",
     )
-    
-    # Add colorbar
-    cbar = plt.colorbar(hb, ax=ax)
-    cbar.set_label('Average Activation')
-    
-    ax.set_xlabel("X")
-    ax.set_ylabel("Y")
-    ax.set_title(f"Scale {scale}: Average Activation Across All Grid Cells")
-    
-    return ax
+    ax.set_title(title)
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_aspect("equal", adjustable="box")
+    return hb
 
-def plot_single_grid_cell(
-    hmap_x,
-    hmap_y,
-    hmap_data,
-    cell_index,
-    scale,
-    ax=None,
-    cmap='viridis',
-):
-    """
-    Plots a hexbin plot for a single grid cell.
-    
-    Args:
-        hmap_x: X coordinates of the grid.
-        hmap_y: Y coordinates of the grid.
-        hmap_data: Activation data for all cells.
-        cell_index: Index of the cell to plot
-        scale: Scale identifier for title
-        ax: Matplotlib axis to plot on (optional)
-        cmap: Colormap to use
-    
-    Returns:
-        matplotlib.axes.Axes: The axis with the plot
-    """
-    # Create plot if no axis is provided
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(10, 8))
-    
-    # Get activations for this specific cell
-    cell_activations = hmap_data[:, cell_index]
-    
-    # Use hexbin for the plot
-    hb = ax.hexbin(
-        hmap_x,
-        hmap_y,
-        C=cell_activations,
-        gridsize=100,
-        reduce_C_function=np.mean,
-        cmap=cmap,
-        edgecolors="none",
-    )
-    
-    # Add colorbar
-    cbar = plt.colorbar(hb, ax=ax)
-    cbar.set_label('Activation')
-    
-    ax.set_xlabel("X")
-    ax.set_ylabel("Y")
-    ax.set_title(f"Scale {scale}: Grid Cell {cell_index}")
-    
-    return ax
 
-def find_best_grid_cell(hmap_gcn):
-    """
-    Find a grid cell with strong activation patterns.
-    
-    Args:
-        hmap_gcn: Grid cell activations
-        
-    Returns:
-        int: Index of a grid cell with strong activation
-    """
-    # Calculate total activation for each cell
-    total_activations = np.sum(np.abs(hmap_gcn), axis=0)
-    
-    # Get indices of cells with non-zero activation, sorted by activation strength
-    active_cells = np.where(total_activations > 0)[0]
-    
-    if len(active_cells) == 0:
-        return 0  # Default to first cell if none are active
-    
-    # Take one of the top cells with highest activation
-    top_cells = active_cells[np.argsort(-total_activations[active_cells])[:10]]
-    
-    # Return a randomly selected cell from the top cells
-    return np.random.choice(top_cells)
+def best_cell(activity: np.ndarray) -> int:
+    return int(np.argmax(np.sum(np.abs(activity), axis=0)))
 
-def plot_multi_scale_grid_activations(
-    scales=None,
-    save_path=None,
-    show_plot=True,
-    cmap='viridis',
-):
-    """
-    Create a figure with grid cell visualizations for multiple scales.
-    
-    Args:
-        scales: List of scale indices to plot
-        save_path: Path to save the figure
-        show_plot: Whether to show the figure
-        cmap: Colormap to use
-    """
-    if scales is None:
-        scales = discover_available_gcn_scales()
-    if not scales:
-        print("No GCN hmap scales discovered. Nothing to plot.")
+
+def plot_overview(world: str, xy: np.ndarray, gcn_hmaps: dict[int, np.ndarray], output_dir: Path, bins: int):
+    scales = sorted(gcn_hmaps)
+    fig, axes = plt.subplots(3, len(scales), figsize=(4.8 * len(scales), 11.5), squeeze=False)
+    summary = {}
+    for col, scale in enumerate(scales):
+        aligned_xy, activity = align(xy, gcn_hmaps[scale])
+        mean_values = np.mean(activity, axis=1)
+        max_values = np.max(activity, axis=1)
+        cell = best_cell(activity)
+        hb0 = draw_hex(axes[0, col], aligned_xy, mean_values, f"scale {scale}: mean GCN", bins)
+        hb1 = draw_hex(axes[1, col], aligned_xy, max_values, f"scale {scale}: max GCN", bins)
+        hb2 = draw_hex(axes[2, col], aligned_xy, activity[:, cell], f"scale {scale}: cell {cell}", bins, cmap="magma")
+        for hb, ax in ((hb0, axes[0, col]), (hb1, axes[1, col]), (hb2, axes[2, col])):
+            fig.colorbar(hb, ax=ax, fraction=0.046, pad=0.04)
+        summary[str(scale)] = {
+            "cells": int(activity.shape[1]),
+            "samples": int(activity.shape[0]),
+            "best_cell": cell,
+            "mean_activation": float(np.mean(activity)),
+            "max_activation": float(np.max(activity)),
+        }
+    fig.suptitle(f"{world}: multiscale grid-cell activity")
+    fig.tight_layout()
+    out_path = output_dir / "grid_cell_activations_multi_scale.png"
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+    return out_path, summary
+
+
+def load_unified_pcn(network_dir: Path):
+    path = network_dir / "unified_pcn.pkl"
+    if not path.exists():
         return None
-    
-    # Create figure
-    num_scales = len(scales)
-    fig = plt.figure(figsize=(6 * num_scales, 12))
-    gs = gridspec.GridSpec(2, num_scales)
-    
-    # Process each scale
-    for i, scale in enumerate(scales):
-        print(f"\n==== Processing Scale {scale} ====")
-        
-        # Load data
-        hmap_loc, hmap_gcn = load_grid_cell_data(scale)
-        
-        # Skip if data couldn't be loaded
-        if hmap_loc is None or hmap_gcn is None:
-            print(f"Skipping scale {scale} due to missing data")
+    return _load_pickle(path)
+
+
+def module_metadata(unified_pcn, scale: int):
+    if unified_pcn is None:
+        return None
+    configs = list(getattr(unified_pcn, "scale_configs", []))
+    layers = list(getattr(unified_pcn, "grid_layers", []))
+    for idx, cfg in enumerate(configs):
+        if int(cfg.get("scale_index", idx)) != int(scale) or idx >= len(layers):
             continue
-        
-        # Convert coordinates
-        hmap_x, hmap_z, hmap_y = convert_xzy_hmaps(hmap_loc)
-        
-        # Find a good grid cell to visualize
-        cell_index = find_best_grid_cell(hmap_gcn)
-        
-        # Plot single grid cell (top row)
-        ax_single = plt.subplot(gs[0, i])
-        plot_single_grid_cell(
-            hmap_x=hmap_x,
-            hmap_y=hmap_y,
-            hmap_data=hmap_gcn,
-            cell_index=cell_index,
-            scale=scale,
-            ax=ax_single,
-            cmap=cmap,
-        )
-        
-        # Plot average activation (bottom row)
-        ax_avg = plt.subplot(gs[1, i])
-        plot_average_grid_activation(
-            hmap_x=hmap_x,
-            hmap_y=hmap_y,
-            hmap_data=hmap_gcn,
-            scale=scale,
-            ax=ax_avg,
-            cmap=cmap,
-        )
-    
-    # Add overall title
-    plt.suptitle("Grid Cell Activations Across Scales", fontsize=16, y=0.98)
-    
-    # Adjust layout
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
-    
-    # Save figure if requested
-    if save_path is not None:
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Figure saved to {save_path}")
-    
-    # Show figure if requested
-    if show_plot:
-        plt.show()
-    else:
-        plt.close(fig)
-    
-    return fig
+        layer = layers[idx]
+        num_modules = int(getattr(layer, "num_modules", 0) or cfg.get("num_modules", 0) or 0)
+        cells_per_module = int(getattr(layer, "cells_per_module", 0) or cfg.get("cells_per_module", 0) or 0)
+        if num_modules <= 0 or cells_per_module <= 0:
+            return None
+        return num_modules, cells_per_module
+    return None
 
-# %%
+
+def plot_module_maps(world: str, scale: int, xy: np.ndarray, activity: np.ndarray, metadata, output_dir: Path, bins: int):
+    num_modules, cells_per_module = metadata
+    cols = min(4, num_modules)
+    rows = ceil(num_modules / cols)
+    fig, axes = plt.subplots(rows, cols, figsize=(4.0 * cols, 3.5 * rows), squeeze=False)
+    aligned_xy, activity = align(xy, activity)
+    for module_idx, ax in enumerate(axes.ravel()[:num_modules]):
+        start = module_idx * cells_per_module
+        end = min(start + cells_per_module, activity.shape[1])
+        values = np.mean(activity[:, start:end], axis=1)
+        hb = draw_hex(ax, aligned_xy, values, f"module {module_idx}", bins)
+        fig.colorbar(hb, ax=ax, fraction=0.046, pad=0.04)
+    for ax in axes.ravel()[num_modules:]:
+        ax.axis("off")
+    fig.suptitle(f"{world}: scale {scale} module means")
+    fig.tight_layout()
+    out_path = output_dir / f"grid_cell_modules_scale_{scale}.png"
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+    return out_path
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--world", default=None, help="World name. Defaults to newest supported run.")
+    parser.add_argument("--bins", type=int, default=70, help="Hexbin grid size.")
+    parser.add_argument("--scale", type=int, default=None, help="Optional single scale to plot.")
+    parser.add_argument("--skip-modules", action="store_true", help="Skip per-module mean maps.")
+    args = parser.parse_args()
+
+    world = resolve_world(args.world)
+    hmap_dir, network_dir, output_dir = world_dirs(world)
+    xy = load_locations(hmap_dir)
+    gcn_hmaps = load_gcn_hmaps(hmap_dir)
+    if args.scale is not None:
+        gcn_hmaps = {args.scale: gcn_hmaps[args.scale]} if args.scale in gcn_hmaps else {}
+    if not gcn_hmaps:
+        raise FileNotFoundError(f"No matching hmap_gcn_scale_*.pkl files found in {hmap_dir}")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    overview_path, summary = plot_overview(world, xy, gcn_hmaps, output_dir, args.bins)
+    summary_payload = {"world": world, "overview": str(overview_path), "scales": summary, "module_outputs": {}}
+    if not args.skip_modules:
+        unified_pcn = load_unified_pcn(network_dir)
+        for scale, activity in sorted(gcn_hmaps.items()):
+            meta = module_metadata(unified_pcn, scale)
+            if meta is None:
+                continue
+            out_path = plot_module_maps(world, scale, xy, activity, meta, output_dir, args.bins)
+            summary_payload["module_outputs"][str(scale)] = str(out_path)
+
+    with open(output_dir / "grid_cell_summary.json", "w", encoding="utf-8") as f:
+        json.dump(summary_payload, f, indent=2)
+    print(f"Saved grid-cell outputs to {output_dir}")
+
+
 if __name__ == "__main__":
-    print("Starting multi-scale grid cell activation visualization...")
-    
-    # Set random seed for reproducibility
-    np.random.seed(42)
-    
-    # Create output directory
-    output_dir = os.path.join(OUTPUT_DIR, "grid_cells")
-    os.makedirs(output_dir, exist_ok=True)
-    
-    discovered = discover_available_gcn_scales()
-    print(f"Discovered GCN scales: {discovered}")
-
-    # Generate and show the plot
-    plot_multi_scale_grid_activations(
-        scales=discovered if discovered else [0, 1, 2],
-        save_path=os.path.join(output_dir, "grid_cell_activations_multi_scale.png"),
-        show_plot=True,
-        cmap='viridis',
-    )
-    
-    print("Visualization complete!")
+    main()
