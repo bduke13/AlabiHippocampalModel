@@ -14,13 +14,12 @@ from core.robot.webots_worlds import get_world_config
 
 class GridCellLayer:
     """
-    Grid cell layer with advanced obstacle-aware masking and edge smoothing.
+    Grid cell layer with boundary-aware spatial masking and edge smoothing.
 
     Features:
     - Frequency-based grid code with module rotations and Sobol phase translations
     - Obstacle-only masking with wall-based blob splitting (steps 2+3)
     - Morphological smoothing to restore biological circular shapes (sigma=2.0)
-    - Compatible with v11 API for drop-in replacement in existing models
     """
 
     def __init__(
@@ -32,8 +31,6 @@ class GridCellLayer:
         module_scale_ratio: float = 1.0,
         translation_scale: float = 1.0,
         threshold: float = 0.7,
-        threshold_type: str = "soft",
-        normalization: str = "per-cell",
         world_name: Optional[str] = None,
         mask_resolution: int = 128,
         wall_split_thresh: float = 0.2,
@@ -56,8 +53,6 @@ class GridCellLayer:
         self.module_scale_ratio = float(max(1.0, module_scale_ratio))
         self.translation_scale = float(translation_scale)
         self.threshold = float(threshold)
-        self.threshold_type = threshold_type
-        self.normalization = normalization
         self.wall_split_thresh = float(wall_split_thresh)
         self.smooth_sigma = float(smooth_sigma)
         self.activation_cache_size = int(max(0, activation_cache_size))
@@ -68,11 +63,8 @@ class GridCellLayer:
         )
         self._activation_cache = OrderedDict()
 
-        if self.normalization == "per-cell":
-            self.cell_min = torch.ones(self.total_grid_cells, dtype=self.dtype, device=self.device) * -1.0
-            self.cell_max = torch.ones(self.total_grid_cells, dtype=self.dtype, device=self.device) * 1.0
-            # Match old non-unified behavior: use fixed theoretical bounds [-1, 1].
-            self.min_max_updated = True
+        self.cell_min = torch.ones(self.total_grid_cells, dtype=self.dtype, device=self.device) * -1.0
+        self.cell_max = torch.ones(self.total_grid_cells, dtype=self.dtype, device=self.device) * 1.0
 
         # Module params
         torch.manual_seed(42)
@@ -509,29 +501,18 @@ class GridCellLayer:
         self,
         position,
         threshold: Optional[float] = None,
-        threshold_type: Optional[str] = None,
-        sparsity: Optional[float] = None,
-        normalization: Optional[str] = None,
-        *,
-        use_mask: bool = True,
     ) -> torch.Tensor:
         """
-        Compute grid cell activations at a position with optional masking.
+        Compute boundary-masked grid cell activations at a position.
 
         Args:
             position: [x, y] coordinates
             threshold: Activation threshold (default: self.threshold)
-            threshold_type: "soft" or "hard" (default: self.threshold_type)
-            sparsity: Ignored (kept for API compatibility)
-            normalization: "per-cell" or None (default: self.normalization)
-            use_mask: Whether to apply spatial mask
 
         Returns:
             Tensor of shape (total_grid_cells,) with activations
         """
         thr = self.threshold if threshold is None else float(threshold)
-        thr_type = self.threshold_type if threshold_type is None else threshold_type
-        norm = self.normalization if normalization is None else normalization
 
         position = torch.as_tensor(position, dtype=self.dtype, device=self.device)
         if position.dim() > 1:
@@ -548,28 +529,11 @@ class GridCellLayer:
             raw_acts = cached_raw
         acts = raw_acts.clone()
 
-        # Normalization
-        if norm == "per-cell":
-            if not getattr(self, "min_max_updated", True):
-                self.cell_min = torch.minimum(self.cell_min, acts)
-                self.cell_max = torch.maximum(self.cell_max, acts)
-                rng = self.cell_max - self.cell_min
-                rng = torch.where(rng > 1e-8, rng, torch.ones_like(rng))
-                acts = (acts - self.cell_min) / rng
-                acts = torch.clamp(acts, 0.0, 1.0)
-            else:
-                # Fast path matching old v2 fixed theoretical bounds [-1, 1].
-                acts = torch.clamp((acts + 1.0) * 0.5, 0.0, 1.0)
+        acts = torch.clamp((acts + 1.0) * 0.5, 0.0, 1.0)
+        scale = 1.0 / (1.0 - thr + 1e-8)
+        acts = torch.clamp((acts - thr) * scale, 0.0, 1.0)
 
-        # Threshold
-        if thr_type == "soft":
-            scale = 1.0 / (1.0 - thr + 1e-8)
-            acts = torch.clamp((acts - thr) * scale, 0.0, 1.0)
-        elif thr_type == "hard":
-            acts = torch.where(acts >= thr, acts, torch.zeros_like(acts))
-
-        # Apply mask
-        if use_mask and hasattr(self, "_mask") and self._mask is not None:
+        if hasattr(self, "_mask") and self._mask is not None:
             xi = int(round((x_float + self.world_w / 2.0) * self._x_scale))
             yi = int(round((y_float + self.world_h / 2.0) * self._y_scale))
             xi = max(0, min(self.mask_resolution - 1, xi))

@@ -74,11 +74,3 @@ def get_world_config(world_name: str) -> dict:
 
 def list_available_worlds() -> list:
     return list(WORLD_CONFIGS.keys())
-
-
-def get_world_size(world_name: str) -> list:
-    return get_world_config(world_name)["size"]
-
-
-def get_world_obstacles(world_name: str) -> list:
-    return get_world_config(world_name)["obstacles"]

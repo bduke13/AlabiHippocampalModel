@@ -1,13 +1,14 @@
-# Cleaned Multiscale Hippocampal Model
+# Adaptive Multiscale Hippocampal Model
+# Author: Obadah Ghizawi
 
-This folder contains the compact Webots version of the current multiscale model.
+This folder contains the Webots version of the current adaptive multiscale model.
 It keeps the neural model pieces needed for the 20x20 obstacle tests:
 
 - obstacle-aware grid cells from `grid_cell_layer_v13.py`
 - per-scale BVC input with Gaussian BVC context modulation
 - unified multiscale place cells with all-scale recurrent inhibition
 - unified recurrent STDP and Oja updates
-- additive reward replay in `unified_reward_cell.py`
+- max-backup reward replay in `unified_reward_cell.py`
 - a single Webots controller at `webots/controllers/multiscale_grid_controller`
 
 Supported worlds:
