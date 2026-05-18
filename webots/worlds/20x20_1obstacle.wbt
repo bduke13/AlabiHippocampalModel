@@ -15,7 +15,7 @@ WorldInfo {
 }
 Viewpoint {
   orientation -0.7071057812488245 0.7071077811228558 3.6202005813900864e-08 3.1415966669512962
-  position 0.6754288305783365 40.82651170506043 -0.004693901566912295
+  position 0.6754609991260254 52.20054338573921 -0.0047255973745814
   near 0.1
   follow "Create"
   followType "None"
@@ -33,7 +33,7 @@ RectangleArena {
   }
 }
 Pose {
-  translation -7 0 7
+  translation 7 0 7
   rotation 1 0 0 -1.5708
   children [
     Shape {
@@ -44,7 +44,54 @@ Pose {
       }
       geometry Cylinder {
         height 0.002
-        radius 0.5
+      }
+    }
+  ]
+}
+Pose {
+  translation -7 0 7
+  rotation 1 0 0 -1.5708
+  children [
+    Shape {
+      appearance Appearance {
+        material Material {
+          diffuseColor 0 1 0
+        }
+      }
+      geometry Cylinder {
+        height 0.002
+      }
+    }
+  ]
+}
+Pose {
+  translation 7 0 -7
+  rotation 1 0 0 -1.5708
+  children [
+    Shape {
+      appearance Appearance {
+        material Material {
+          diffuseColor 0 0 1
+        }
+      }
+      geometry Cylinder {
+        height 0.002
+      }
+    }
+  ]
+}
+Pose {
+  translation -7 0 -7
+  rotation 1 0 0 -1.5708
+  children [
+    Shape {
+      appearance Appearance {
+        material Material {
+          diffuseColor 1 1 0
+        }
+      }
+      geometry Cylinder {
+        height 0.002
       }
     }
   ]

@@ -5,11 +5,13 @@ import torch
 
 
 DEFAULT_REPLAY_TIMESTEPS = 12
-DEFAULT_REPLAY_TAU = 8.0
+DEFAULT_REPLAY_TAU = 2.0
+DEFAULT_REPLAY_LONG_TAU = 8.0
+DEFAULT_REPLAY_LONG_WEIGHT = 0.10
 
 
 class UnifiedRewardCell:
-    """Single unified reward readout with max-backup replay propagation."""
+    """Single unified reward readout with additive neighbor-spread replay."""
 
     def __init__(
         self,
@@ -17,6 +19,8 @@ class UnifiedRewardCell:
         scale_configs: Optional[Sequence[Dict]] = None,
         replay_timesteps: Optional[int] = None,
         replay_tau: float = DEFAULT_REPLAY_TAU,
+        replay_long_tau: float = DEFAULT_REPLAY_LONG_TAU,
+        replay_long_weight: float = DEFAULT_REPLAY_LONG_WEIGHT,
         device: Optional[torch.device] = None,
     ) -> None:
         self.device = device or torch.device("cpu")
@@ -26,6 +30,8 @@ class UnifiedRewardCell:
             max(1, replay_timesteps if replay_timesteps is not None else DEFAULT_REPLAY_TIMESTEPS)
         )
         self.replay_tau = float(max(1e-6, replay_tau))
+        self.replay_long_tau = float(max(1e-6, replay_long_tau))
+        self.replay_long_weight = float(max(0.0, replay_long_weight))
 
         self._configure_scale_boundaries()
         self.w_in = torch.zeros((1, self.num_place_cells), dtype=torch.float32, device=self.device)
@@ -41,6 +47,12 @@ class UnifiedRewardCell:
         if not hasattr(self, "replay_tau"):
             self.replay_tau = DEFAULT_REPLAY_TAU
         self.replay_tau = float(max(1e-6, self.replay_tau))
+        if not hasattr(self, "replay_long_tau"):
+            self.replay_long_tau = DEFAULT_REPLAY_LONG_TAU
+        self.replay_long_tau = float(max(1e-6, self.replay_long_tau))
+        if not hasattr(self, "replay_long_weight"):
+            self.replay_long_weight = DEFAULT_REPLAY_LONG_WEIGHT
+        self.replay_long_weight = float(max(0.0, self.replay_long_weight))
         self.w_in = torch.as_tensor(self.w_in, dtype=torch.float32, device=self.device).view(1, -1)
         self.w_in_effective = torch.as_tensor(
             getattr(self, "w_in_effective", self.w_in),
@@ -67,13 +79,26 @@ class UnifiedRewardCell:
         self._configure_scale_boundaries()
         self._ensure_runtime_defaults()
 
-    def compute_reward_activations_batched(self, pc_batch: torch.Tensor) -> torch.Tensor:
+    def compute_reward_activations_batched(
+        self,
+        pc_batch: torch.Tensor,
+        normalize: bool = True,
+    ) -> torch.Tensor:
         self._ensure_runtime_defaults()
         batch = torch.as_tensor(pc_batch, dtype=torch.float32, device=self.device)
         if batch.dim() == 1:
             batch = batch.unsqueeze(0)
-        reward = (batch @ self.w_in_effective.t()).squeeze(1)
+        weighted = (batch @ self.w_in_effective.t()).squeeze(1)
+        if not bool(normalize):
+            return torch.clamp(torch.nan_to_num(weighted), min=0.0, max=1e6)
+        activity_mass = torch.sum(torch.clamp(batch, min=0.0), dim=1)
+        reward = weighted / torch.clamp(activity_mass, min=1e-6)
         return torch.clamp(torch.nan_to_num(reward), min=0.0, max=1e6)
+
+    def reset_runtime_state(self) -> None:
+        """Clear transient reward-cell state while preserving learned weights."""
+        self._ensure_runtime_defaults()
+        self.reward_cell_activations = torch.zeros((1, 1), dtype=torch.float32, device=self.device)
 
     def build_goal_reward_from_events(
         self,
@@ -114,10 +139,7 @@ class UnifiedRewardCell:
         if peak <= 1e-8:
             return None
 
-        winner_idx = int(torch.argmax(consensus).item())
-        seed = torch.zeros(self.num_place_cells, dtype=torch.float32, device=self.device)
-        seed[winner_idx] = 1.0
-        return seed
+        return consensus / max(peak, 1e-8)
 
     def replay_from_seed(
         self,
@@ -136,17 +158,10 @@ class UnifiedRewardCell:
             return self.w_in_effective
 
         transitions = self._build_replay_transitions(unified_pcn)
-        weight_update = torch.zeros(self.num_place_cells, dtype=torch.float32, device=self.device)
-
-        for step in range(int(max(1, self.replay_timesteps))):
-            decay = math.exp(-float(step) / float(self.replay_tau))
-            wave = torch.clamp(torch.nan_to_num(state), min=0.0)
-            peak = torch.max(wave) if int(wave.numel()) > 0 else torch.tensor(0.0, device=self.device)
-            if float(peak.item()) > 1e-12:
-                weight_update = torch.maximum(weight_update, decay * wave)
-            state = self._max_backup_next_state(transitions, state)
-            if float(torch.max(torch.abs(state)).item()) <= 1e-8:
-                break
+        weight_update = self._replay_spread_profile(transitions, state, self.replay_tau)
+        if self.replay_long_weight > 0.0:
+            long_update = self._replay_spread_profile(transitions, state, self.replay_long_tau)
+            weight_update = weight_update + self.replay_long_weight * long_update
 
         max_val = torch.max(torch.abs(weight_update))
         if torch.isfinite(max_val) and float(max_val.item()) > 1e-12:
@@ -158,6 +173,23 @@ class UnifiedRewardCell:
         self.w_in_effective = torch.clamp(self.w_in.clone(), min=0.0)
         self.reward_cell_activations = torch.zeros_like(self.reward_cell_activations)
         return self.w_in_effective
+
+    def _replay_spread_profile(self, transitions: torch.Tensor, seed: torch.Tensor, tau: float) -> torch.Tensor:
+        state = torch.clamp(torch.nan_to_num(seed), min=0.0).view(-1)
+        weight_update = torch.zeros(self.num_place_cells, dtype=torch.float32, device=self.device)
+        for step in range(int(max(1, self.replay_timesteps))):
+            decay = math.exp(-float(step) / float(tau))
+            wave = torch.clamp(torch.nan_to_num(state), min=0.0)
+            peak = torch.max(wave) if int(wave.numel()) > 0 else torch.tensor(0.0, device=self.device)
+            if float(peak.item()) > 1e-12:
+                weight_update = torch.maximum(weight_update, decay * wave)
+            state = self._additive_replay_next_state(transitions, state)
+            if float(torch.max(torch.abs(state)).item()) <= 1e-8:
+                break
+        max_val = torch.max(torch.abs(weight_update))
+        if torch.isfinite(max_val) and float(max_val.item()) > 1e-12:
+            weight_update = weight_update / max_val
+        return torch.nan_to_num(weight_update)
 
     def _build_replay_transitions(self, unified_pcn) -> torch.Tensor:
         recurrent_weights = torch.as_tensor(
@@ -176,10 +208,10 @@ class UnifiedRewardCell:
         transitions = transitions / torch.clamp(row_sum, min=1e-12)
         return torch.nan_to_num(transitions, nan=0.0, posinf=0.0, neginf=0.0)
 
-    def _max_backup_next_state(self, transitions: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
-        state = torch.clamp(torch.nan_to_num(state), min=0.0).view(1, 1, -1)
-        per_action = torch.max(transitions * state, dim=2).values
-        next_state = torch.max(per_action, dim=0).values
+    def _additive_replay_next_state(self, transitions: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
+        state = torch.clamp(torch.nan_to_num(state), min=0.0).view(-1)
+        collapsed = torch.max(transitions, dim=0).values
+        next_state = collapsed @ state + state
         return torch.tanh(torch.relu(next_state))
 
     def _peak_normalize(self, values: torch.Tensor) -> Optional[torch.Tensor]:

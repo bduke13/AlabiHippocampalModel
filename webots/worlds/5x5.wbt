@@ -1,0 +1,84 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/BrushedAluminium.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/robots/irobot/create/protos/Create.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+
+WorldInfo {
+  info [
+    "iRobot Create simulation"
+    "The vacuum cleaner robot goes randomly into the apartment while a supervisor tracks its position and alterates the ground texture."
+    "The robot can be stopped by the virtual walls emitting IR light."
+  ]
+  title "iRobot Create"
+  coordinateSystem "NUE"
+}
+Viewpoint {
+  orientation 0.8819109739023581 -0.4659140210402758 0.07181336302301934 4.431444754443037
+  position -12.482866233227133 8.96181571550169 7.571238782843279
+  near 0.1
+  follow "Create"
+  followType "None"
+}
+TexturedBackground {
+}
+RectangleArena {
+  rotation 1 0 0 -1.5707953071795862
+  floorSize 5 5
+  floorAppearance NULL
+  wallAppearance BrushedAluminium {
+    colorOverride 0 1 1
+    IBLStrength 11
+  }
+}
+Pose {
+  translation -1 0.0001 1
+  rotation -1 0 0 1.5707963267948966
+  children [
+    Shape {
+      appearance Appearance {
+        material Material {
+          diffuseColor 1 0 0
+        }
+      }
+      geometry Cylinder {
+        height 0.0001
+        radius 0.0762
+      }
+    }
+  ]
+}
+DEF agent Create {
+  translation -0.00101022 0.389999 -0.000939557
+  rotation 0.31020989058185605 0.6734347624641123 0.6710107633191124 -2.538185307179586
+  controller "bek_controller"
+  supervisor TRUE
+  bodySlot [
+    Solid {
+      translation 0 0 0.04
+      children [
+        Compass {
+        }
+        DEF range-finder RangeFinder {
+          fieldOfView 6.28
+          width 720
+          height 1
+          projection "cylindrical"
+          maxRange 10
+        }
+        Shape {
+          appearance PBRAppearance {
+          }
+          geometry Cylinder {
+            height 0.04
+            radius 0.05
+          }
+        }
+      ]
+    }
+  ]
+}
+DirectionalLight {
+  direction 0.75 -1 0
+}

@@ -1,6 +1,5 @@
 import torch
 import numpy as np
-from collections import OrderedDict
 from typing import Optional, Tuple
 
 try:
@@ -9,17 +8,22 @@ try:
 except Exception:
     _HAS_SCIPY = False
 
-from core.robot.webots_worlds import get_world_config
+from core.robot.webots_worlds import (
+    expanded_obstacle_corners,
+    get_world_config,
+    obstacle_contains_points,
+)
 
 
 class GridCellLayer:
     """
-    Grid cell layer with boundary-aware spatial masking and edge smoothing.
+    Grid cell layer with advanced obstacle-aware masking and edge smoothing.
 
     Features:
     - Frequency-based grid code with module rotations and Sobol phase translations
     - Obstacle-only masking with wall-based blob splitting (steps 2+3)
     - Morphological smoothing to restore biological circular shapes (sigma=2.0)
+    - Compatible with v11 API for drop-in replacement in existing models
     """
 
     def __init__(
@@ -28,15 +32,14 @@ class GridCellLayer:
         cells_per_module: int,
         spread_range: Tuple[float, float] = (1.2, 1.2),
         scale_multiplier: float = 1.0,
-        module_scale_ratio: float = 1.0,
         translation_scale: float = 1.0,
         threshold: float = 0.7,
+        threshold_type: str = "soft",
+        normalization: str = "per-cell",
         world_name: Optional[str] = None,
         mask_resolution: int = 128,
         wall_split_thresh: float = 0.2,
         smooth_sigma: float = 1.5,
-        activation_cache_size: int = 0,
-        activation_cache_quantization: Optional[float] = None,
         device: str = "cpu",
         dtype: torch.dtype = torch.float32,
     ):
@@ -50,36 +53,22 @@ class GridCellLayer:
         self.total_grid_cells = self.num_modules * self.cells_per_module
 
         self.scale_multiplier = float(scale_multiplier)
-        self.module_scale_ratio = float(max(1.0, module_scale_ratio))
         self.translation_scale = float(translation_scale)
         self.threshold = float(threshold)
+        self.threshold_type = threshold_type
+        self.normalization = normalization
         self.wall_split_thresh = float(wall_split_thresh)
         self.smooth_sigma = float(smooth_sigma)
-        self.activation_cache_size = int(max(0, activation_cache_size))
-        self.activation_cache_quantization = (
-            float(activation_cache_quantization)
-            if activation_cache_quantization is not None
-            else None
-        )
-        self._activation_cache = OrderedDict()
 
-        self.cell_min = torch.ones(self.total_grid_cells, dtype=self.dtype, device=self.device) * -1.0
-        self.cell_max = torch.ones(self.total_grid_cells, dtype=self.dtype, device=self.device) * 1.0
+        if self.normalization == "per-cell":
+            self.cell_min = torch.ones(self.total_grid_cells, dtype=self.dtype, device=self.device) * -1.0
+            self.cell_max = torch.ones(self.total_grid_cells, dtype=self.dtype, device=self.device) * 1.0
+            self.min_max_updated = False
 
         # Module params
         torch.manual_seed(42)
         rot_per_module = torch.linspace(0.0, 360.0, steps=self.num_modules + 1, dtype=self.dtype)[:-1]
-        if self.num_modules == 1 or self.module_scale_ratio <= 1.0 + 1e-6:
-            size_per_module = torch.full((self.num_modules,), self.scale_multiplier, dtype=self.dtype)
-        else:
-            # Log-spaced frequency ladder around base scale to improve spatial disambiguation.
-            # Range is [base/ratio, base*ratio] across modules.
-            module_axis = torch.linspace(-0.5, 0.5, steps=self.num_modules, dtype=self.dtype)
-            multipliers = torch.pow(
-                torch.tensor(self.module_scale_ratio, dtype=self.dtype),
-                2.0 * module_axis,
-            )
-            size_per_module = self.scale_multiplier * multipliers
+        size_per_module = torch.full((self.num_modules,), self.scale_multiplier, dtype=self.dtype)
         spread_per_module = torch.empty(self.num_modules, dtype=self.dtype).uniform_(*spread_range)
 
         self.rotation_params = rot_per_module.repeat_interleave(self.cells_per_module).to(self.device)
@@ -120,65 +109,6 @@ class GridCellLayer:
         self.mask_resolution = int(mask_resolution)
         self._build_advanced_mask()
 
-    def _cache_key(self, x: float, y: float):
-        if self.activation_cache_quantization is None:
-            return (x, y)
-        q = self.activation_cache_quantization
-        return (round(x / q), round(y / q))
-
-    def _cache_get_raw_activations(self, x: float, y: float) -> Optional[torch.Tensor]:
-        if self.activation_cache_size <= 0:
-            return None
-        key = self._cache_key(x, y)
-        cached = self._activation_cache.get(key)
-        if cached is None:
-            return None
-        self._activation_cache.move_to_end(key)
-        return cached
-
-    def _cache_put_raw_activations(self, x: float, y: float, raw_acts: torch.Tensor) -> None:
-        if self.activation_cache_size <= 0:
-            return
-        key = self._cache_key(x, y)
-        self._activation_cache[key] = raw_acts.detach().clone()
-        self._activation_cache.move_to_end(key)
-        while len(self._activation_cache) > self.activation_cache_size:
-            self._activation_cache.popitem(last=False)
-
-    def _compute_raw_activations(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        dx = x - self.x_trans_params
-        dy = y - self.y_trans_params
-        rx = self.cos_theta * dx + self.sin_theta * dy
-        ry = -self.sin_theta * dx + self.cos_theta * dy
-
-        freq = (2.0 * np.pi) / self.size_params
-        z1 = torch.cos(freq * rx)
-        z2 = torch.cos(freq * (rx / 2.0 + (np.sqrt(3.0) / 2.0) * ry))
-        z3 = torch.cos(freq * (rx / 2.0 - (np.sqrt(3.0) / 2.0) * ry))
-        z = (z1 + z2 + z3) / 3.0
-
-        spread = self.spread_params
-        return torch.sign(z) * torch.pow(torch.abs(z), 1.0 / spread)
-
-    def _obstacle_mask_for_grid(self, X: np.ndarray, Y: np.ndarray, obs: dict) -> np.ndarray:
-        if obs.get("type") == "rectangle" and "bounds" in obs:
-            (x1, y1), (x2, y2) = obs["bounds"]
-            xmin, xmax = min(x1, x2), max(x1, x2)
-            ymin, ymax = min(y1, y2), max(y1, y2)
-            return (X >= xmin) & (X <= xmax) & (Y >= ymin) & (Y <= ymax)
-        if obs.get("type") == "oriented_rectangle":
-            cx, cy = obs.get("center", [0.0, 0.0])
-            length, width = obs.get("size", [0.0, 0.0])
-            yaw = float(obs.get("yaw", 0.0))
-            dx = X - float(cx)
-            dy = Y - float(cy)
-            c = np.cos(-yaw)
-            s = np.sin(-yaw)
-            lx = (c * dx) - (s * dy)
-            ly = (s * dx) + (c * dy)
-            return (np.abs(lx) <= 0.5 * float(length)) & (np.abs(ly) <= 0.5 * float(width))
-        return np.zeros_like(X, dtype=bool)
-
     def _build_obstacle_mask(self) -> np.ndarray:
         """Build obstacle-only mask (free space = 1, obstacles = 0)."""
         xs = np.linspace(-self.world_w / 2.0, self.world_w / 2.0, self.mask_resolution)
@@ -186,7 +116,9 @@ class GridCellLayer:
         X, Y = np.meshgrid(xs, ys)
         mask = np.ones_like(X, dtype=np.float32)
         for obs in self.world_obstacles:
-            mask[self._obstacle_mask_for_grid(X, Y, obs)] = 0.0
+            if obs.get("type") == "rectangle":
+                inside = obstacle_contains_points(X, Y, obs)
+                mask[inside] = 0.0
         return mask.astype(np.float32)
 
     def _build_obstacle_mask_inflated(self, resolution: int, world_w: float, world_h: float) -> np.ndarray:
@@ -196,7 +128,9 @@ class GridCellLayer:
         X, Y = np.meshgrid(xs, ys)
         mask = np.ones_like(X, dtype=np.float32)
         for obs in self.world_obstacles:
-            mask[self._obstacle_mask_for_grid(X, Y, obs)] = 0.0
+            if obs.get("type") == "rectangle":
+                inside = obstacle_contains_points(X, Y, obs)
+                mask[inside] = 0.0
         return mask.astype(np.float32)
 
     def _compute_activations_grid(self, X: np.ndarray, Y: np.ndarray) -> np.ndarray:
@@ -269,7 +203,7 @@ class GridCellLayer:
         for c in range(C):
             cell_activ = activ[:, :, c]
             cell_mask = self._build_cell_mask_with_smoothing(
-                cell_activ, free_mask_inflated, obstacle_mask_inflated, X, Y, struct,
+                cell_activ, free_mask_inflated, obstacle_mask_inflated, struct,
                 inflated_res, inflated_w, inflated_h
             )
             final_masks_inflated[:, :, c] = cell_mask
@@ -291,8 +225,6 @@ class GridCellLayer:
         activations: np.ndarray,
         free_mask: np.ndarray,
         obstacle_mask: np.ndarray,
-        grid_x: np.ndarray,
-        grid_y: np.ndarray,
         struct: np.ndarray,
         inflated_res: int,
         inflated_w: float,
@@ -321,6 +253,29 @@ class GridCellLayer:
 
         new_mask = np.zeros((res, res), dtype=np.float32)
 
+        def bounds_to_idx(xmin, xmax, ymin, ymax):
+            xi0 = int(np.floor((xmin + inflated_w / 2.0) * (inflated_res - 1) / inflated_w))
+            xi1 = int(np.ceil((xmax + inflated_w / 2.0) * (inflated_res - 1) / inflated_w))
+            yi0 = int(np.floor((ymin + inflated_h / 2.0) * (inflated_res - 1) / inflated_h))
+            yi1 = int(np.ceil((ymax + inflated_h / 2.0) * (inflated_res - 1) / inflated_h))
+            return (max(0, min(inflated_res - 1, xi0)), max(0, min(inflated_res - 1, xi1)),
+                    max(0, min(inflated_res - 1, yi0)), max(0, min(inflated_res - 1, yi1)))
+
+        grid_xs = np.linspace(-inflated_w / 2.0, inflated_w / 2.0, inflated_res)
+        grid_ys = np.linspace(-inflated_h / 2.0, inflated_h / 2.0, inflated_res)
+        obstacle_slices = []
+        for obs in self.world_obstacles:
+            if obs.get("type") != "rectangle":
+                continue
+            corners = np.asarray(expanded_obstacle_corners(obs), dtype=np.float64)
+            xmin, xmax = float(corners[:, 0].min()), float(corners[:, 0].max())
+            ymin, ymax = float(corners[:, 1].min()), float(corners[:, 1].max())
+            xi0, xi1, yi0, yi1 = bounds_to_idx(xmin, xmax, ymin, ymax)
+            local_x, local_y = np.meshgrid(grid_xs[xi0 : xi1 + 1], grid_ys[yi0 : yi1 + 1])
+            obs_slice = np.zeros((res, res), dtype=bool)
+            obs_slice[yi0 : yi1 + 1, xi0 : xi1 + 1] = obstacle_contains_points(local_x, local_y, obs)
+            obstacle_slices.append(obs_slice)
+
         # Process each raw component
         for rid in range(1, raw_num + 1):
             comp = (raw_label == rid)
@@ -332,8 +287,7 @@ class GridCellLayer:
             comp_xmin, comp_xmax = cx.min(), cx.max()
 
             # Wall-based splitting
-            for obs in self.world_obstacles:
-                obs_slice = self._obstacle_mask_for_grid(grid_x, grid_y, obs)
+            for obs_slice in obstacle_slices:
                 inter_obs = comp & obs_slice
                 if not inter_obs.any():
                     continue
@@ -342,21 +296,11 @@ class GridCellLayer:
                 if frac < self.wall_split_thresh:
                     continue
 
-                iy, ix = np.nonzero(inter_obs)
-                span_x = ix.max() - ix.min() + 1
-                span_y = iy.max() - iy.min() + 1
-                cut = np.zeros_like(comp, dtype=bool)
-                pad = 1
-
-                if span_x <= span_y:
-                    x0o = max(0, ix.min() - pad)
-                    x1o = min(res - 1, ix.max() + pad)
-                    cut[comp_ymin : comp_ymax + 1, x0o : x1o + 1] = True
-                else:
-                    y0o = max(0, iy.min() - pad)
-                    y1o = min(res - 1, iy.max() + pad)
-                    cut[y0o : y1o + 1, comp_xmin : comp_xmax + 1] = True
-
+                cut = _ndimage.binary_dilation(obs_slice, structure=np.ones((3, 3), dtype=bool))
+                cut[:comp_ymin, :] = False
+                cut[comp_ymax + 1 :, :] = False
+                cut[:, :comp_xmin] = False
+                cut[:, comp_xmax + 1 :] = False
                 comp = comp & (~cut)
 
             # Intersect with free space and keep largest fragment
@@ -501,79 +445,75 @@ class GridCellLayer:
         self,
         position,
         threshold: Optional[float] = None,
+        threshold_type: Optional[str] = None,
+        sparsity: Optional[float] = None,
+        normalization: Optional[str] = None,
+        *,
+        use_mask: bool = True,
     ) -> torch.Tensor:
         """
-        Compute boundary-masked grid cell activations at a position.
+        Compute grid cell activations at a position with optional masking.
 
         Args:
             position: [x, y] coordinates
             threshold: Activation threshold (default: self.threshold)
+            threshold_type: "soft" or "hard" (default: self.threshold_type)
+            sparsity: Ignored (kept for API compatibility)
+            normalization: "per-cell" or None (default: self.normalization)
+            use_mask: Whether to apply spatial mask
 
         Returns:
             Tensor of shape (total_grid_cells,) with activations
         """
         thr = self.threshold if threshold is None else float(threshold)
+        thr_type = self.threshold_type if threshold_type is None else threshold_type
+        norm = self.normalization if normalization is None else normalization
 
-        position = torch.as_tensor(position, dtype=self.dtype, device=self.device)
+        if not isinstance(position, torch.Tensor):
+            position = torch.tensor(position, dtype=self.dtype)
+        position = position.to(self.device)
         if position.dim() > 1:
             position = position.squeeze()
         x, y = position[0], position[1]
-        x_float = float(x.item())
-        y_float = float(y.item())
 
-        cached_raw = self._cache_get_raw_activations(x_float, y_float)
-        if cached_raw is None:
-            raw_acts = self._compute_raw_activations(x, y)
-            self._cache_put_raw_activations(x_float, y_float, raw_acts)
-        else:
-            raw_acts = cached_raw
-        acts = raw_acts.clone()
+        # Compute activations
+        dx = x - self.x_trans_params
+        dy = y - self.y_trans_params
+        rx = self.cos_theta * dx + self.sin_theta * dy
+        ry = -self.sin_theta * dx + self.cos_theta * dy
 
-        acts = torch.clamp((acts + 1.0) * 0.5, 0.0, 1.0)
-        scale = 1.0 / (1.0 - thr + 1e-8)
-        acts = torch.clamp((acts - thr) * scale, 0.0, 1.0)
+        freq = (2.0 * np.pi) / self.size_params
+        z1 = torch.cos(freq * rx)
+        z2 = torch.cos(freq * (rx / 2.0 + (np.sqrt(3.0) / 2.0) * ry))
+        z3 = torch.cos(freq * (rx / 2.0 - (np.sqrt(3.0) / 2.0) * ry))
+        z = (z1 + z2 + z3) / 3.0
 
-        if hasattr(self, "_mask") and self._mask is not None:
-            xi = int(round((x_float + self.world_w / 2.0) * self._x_scale))
-            yi = int(round((y_float + self.world_h / 2.0) * self._y_scale))
+        spread = self.spread_params
+        acts = torch.sign(z) * torch.pow(torch.abs(z), 1.0 / spread)
+
+        # Normalization
+        if norm == "per-cell":
+            if not getattr(self, "min_max_updated", True):
+                self.cell_min = torch.minimum(self.cell_min, acts)
+                self.cell_max = torch.maximum(self.cell_max, acts)
+            rng = self.cell_max - self.cell_min
+            rng = torch.where(rng > 1e-8, rng, torch.ones_like(rng))
+            acts = (acts - self.cell_min) / rng
+            acts = torch.clamp(acts, 0.0, 1.0)
+
+        # Threshold
+        if thr_type == "soft":
+            scale = 1.0 / (1.0 - thr + 1e-8)
+            acts = torch.clamp((acts - thr) * scale, 0.0, 1.0)
+        elif thr_type == "hard":
+            acts = torch.where(acts >= thr, acts, torch.zeros_like(acts))
+
+        # Apply mask
+        if use_mask and hasattr(self, "_mask") and self._mask is not None:
+            xi = int(round((float(x.item()) + self.world_w / 2.0) * self._x_scale))
+            yi = int(round((float(y.item()) + self.world_h / 2.0) * self._y_scale))
             xi = max(0, min(self.mask_resolution - 1, xi))
             yi = max(0, min(self.mask_resolution - 1, yi))
             acts = acts * self._mask[yi, xi, :]
 
         return acts
-
-    def to(
-        self,
-        device: Optional[torch.device] = None,
-        dtype: Optional[torch.dtype] = None,
-    ) -> "GridCellLayer":
-        """
-        Move internal tensors to target device/dtype.
-
-        This keeps loaded pickles compatible when runtime hardware differs
-        from the hardware used at save time.
-        """
-        target_device = self.device if device is None else torch.device(device)
-        target_dtype = self.dtype if dtype is None else dtype
-
-        tensor_attrs = [
-            "cell_min",
-            "cell_max",
-            "rotation_params",
-            "size_params",
-            "spread_params",
-            "x_trans_params",
-            "y_trans_params",
-            "cos_theta",
-            "sin_theta",
-            "_mask",
-        ]
-        for attr in tensor_attrs:
-            if hasattr(self, attr):
-                val = getattr(self, attr)
-                if isinstance(val, torch.Tensor):
-                    setattr(self, attr, val.to(device=target_device, dtype=target_dtype))
-
-        self.device = target_device
-        self.dtype = target_dtype
-        return self

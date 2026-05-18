@@ -2,20 +2,52 @@ from enum import Enum, auto
 
 
 class RobotMode(Enum):
-    """Controller modes supported by the cleaned multiscale Webots driver."""
+    """Defines the different operating modes for the robot's behavior and learning.
+
+    The robot can operate in several modes that control its behavior, learning mechanisms,
+    and data collection. These modes determine how the robot explores its environment,
+    learns from experiences, and utilizes learned information.
+
+    Modes:
+        LEARN_OJAS: Initial learning phase where the robot randomly explores while only
+            enabling competition (Oja's rule) between place cells. Runs until time limit.
+
+        LEARN_HEBB: Secondary learning phase with both Oja's rule and tripartite (Hebbian)
+            learning enabled during random exploration. Must run after LEARN_OJAS since
+            place cells need to stabilize first.
+
+        DMTP: Legacy alias retained for backward compatibility. Internally this now
+            redirects to LEARN_LOCATIONS_COVERAGE for single-goal reward learning.
+
+        EXPLOIT: Goal-directed navigation using the learned reward map. Both learning
+            rules remain enabled while the robot navigates to known goals.
+
+        PLOTTING: Random exploration mode with all learning disabled in both place cell
+            and reward cell networks. Used for visualization and analysis.
+
+        MANUAL_CONTROL: Enables direct user control of the robot in the Webots simulator
+            through keyboard inputs.
+
+        RECORDING: Random exploration with learning disabled, focused on collecting and
+            saving sensor data for offline analysis or training.
+    """
 
     LEARN_OJAS = auto()
     LEARN_HEBB = auto()
     DMTP = auto()
+    EXPLOIT = auto()
+    PLOTTING = auto()
+    MANUAL_CONTROL = auto()
+    RECORDING = auto()
+    # Legacy/original-controller extensions.
+    # v2 scheduling uses execution configuration rather than dedicated AUTO modes,
+    # but the original controller still depends on these members.
     LEARNING = auto()
     LEARN_LOCATIONS = auto()
+    EXPLOIT_LOCATIONS = auto()
     LEARN_LOCATIONS_COVERAGE = auto()
     LEARN_LOCATIONS_COVERAGE_AUTO = auto()
-    EXPLOIT = auto()
-    EXPLOIT_LOCATIONS = auto()
     EXPLOIT_LOCATIONS_RANDOM = auto()
     EXPLOIT_LOCATIONS_RANDOM_AUTO = auto()
-    PLOTTING = auto()
     PLOTTING_AUTO = auto()
     PLOTTING_COVERAGE_AUTO = auto()
-    LEARN_OJAS_AUTO = auto()
